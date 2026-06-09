@@ -77,6 +77,39 @@ export interface StoryPage {
   items: StoryRow[];
 }
 
+export interface Persona {
+  persona_id: string;
+  canonical_name: string;
+  role_description: string | null;
+}
+
+export interface Platform {
+  l3_id: string;
+  name: string;
+  vendor: string | null;
+  category: string | null;
+}
+
+export interface UseCase {
+  use_case_id: string;
+  archetype: string | null;
+  name: string;
+  description: string | null;
+}
+
+export interface Maturity {
+  level: string;
+  descriptor: string | null;
+  features: string | null;
+}
+
+export interface SubcapEnrichment {
+  personas: Persona[];
+  platforms: Platform[];
+  use_cases: UseCase[];
+  maturity: Maturity[];
+}
+
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
@@ -114,4 +147,6 @@ export const api = {
     http<SubcapDetail>(`/api/catalogue/${v}/subcaps/${id}`),
   subcapStories: (v: string, id: string, page = 1, size = 8): Promise<StoryPage> =>
     http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
+  subcapEnrichment: (v: string, id: string): Promise<SubcapEnrichment> =>
+    http<SubcapEnrichment>(`/api/catalogue/${v}/subcaps/${id}/enrichment`),
 };

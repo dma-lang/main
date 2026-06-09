@@ -7,6 +7,7 @@ import {
   type Me,
   type StoryPage,
   type SubcapDetail,
+  type SubcapEnrichment,
   type SubcapNode,
   type VersionInfo,
 } from './client';
@@ -49,5 +50,12 @@ export const useSubcapStories = (version: string, id: string | null) =>
   useQuery<StoryPage>({
     queryKey: ['subcap-stories', version, id],
     queryFn: () => api.subcapStories(version, id ?? ''),
+    enabled: !!version && !!id,
+  });
+
+export const useSubcapEnrichment = (version: string, id: string | null) =>
+  useQuery<SubcapEnrichment>({
+    queryKey: ['subcap-enrichment', version, id],
+    queryFn: () => api.subcapEnrichment(version, id ?? ''),
     enabled: !!version && !!id,
   });

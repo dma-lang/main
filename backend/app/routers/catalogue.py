@@ -99,6 +99,39 @@ class StoryPage(BaseModel):
     items: list[StoryRow]
 
 
+class Persona(BaseModel):
+    persona_id: str
+    canonical_name: str
+    role_description: str | None = None
+
+
+class Platform(BaseModel):
+    l3_id: str
+    name: str
+    vendor: str | None = None
+    category: str | None = None
+
+
+class UseCase(BaseModel):
+    use_case_id: str
+    archetype: str | None = None
+    name: str
+    description: str | None = None
+
+
+class Maturity(BaseModel):
+    level: str
+    descriptor: str | None = None
+    features: str | None = None
+
+
+class SubcapEnrichment(BaseModel):
+    personas: list[Persona]
+    platforms: list[Platform]
+    use_cases: list[UseCase]
+    maturity: list[Maturity]
+
+
 _JOINS = (
     "FROM {s}.subcap s "
     "JOIN {s}.capability cap ON cap.capability_id = s.capability_id "
@@ -179,6 +212,45 @@ async def subcap_stories(
         )
     items = [StoryRow.model_validate(dict(r)) for r in rows]
     return StoryPage(total=int(total), page=page, size=size, items=items)
+
+
+@router.get("/{version}/subcaps/{subcap_id}/enrichment")
+async def subcap_enrichment(
+    version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> SubcapEnrichment:
+    """Personas, L3 platforms, use cases and M1-M5 maturity for a subcap (Overview/Use/Maturity)."""
+    s = _schema(await resolve_version(version))
+    q_personas = text(
+        f"SELECT p.persona_id, p.canonical_name, p.role_description FROM {s}.subcap_persona sp "
+        f"JOIN {s}.persona p ON p.persona_id = sp.persona_id WHERE sp.subcap_id = :sid "
+        "ORDER BY p.canonical_name"
+    )
+    q_platforms = text(
+        f"SELECT l.l3_id, l.name, v.name AS vendor, l.category FROM {s}.subcap_platform sp "
+        f"JOIN {s}.l3_platform l ON l.l3_id = sp.l3_id "
+        f"LEFT JOIN {s}.vendor v ON v.vendor_id = l.vendor_id WHERE sp.subcap_id = :sid "
+        "ORDER BY l.name"
+    )
+    q_uc = text(
+        f"SELECT use_case_id, archetype, name, description FROM {s}.use_case "
+        "WHERE subcap_id = :sid ORDER BY use_case_id"
+    )
+    q_mat = text(
+        f"SELECT level, descriptor, features FROM {s}.maturity_descriptor "
+        "WHERE subcap_id = :sid ORDER BY level"
+    )
+    p = {"sid": subcap_id}
+    async with _engine().connect() as conn:
+        personas = (await conn.execute(q_personas, p)).mappings().all()
+        platforms = (await conn.execute(q_platforms, p)).mappings().all()
+        use_cases = (await conn.execute(q_uc, p)).mappings().all()
+        maturity = (await conn.execute(q_mat, p)).mappings().all()
+    return SubcapEnrichment(
+        personas=[Persona.model_validate(dict(r)) for r in personas],
+        platforms=[Platform.model_validate(dict(r)) for r in platforms],
+        use_cases=[UseCase.model_validate(dict(r)) for r in use_cases],
+        maturity=[Maturity.model_validate(dict(r)) for r in maturity],
+    )
 
 
 @router.get("/{version}/summary")

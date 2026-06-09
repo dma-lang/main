@@ -80,6 +80,19 @@ def test_subcap_detail(client: TestClient) -> None:
 
 
 @needs_db
+def test_subcap_enrichment(client: TestClient) -> None:
+    r = client.get("/api/catalogue/v7/subcaps/P1C1.1.1/enrichment")
+    assert r.status_code == 200
+    body = r.json()
+    # Seeded from the comprehensive pillar workbooks.
+    assert len(body["personas"]) > 0
+    assert len(body["platforms"]) > 0
+    assert len(body["use_cases"]) > 0
+    assert [m["level"] for m in body["maturity"]] == ["M1", "M2", "M3", "M4", "M5"]
+    assert {"l3_id", "name", "vendor"} <= set(body["platforms"][0])
+
+
+@needs_db
 def test_summary(client: TestClient) -> None:
     r = client.get("/api/catalogue/v7/summary")
     assert r.status_code == 200

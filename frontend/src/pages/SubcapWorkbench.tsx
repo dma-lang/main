@@ -6,8 +6,13 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
-import type { SubcapDetail, SubcapNode } from '../api/client';
-import { useSubcap, useSubcaps, useSubcapStories } from '../api/queries';
+import type { SubcapDetail, SubcapEnrichment, SubcapNode } from '../api/client';
+import {
+  useSubcap,
+  useSubcapEnrichment,
+  useSubcaps,
+  useSubcapStories,
+} from '../api/queries';
 import { Bar, Empty, LifeChip, PillarDot, Tier } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { clamp, LIFE_COLORS, PILLAR_COLORS, PILLAR_SHORT } from '../lib/helpers';
@@ -92,7 +97,17 @@ function EmptyTab({ icon, title, desc }: { icon: IconName; title: string; desc: 
   );
 }
 
-function OverviewTab({ d, node }: { d: SubcapDetail | undefined; node: SubcapNode | null }) {
+function OverviewTab({
+  d,
+  node,
+  enr,
+}: {
+  d: SubcapDetail | undefined;
+  node: SubcapNode | null;
+  enr: SubcapEnrichment | undefined;
+}) {
+  const personas = enr?.personas ?? [];
+  const platforms = enr?.platforms ?? [];
   return (
     <div className="fade-in">
       <p style={{ margin: '0 0 16px', fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
@@ -103,9 +118,19 @@ function OverviewTab({ d, node }: { d: SubcapDetail | undefined; node: SubcapNod
           <div className="eyebrow" style={{ marginBottom: 7 }}>
             Personas
           </div>
-          <span className="muted" style={{ fontSize: 12 }}>
-            none recorded
-          </span>
+          {personas.length ? (
+            <div className="row wrap gap6">
+              {personas.map((p) => (
+                <span key={p.persona_id} className="chip outline" title={p.role_description ?? ''}>
+                  {p.canonical_name}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="muted" style={{ fontSize: 12 }}>
+              none recorded
+            </span>
+          )}
         </div>
         <div>
           <div className="eyebrow" style={{ marginBottom: 7 }}>
@@ -118,17 +143,183 @@ function OverviewTab({ d, node }: { d: SubcapDetail | undefined; node: SubcapNod
       </div>
       <div className="divider" />
       <div className="between" style={{ marginBottom: 9 }}>
-        <div className="eyebrow">Linked L3 platforms · {d?.n_platforms ?? 0}</div>
+        <div className="eyebrow">Linked L3 platforms · {platforms.length}</div>
         <span className="muted" style={{ fontSize: 11 }}>
           click to drill into the platform
         </span>
       </div>
-      <span className="muted" style={{ fontSize: 12 }}>
-        none mapped
-      </span>
+      {platforms.length ? (
+        <div style={{ display: 'grid', gap: 6 }}>
+          {platforms.map((p) => (
+            <div
+              key={p.l3_id}
+              className="card hov"
+              style={{ padding: '9px 12px', cursor: 'pointer' }}
+              onClick={() => go('platforms/' + p.l3_id)}
+            >
+              <div className="between">
+                <div className="row gap8" style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: 6,
+                      background: 'var(--surface-overlay)',
+                      color: 'var(--interactive)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flex: 'none',
+                    }}
+                  >
+                    <Icon n="database" s={13} />
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 12.5,
+                        fontWeight: 600,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {p.name}
+                    </div>
+                    <div className="mono muted" style={{ fontSize: 10 }}>
+                      {p.l3_id}
+                    </div>
+                  </div>
+                </div>
+                <div className="row gap8" style={{ flex: 'none' }}>
+                  {p.vendor && (
+                    <span className="chip soft" style={{ fontSize: 10 }}>
+                      {p.vendor}
+                    </span>
+                  )}
+                  <Icon n="arrowR" s={13} style={{ color: 'var(--text-tertiary)' }} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="muted" style={{ fontSize: 12 }}>
+          none mapped
+        </span>
+      )}
       <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-        The {d?.n_use_cases ?? 0} use cases and {d?.n_stories ?? 0} stories on {node?.id ?? 'this subcap'}{' '}
-        ride on these platforms — platform links and counts arrive with catalogue enrichment.
+        {d?.n_use_cases ?? 0} use cases and {d?.n_stories ?? 0} stories on {node?.id ?? 'this subcap'}{' '}
+        ride on these platforms — open the Use cases and Delivery tabs for detail.
+      </div>
+    </div>
+  );
+}
+
+const MLEVELS: [string, string][] = [
+  ['M1', 'Foundational'],
+  ['M2', 'Developing'],
+  ['M3', 'Established / AI-assisted'],
+  ['M4', 'Advanced hybrid agentic'],
+  ['M5', 'Transformational'],
+];
+const MHEAT = ['#7fd8cf', '#5cc9bd', '#2fb9ab', '#16a596', '#0a8f86'];
+
+function MaturityTab({ enr }: { enr: SubcapEnrichment | undefined }) {
+  const [open, setOpen] = useState(0);
+  const byLevel = new Map((enr?.maturity ?? []).map((m) => [m.level, m]));
+  const has = (i: number) => {
+    const m = byLevel.get(MLEVELS[i][0]);
+    return !!(m && m.descriptor && m.descriptor.length > 20);
+  };
+  const cur = byLevel.get(MLEVELS[open][0]);
+  return (
+    <div className="fade-in">
+      <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        Five maturity levels. Click a level to read its descriptor — only one is expanded so it stays
+        scannable.
+      </div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
+        {MLEVELS.map(([lv], i) => (
+          <button
+            key={lv}
+            onClick={() => setOpen(i)}
+            style={{
+              flex: 1,
+              border: 'none',
+              cursor: 'pointer',
+              padding: '9px 4px',
+              borderRadius: 6,
+              background: open === i ? MHEAT[i] : 'var(--surface-sunken)',
+              color:
+                open === i
+                  ? i >= 2
+                    ? '#fff'
+                    : 'var(--z-dark)'
+                  : has(i)
+                    ? 'var(--text-secondary)'
+                    : 'var(--text-disabled)',
+              fontWeight: 700,
+              fontSize: 12,
+              position: 'relative',
+            }}
+          >
+            {lv}
+            {!has(i) && <span style={{ position: 'absolute', top: 3, right: 5, fontSize: 8 }}>○</span>}
+          </button>
+        ))}
+      </div>
+      <div className="card" style={{ padding: '14px 16px', background: 'var(--surface-raised)' }}>
+        <div className="h3" style={{ marginBottom: 6 }}>
+          {MLEVELS[open][0]} · {MLEVELS[open][1]}
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            color: cur?.descriptor ? 'var(--text-secondary)' : 'var(--text-disabled)',
+            lineHeight: 1.55,
+          }}
+        >
+          {cur?.descriptor ?? 'No descriptor at this level yet — flagged thin in maturity coverage.'}
+        </div>
+        {cur?.features && (
+          <div
+            className="muted"
+            style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5, whiteSpace: 'pre-line' }}
+          >
+            {cur.features}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UseTab({ enr }: { enr: SubcapEnrichment | undefined }) {
+  const ucs = enr?.use_cases ?? [];
+  if (!ucs.length) {
+    return (
+      <EmptyTab icon="puzzle" title="No use cases" desc="This subcap has no use cases mapped yet." />
+    );
+  }
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'grid', gap: 8 }}>
+        {ucs.map((u) => (
+          <div key={u.use_case_id} className="card" style={{ padding: '11px 13px' }}>
+            <div className="row gap8" style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+              <span className="chip blue" style={{ fontWeight: 700 }}>
+                {u.archetype ?? 'use case'}
+              </span>
+              <span className="mono muted" style={{ fontSize: 10, marginLeft: 'auto' }}>
+                {u.use_case_id}
+              </span>
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {u.description}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -299,6 +490,8 @@ export function SubcapWorkbench() {
   const node = useMemo(() => all.find((x) => x.id === sel) ?? null, [all, sel]);
   const detail = useSubcap(version, sel);
   const d = detail.data;
+  const enrichment = useSubcapEnrichment(version, sel);
+  const enr = enrichment.data;
 
   const searching = q.trim().length >= 2;
   const results = useMemo(() => {
@@ -347,24 +540,16 @@ export function SubcapWorkbench() {
     [d?.n_use_cases ?? 0, 'use cases', 'usecases'],
     [d?.n_stories ?? 0, 'stories', 'delivery'],
     [d?.n_platforms ?? 0, 'platforms', 'overview'],
-    [0, 'maturity levels', 'maturity'],
+    [enr?.maturity.length ?? 0, 'maturity levels', 'maturity'],
   ];
 
   const tabBody: ReactNode =
     tab === 'overview' ? (
-      <OverviewTab d={d} node={node} />
+      <OverviewTab d={d} node={node} enr={enr} />
     ) : tab === 'maturity' ? (
-      <EmptyTab
-        icon="bars"
-        title="Maturity ladder lands with enrichment"
-        desc="The M1–M5 maturity descriptors are generated by the catalogue enrichment pass (F6); this tab renders the ladder once they are stored for the active version."
-      />
+      <MaturityTab enr={enr} />
     ) : tab === 'usecases' ? (
-      <EmptyTab
-        icon="puzzle"
-        title="No use cases recorded yet"
-        desc="Use cases are populated by enrichment from the source workbook; archetype and maturity cards appear here when the use_case table is seeded for this version."
-      />
+      <UseTab enr={enr} />
     ) : tab === 'delivery' ? (
       node ? <DeliveryTab version={version} node={node} /> : null
     ) : (
