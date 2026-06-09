@@ -90,6 +90,7 @@ def test_subcap_enrichment(client: TestClient) -> None:
     assert len(body["use_cases"]) > 0
     assert [m["level"] for m in body["maturity"]] == ["M1", "M2", "M3", "M4", "M5"]
     assert {"l3_id", "name", "vendor"} <= set(body["platforms"][0])
+    assert "offerings" in body  # productized offerings the subcap is mapped to (may be empty)
 
 
 @needs_db

@@ -37,6 +37,7 @@ def test_provision_seeds_v7_catalogue() -> None:
             assert report["use_cases"] > 0
             assert report["platforms"] > 0
             assert report["maturity"] > 0
+            assert report["offerings"] > 0
             engine = db.get_engine()
             assert engine is not None
             async with engine.connect() as conn:

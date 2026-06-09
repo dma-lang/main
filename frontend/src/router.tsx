@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
+import { Lifecycle } from './pages/Lifecycle';
 import { MissionControl } from './pages/MissionControl';
 import { Platforms } from './pages/Platforms';
 import { StoryLibrary } from './pages/StoryLibrary';
@@ -25,6 +26,7 @@ const LIVE: Record<string, ReactElement> = {
   platforms: <Platforms />,
   'use-cases': <UseCases />,
   stories: <StoryLibrary />,
+  lifecycle: <Lifecycle />,
 };
 
 export const router = createHashRouter([

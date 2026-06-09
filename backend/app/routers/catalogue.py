@@ -125,11 +125,18 @@ class Maturity(BaseModel):
     features: str | None = None
 
 
+class OfferingRef(BaseModel):
+    offering_id: str
+    name: str
+    category: str | None = None
+
+
 class SubcapEnrichment(BaseModel):
     personas: list[Persona]
     platforms: list[Platform]
     use_cases: list[UseCase]
     maturity: list[Maturity]
+    offerings: list[OfferingRef]
 
 
 class PlatformRow(BaseModel):
@@ -190,6 +197,23 @@ class UseCasePage(BaseModel):
     size: int
     items: list[UseCaseRow]
     archetypes: list[ArchetypeFacet]
+
+
+class LifecycleSubcap(BaseModel):
+    id: str
+    name: str
+    pillar: str
+    stories: int
+    offering_id: str | None = None
+    offering_name: str | None = None
+
+
+class LifecycleSummary(BaseModel):
+    subcaps_delivered: int
+    offerings: int
+    covered_pct: int
+    gaps: int
+    top: list[LifecycleSubcap]
 
 
 _JOINS = (
@@ -299,17 +323,24 @@ async def subcap_enrichment(
         f"SELECT level, descriptor, features FROM {s}.maturity_descriptor "
         "WHERE subcap_id = :sid ORDER BY level"
     )
+    q_off = text(
+        f"SELECT o.offering_id, o.name, o.category FROM {s}.offering_subcap os "
+        f"JOIN {s}.offering o ON o.offering_id = os.offering_id WHERE os.subcap_id = :sid "
+        "ORDER BY o.name"
+    )
     p = {"sid": subcap_id}
     async with _engine().connect() as conn:
         personas = (await conn.execute(q_personas, p)).mappings().all()
         platforms = (await conn.execute(q_platforms, p)).mappings().all()
         use_cases = (await conn.execute(q_uc, p)).mappings().all()
         maturity = (await conn.execute(q_mat, p)).mappings().all()
+        offerings = (await conn.execute(q_off, p)).mappings().all()
     return SubcapEnrichment(
         personas=[Persona.model_validate(dict(r)) for r in personas],
         platforms=[Platform.model_validate(dict(r)) for r in platforms],
         use_cases=[UseCase.model_validate(dict(r)) for r in use_cases],
         maturity=[Maturity.model_validate(dict(r)) for r in maturity],
+        offerings=[OfferingRef.model_validate(dict(r)) for r in offerings],
     )
 
 
@@ -476,4 +507,47 @@ async def list_use_cases(
         size=size,
         items=[UseCaseRow.model_validate(dict(r)) for r in rows],
         archetypes=[ArchetypeFacet.model_validate(dict(r)) for r in facets],
+    )
+
+
+@router.get("/{version}/lifecycle")
+async def lifecycle(
+    version: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> LifecycleSummary:
+    """Most-delivered subcaps mapped to productized offerings + coverage KPIs (Lifecycle)."""
+    v = await resolve_version(version)
+    s = _schema(v)
+    off_join = (
+        "(SELECT os.subcap_id, min(o.offering_id) AS offering_id, min(o.name) AS offering_name "
+        f"FROM {s}.offering_subcap os JOIN {s}.offering o ON o.offering_id = os.offering_id "
+        "GROUP BY os.subcap_id) off"
+    )
+    delivered_cte = (
+        "(SELECT subcap_id, count(*) AS stories FROM control.story_catalogue_link "
+        "WHERE version_id = :ver GROUP BY subcap_id) sc"
+    )
+    top_sql = text(
+        "SELECT sc.subcap_id AS id, s.name, left(sc.subcap_id, 2) AS pillar, "
+        "sc.stories::int AS stories, off.offering_id, off.offering_name "
+        f"FROM {delivered_cte} JOIN {s}.subcap s ON s.subcap_id = sc.subcap_id "
+        f"LEFT JOIN {off_join} ON off.subcap_id = sc.subcap_id "
+        "ORDER BY sc.stories DESC, sc.subcap_id LIMIT 8"
+    )
+    kpi_sql = text(
+        "SELECT count(*) AS delivered, "
+        "count(*) FILTER (WHERE off.offering_id IS NOT NULL) AS covered "
+        f"FROM {delivered_cte} LEFT JOIN {off_join} ON off.subcap_id = sc.subcap_id"
+    )
+    async with _engine().connect() as conn:
+        offerings = (await conn.execute(text(f"SELECT count(*) FROM {s}.offering"))).scalar() or 0
+        kpi = (await conn.execute(kpi_sql, {"ver": v.version_id})).mappings().first()
+        rows = (await conn.execute(top_sql, {"ver": v.version_id})).mappings().all()
+    delivered = int(kpi["delivered"]) if kpi else 0
+    covered = int(kpi["covered"]) if kpi else 0
+    return LifecycleSummary(
+        subcaps_delivered=delivered,
+        offerings=int(offerings),
+        covered_pct=round(100 * covered / delivered) if delivered else 0,
+        gaps=delivered - covered,
+        top=[LifecycleSubcap.model_validate(dict(r)) for r in rows],
     )

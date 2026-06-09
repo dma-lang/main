@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   api,
   type CatalogueSummary,
+  type LifecycleSummary,
   type Me,
   type PlatformDetail,
   type PlatformRow,
@@ -86,6 +87,13 @@ export const usePlatform = (version: string, id: string | null) =>
     queryKey: ['platform', version, id],
     queryFn: () => api.platform(version, id ?? ''),
     enabled: !!version && !!id,
+  });
+
+export const useLifecycle = (version: string) =>
+  useQuery<LifecycleSummary>({
+    queryKey: ['lifecycle', version],
+    queryFn: () => api.lifecycle(version),
+    enabled: !!version,
   });
 
 export const useUseCases = (version: string, params: UseCaseQuery) =>

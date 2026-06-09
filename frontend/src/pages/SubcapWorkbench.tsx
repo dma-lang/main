@@ -136,9 +136,19 @@ function OverviewTab({
           <div className="eyebrow" style={{ marginBottom: 7 }}>
             Offering
           </div>
-          <span className="muted" style={{ fontSize: 12 }}>
-            No productized offering yet
-          </span>
+          {(enr?.offerings ?? []).length ? (
+            <div className="row wrap gap6">
+              {(enr?.offerings ?? []).map((o) => (
+                <span key={o.offering_id} className="chip teal" title={o.category ?? ''}>
+                  <Icon n="package" s={11} /> {o.name}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="muted" style={{ fontSize: 12 }}>
+              No productized offering yet
+            </span>
+          )}
         </div>
       </div>
       <div className="divider" />

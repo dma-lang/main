@@ -103,11 +103,35 @@ export interface Maturity {
   features: string | null;
 }
 
+export interface OfferingRef {
+  offering_id: string;
+  name: string;
+  category: string | null;
+}
+
 export interface SubcapEnrichment {
   personas: Persona[];
   platforms: Platform[];
   use_cases: UseCase[];
   maturity: Maturity[];
+  offerings: OfferingRef[];
+}
+
+export interface LifecycleSubcap {
+  id: string;
+  name: string;
+  pillar: string;
+  stories: number;
+  offering_id: string | null;
+  offering_name: string | null;
+}
+
+export interface LifecycleSummary {
+  subcaps_delivered: number;
+  offerings: number;
+  covered_pct: number;
+  gaps: number;
+  top: LifecycleSubcap[];
 }
 
 export interface PlatformRow {
@@ -253,6 +277,8 @@ export const api = {
   platform: (v: string, id: string): Promise<PlatformDetail> =>
     http<PlatformDetail>(`/api/catalogue/${v}/platforms/${id}`),
   vendors: (v: string): Promise<VendorRow[]> => http<VendorRow[]>(`/api/catalogue/${v}/vendors`),
+  lifecycle: (v: string): Promise<LifecycleSummary> =>
+    http<LifecycleSummary>(`/api/catalogue/${v}/lifecycle`),
   useCases: (v: string, p: UseCaseQuery): Promise<UseCasePage> => {
     const qs = new URLSearchParams();
     if (p.pillar) qs.set('pillar', p.pillar);

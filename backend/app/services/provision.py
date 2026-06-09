@@ -70,6 +70,16 @@ async def _seed_enrichment(
         "descriptor_id, subcap_id, level, descriptor, features",
         "maturity_descriptor",
     )
+    await ins(
+        e.get("offerings", []),
+        "offering_id, name, category, status, primary_vendor_id, description",
+        "offering",
+    )
+    await ins(
+        e.get("offering_subcaps", []),
+        "offering_id, subcap_id, mapping_rationale, maturity_lift, status",
+        "offering_subcap",
+    )
 
 
 def _statements(sql: str) -> Iterator[str]:
@@ -184,4 +194,5 @@ async def bring_version_online(
         "platforms": len(enrich["l3_platforms"]) if enrich else 0,
         "personas": len(enrich["personas"]) if enrich else 0,
         "maturity": len(enrich["maturity_descriptors"]) if enrich else 0,
+        "offerings": len(enrich["offerings"]) if enrich else 0,
     }

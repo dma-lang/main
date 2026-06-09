@@ -114,6 +114,17 @@ def test_unmapped_subcap_has_no_stories(client: TestClient) -> None:
 
 
 @needs_db
+def test_lifecycle(client: TestClient) -> None:
+    body = client.get("/api/catalogue/v7/lifecycle").json()
+    assert body["subcaps_delivered"] > 0  # carry-forward linked the corpus
+    assert body["offerings"] > 0  # offerings seeded by enrichment
+    assert 0 <= body["covered_pct"] <= 100
+    assert 0 <= body["gaps"] <= body["subcaps_delivered"]
+    assert len(body["top"]) > 0
+    assert body["top"][0]["stories"] > 0  # most-delivered subcap carries a real story count
+
+
+@needs_db
 def test_story_library_endpoint(client: TestClient) -> None:
     body = client.get("/api/stories?size=5").json()
     assert body["total"] == 14406  # the canonical corpus (synthetic excluded)
