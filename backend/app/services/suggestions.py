@@ -246,6 +246,66 @@ async def list_suggestions(status: str = "pending") -> list[SuggestionRow]:
     return [_row(dict(r)) for r in rows]
 
 
+def _compact(s: str, n: int = 42) -> str:
+    """Compact a long field value for the apply receipt (the audit row keeps full values)."""
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+async def _mutate(
+    conn: AsyncConnection,
+    schema: str,
+    target: str,
+    current: dict[str, Any],
+    after_spec: dict[str, Any],
+) -> tuple[str | None, str, dict[str, Any]]:
+    """Dispatch the gated mutation by payload shape -> (before, after, audit-meta delta).
+
+    Shapes: ``{"lifecycle_state"}`` (promotion/demotion), ``{"description"}`` (descriptor
+    update), ``{"use_case"}`` (new use-case INSERT). Anything else fails loudly — an
+    unsupported shape must never half-apply.
+    """
+    if "lifecycle_state" in after_spec:
+        before, after = str(current["lifecycle_state"]), str(after_spec["lifecycle_state"])
+        await conn.execute(
+            text(f"UPDATE {schema}.subcap SET lifecycle_state = :a WHERE subcap_id = :t"),
+            {"a": after, "t": target},
+        )
+        return before, after, {"field": "lifecycle_state", "before": before, "after": after}
+    if "description" in after_spec:
+        before_full = str(current["description"] or "")
+        after_full = str(after_spec["description"])
+        await conn.execute(
+            text(f"UPDATE {schema}.subcap SET description = :a WHERE subcap_id = :t"),
+            {"a": after_full, "t": target},
+        )
+        return (
+            _compact(before_full),
+            _compact(after_full),
+            {"field": "description", "before": before_full, "after": after_full},
+        )
+    if "use_case" in after_spec:
+        uc = dict(after_spec["use_case"])
+        # Idempotent on the deterministic use_case_id (F14): a replayed apply converges.
+        await conn.execute(
+            text(
+                f"INSERT INTO {schema}.use_case "
+                "(use_case_id, subcap_id, archetype, name, description) "
+                "VALUES (:id, :sub, :arch, :name, :desc) "
+                "ON CONFLICT (use_case_id) DO UPDATE SET archetype = EXCLUDED.archetype, "
+                "name = EXCLUDED.name, description = EXCLUDED.description"
+            ),
+            {
+                "id": uc["use_case_id"],
+                "sub": target,
+                "arch": uc.get("archetype"),
+                "name": uc["name"],
+                "desc": uc.get("description"),
+            },
+        )
+        return None, str(uc["use_case_id"]), {"field": "use_case", "inserted": uc}
+    raise ValueError(f"unsupported suggestion payload shape: {sorted(after_spec)}")
+
+
 async def apply(suggestion_id: str, actor: str) -> ApplyResult:
     """Re-gate G1-G8 on current state, then mutate cat_<v> + append audit_log, transactionally."""
     engine = db.get_engine()
@@ -257,7 +317,7 @@ async def apply(suggestion_id: str, actor: str) -> ApplyResult:
                 await conn.execute(
                     text(
                         "SELECT target_version, target_subcap, payload, "
-                        "status::text AS status, chain_id "
+                        "status::text AS status, source_tier::text AS source_tier, chain_id "
                         "FROM control.suggestion WHERE suggestion_id = :id FOR UPDATE"
                     ),
                     {"id": suggestion_id},
@@ -277,11 +337,18 @@ async def apply(suggestion_id: str, actor: str) -> ApplyResult:
             raise ValueError("invalid version schema")
         target = sug["target_subcap"]
         current = (
-            await conn.execute(
-                text(f"SELECT lifecycle_state FROM {schema}.subcap WHERE subcap_id = :t"),
-                {"t": target},
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT lifecycle_state, description FROM {schema}.subcap "
+                        "WHERE subcap_id = :t"
+                    ),
+                    {"t": target},
+                )
             )
-        ).scalar()
+            .mappings()
+            .first()
+        )
         stories = (
             await conn.execute(
                 text(
@@ -291,10 +358,20 @@ async def apply(suggestion_id: str, actor: str) -> ApplyResult:
                 {"ver": v.version_id, "t": target},
             )
         ).scalar() or 0
+        citations = 0
+        if sug["chain_id"] is not None:
+            citations = (
+                await conn.execute(
+                    text("SELECT count(*) FROM control.citation WHERE chain_id = :c AND verified"),
+                    {"c": sug["chain_id"]},
+                )
+            ).scalar() or 0
+        # G2 evidence floor: delivery stories for corpus-grounded kinds, verified citations on
+        # the chain for news-grounded kinds — whichever evidences this suggestion.
         results, verdict = gates.evaluate_suggestion(
             target_exists=current is not None,
-            evidence_count=int(stories),
-            source_tier="T1",
+            evidence_count=max(int(stories), int(citations)),
+            source_tier=str(sug["source_tier"] or "T1"),
             cited=True,
             contradicts=False,
             cost_usd=0.0,
@@ -303,12 +380,10 @@ async def apply(suggestion_id: str, actor: str) -> ApplyResult:
             return ApplyResult(
                 applied=False, status="pending", gate_failed=gates.first_failing(results)
             )
+        assert current is not None  # G1 passed above
 
-        after = sug["payload"]["after"]["lifecycle_state"]
-        before = str(current)
-        await conn.execute(
-            text(f"UPDATE {schema}.subcap SET lifecycle_state = :a WHERE subcap_id = :t"),
-            {"a": after, "t": target},
+        before, after, meta_delta = await _mutate(
+            conn, schema, target, dict(current), (sug["payload"] or {}).get("after") or {}
         )
         await conn.execute(
             text(
@@ -322,11 +397,10 @@ async def apply(suggestion_id: str, actor: str) -> ApplyResult:
                 "m": json.dumps(
                     {
                         "suggestion_id": suggestion_id,
-                        "before": before,
-                        "after": after,
                         "chain_id": str(sug["chain_id"]) if sug["chain_id"] else None,
                         "verdict": verdict,
-                        "snapshot_ref": f"audit:{target}:{before}",
+                        "snapshot_ref": f"audit:{target}:{meta_delta['field']}",
+                        **meta_delta,
                     }
                 ),
             },

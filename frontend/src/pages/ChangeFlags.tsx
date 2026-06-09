@@ -133,9 +133,14 @@ export function ChangeFlags() {
                     <Icon n="eye" s={13} /> Reasoning
                   </button>
                 )}
-                {f.target && (
+                {f.target && !f.target.includes(':') && (
                   <button className="linkbtn" onClick={() => f.target && go('subcap/' + f.target)}>
                     Open subcap
+                  </button>
+                )}
+                {f.target?.startsWith('news:') && (
+                  <button className="linkbtn" onClick={() => go('news')}>
+                    Open news watch
                   </button>
                 )}
               </div>
@@ -154,13 +159,15 @@ export function ChangeFlags() {
                 >
                   Reject
                 </button>
-                <button
-                  className="btn primary sm"
-                  disabled={approve.isPending}
-                  onClick={() => onApprove(f.id)}
-                >
-                  Approve <Icon n="arrowR" s={14} />
-                </button>
+                {f.kind !== 'evidence_gate_failure' && (
+                  <button
+                    className="btn primary sm"
+                    disabled={approve.isPending}
+                    onClick={() => onApprove(f.id)}
+                  >
+                    Approve <Icon n="arrowR" s={14} />
+                  </button>
+                )}
               </div>
             </div>
           </div>

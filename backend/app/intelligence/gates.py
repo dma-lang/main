@@ -60,6 +60,31 @@ def evaluate_suggestion(
     return results, verdict
 
 
+def evaluate_evidence(
+    *,
+    targets_exist: bool,
+    source_tier: str,
+    retrieval_count: int,
+    cited: bool,
+    contradicts: bool,
+) -> tuple[dict[str, Any], str]:
+    """Gate an enriched evidence item before its subcap impacts are written (the News / vendor
+    ingest path, spec D1: "G1/G5/G6/G7 -> write impact" + the G3 tier floor). A failing item is
+    routed to Change Flags and never shown as mapped — queued, not dropped."""
+    tier_ok = source_tier in ("T1", "T2", "T3")  # G3 min_source_tier
+    results: dict[str, Any] = {
+        "G1_identity_schema": _r(targets_exist, "mapped subcaps exist in the active version"),
+        "G3_source_tier_floor": _r(tier_ok, f"source at {source_tier} (floor T3)"),
+        "G5_similarity_grounding": _r(
+            retrieval_count > 0, f"mapping grounded in {retrieval_count} retrieved subcap(s)"
+        ),
+        "G6_contradiction": _r(not contradicts, "claim does not contradict delivery reality"),
+        "G7_citation_verification": _r(cited, "cited ids resolve to stored evidence"),
+    }
+    verdict = "pass" if all(g["verdict"] == "pass" for g in results.values()) else "fail"
+    return results, verdict
+
+
 def first_failing(results: dict[str, Any]) -> str | None:
     """The first gate that did not pass (for routing a failed re-gate to review)."""
     for name, res in results.items():

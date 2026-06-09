@@ -124,8 +124,77 @@ export interface ConnectionSibling {
   shared_platforms: number;
 }
 
+export interface ConnectionSignal {
+  title: string;
+  source: string;
+  tier: string;
+  label: string;
+  ers: number;
+  mag: string;
+  score: number;
+  date: string;
+  chain: string | null;
+}
+
 export interface SubcapConnections {
   siblings: ConnectionSibling[];
+  signals: ConnectionSignal[];
+}
+
+export interface NewsSource {
+  name: string;
+  type: string;
+  tier: string;
+  url: string;
+  ers: number;
+  fetched_at: string;
+}
+
+export interface NewsItem {
+  id: string;
+  title: string;
+  date: string;
+  mag: string;
+  tier: string;
+  label: string;
+  impact: string;
+  impact_label: string;
+  impact_note: string;
+  reliability: number;
+  source: NewsSource;
+  affects: [string, number, string, string][]; // [subcap_id, score, name, mag]
+  chain: string | null;
+}
+
+export interface NewsScan {
+  last_scan: string | null;
+  next_scan: string | null;
+  cadence: string;
+  cron: string;
+}
+
+export interface NewsResp {
+  items: NewsItem[];
+  impacts: { v: string; l: string }[];
+  scan: NewsScan;
+}
+
+export interface NewsLoopOut {
+  staged: boolean;
+  status: string;
+  reason: string | null;
+  suggestion_id: string | null;
+  kind: string | null;
+  target: string | null;
+}
+
+export interface NewsScanStats {
+  version: string;
+  fetched: number;
+  created: number;
+  deduped: number;
+  mapped: number;
+  flagged: number;
 }
 
 export interface ChatCitation {
@@ -471,6 +540,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ reason }),
     }),
+  news: (impact?: string, tier?: string): Promise<NewsResp> => {
+    const qs = new URLSearchParams({ kind: 'news' });
+    if (impact && impact !== 'all') qs.set('impact', impact);
+    if (tier && tier !== 'all') qs.set('tier', tier);
+    return http<NewsResp>(`/api/evidence?${qs.toString()}`);
+  },
+  scanNews: (version: string): Promise<NewsScanStats> =>
+    http<NewsScanStats>(`/api/admin/evidence/scan/news/${version}`, { method: 'POST' }),
+  newsLoop: (newsId: string): Promise<NewsLoopOut> =>
+    http<NewsLoopOut>(`/api/evidence/news/${newsId}/loop`, { method: 'POST' }),
   gates: (): Promise<GatesLog> => http<GatesLog>('/api/gates'),
   qaMetrics: (): Promise<QaMetrics> => http<QaMetrics>('/api/qa/metrics'),
   auditLog: (): Promise<AuditRow[]> => http<AuditRow[]>('/api/audit-log'),

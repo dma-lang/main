@@ -146,8 +146,23 @@ class ConnectionSibling(BaseModel):
     shared_platforms: int
 
 
+class ConnectionSignal(BaseModel):
+    """A recent gated news impact on this subcap — full trust envelope, chain backlink."""
+
+    title: str
+    source: str
+    tier: str
+    label: str
+    ers: float
+    mag: str
+    score: float
+    date: str
+    chain: str | None = None
+
+
 class SubcapConnections(BaseModel):
     siblings: list[ConnectionSibling]
+    signals: list[ConnectionSignal]
 
 
 class PlatformRow(BaseModel):
@@ -359,8 +374,10 @@ async def subcap_enrichment(
 async def subcap_connections(
     version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> SubcapConnections:
-    """KG Layer-A siblings: same-capability subcaps, ranked by shared L3 platforms."""
-    s = _schema(await resolve_version(version))
+    """KG Layer-A siblings (same capability, ranked by shared L3 platforms) + recent gated
+    news signals on this subcap (each with its trust envelope + reasoning backlink)."""
+    v = await resolve_version(version)
+    s = _schema(v)
     sql = text(
         "SELECT s2.subcap_id AS id, s2.name, left(s2.subcap_id, 2) AS pillar, "
         f"(SELECT count(DISTINCT sp2.l3_id) FROM {s}.subcap_platform sp2 "
@@ -370,9 +387,30 @@ async def subcap_connections(
         f"WHERE s2.capability_id = (SELECT capability_id FROM {s}.subcap WHERE subcap_id = :sid) "
         "AND s2.subcap_id <> :sid ORDER BY shared_platforms DESC, s2.subcap_id LIMIT 8"
     )
+    sig_sql = text(
+        "SELECT e.title, e.source_name AS source, e.source_tier::text AS tier, "
+        "coalesce(rc.claim_label::text, 'INFERENCE') AS label, "
+        "coalesce((SELECT er.score::float FROM control.ers er "
+        "WHERE er.evidence_id = e.evidence_id "
+        "ORDER BY er.computed_at DESC LIMIT 1), 0) AS ers, "
+        "i.mag::text AS mag, i.score::float AS score, "
+        "to_char(e.published_at, 'YYYY-MM-DD') AS date, i.chain_id::text AS chain "
+        "FROM control.news_subcap_impact i "
+        "JOIN control.news_item n ON n.news_id = i.news_id "
+        "JOIN control.evidence_item e ON e.evidence_id = n.evidence_id "
+        "LEFT JOIN control.reasoning_chain rc ON rc.chain_id = i.chain_id "
+        "WHERE i.version_id = :ver AND i.subcap_id = :sid "
+        "ORDER BY e.published_at DESC NULLS LAST LIMIT 6"
+    )
     async with _engine().connect() as conn:
         rows = (await conn.execute(sql, {"sid": subcap_id})).mappings().all()
-    return SubcapConnections(siblings=[ConnectionSibling.model_validate(dict(r)) for r in rows])
+        sigs = (
+            (await conn.execute(sig_sql, {"ver": v.version_id, "sid": subcap_id})).mappings().all()
+        )
+    return SubcapConnections(
+        siblings=[ConnectionSibling.model_validate(dict(r)) for r in rows],
+        signals=[ConnectionSignal.model_validate(dict(r)) for r in sigs],
+    )
 
 
 @router.get("/{version}/summary")

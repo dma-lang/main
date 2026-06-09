@@ -11,6 +11,7 @@ import {
   type LifecycleSummary,
   type QaMetrics,
   type Me,
+  type NewsResp,
   type ReasoningChain,
   type PlatformDetail,
   type PlatformRow,
@@ -128,6 +129,25 @@ export const useSuggestions = (status: string) =>
     queryKey: ['suggestions', status],
     queryFn: () => api.suggestions(status),
   });
+
+export const useNews = (impact: string, tier: string) =>
+  useQuery<NewsResp>({
+    queryKey: ['news', impact, tier],
+    queryFn: () => api.news(impact, tier),
+    placeholderData: (prev) => prev,
+  });
+
+export function useNewsActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['news'] });
+    void qc.invalidateQueries({ queryKey: ['suggestions'] });
+    void qc.invalidateQueries({ queryKey: ['change-flags'] });
+  };
+  const scan = useMutation({ mutationFn: api.scanNews, onSuccess: invalidate });
+  const loop = useMutation({ mutationFn: api.newsLoop, onSuccess: invalidate });
+  return { scan, loop };
+}
 
 export const useGates = () => useQuery<GatesLog>({ queryKey: ['gates'], queryFn: api.gates });
 

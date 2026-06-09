@@ -333,6 +333,15 @@ async def approve(flag_id: str, actor: str) -> FlagResult:
             return FlagResult(resolved=False, status="not_found")
         if flag["status"] != "open":
             return FlagResult(resolved=False, status=flag["status"])
+        if flag["kind"] != _KIND:
+            # Evidence-gate failures (F7 ingest) have no lifecycle correction to apply; the
+            # source must be fixed or the item rejected. Stays open, failing gate named, and
+            # no re-gate run is written (there is nothing to re-gate).
+            return FlagResult(
+                resolved=False,
+                status="open",
+                gate_failed=(flag["detail"] or {}).get("gate_failed"),
+            )
 
         target = flag["target_ref"]
         detail = flag["detail"] or {}
@@ -418,7 +427,7 @@ async def _flag_for_update(conn: AsyncConnection, flag_id: str) -> Any:
         (
             await conn.execute(
                 text(
-                    "SELECT target_ref, detail, status, chain_id "
+                    "SELECT target_ref, detail, status, chain_id, kind "
                     "FROM control.change_flag WHERE flag_id = :id FOR UPDATE"
                 ),
                 {"id": flag_id},

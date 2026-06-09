@@ -1,8 +1,8 @@
 // Subcap deep dive (A2) — the prototype's Workbench detail at /subcap/:id: a sticky catalogue tree
 // (search + pillar pills + collapsible category -> cluster -> subcap) beside a detail panel (hero +
 // completeness ring + stat buttons + five tabs). Wired to GET /api/catalogue/{v}/subcaps (tree),
-// /subcaps/{id} (detail) and /subcaps/{id}/stories (Delivery). Overview + Delivery render live data;
-// Maturity / Use cases / Connections are designed-empty until their foundations (enrichment, KG) land.
+// /subcaps/{id} (detail), /subcaps/{id}/stories (Delivery), /subcaps/{id}/enrichment (Maturity /
+// Use cases) and /subcaps/{id}/connections (siblings + gated news signals).
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
@@ -14,8 +14,8 @@ import {
   useSubcaps,
   useSubcapStories,
 } from '../api/queries';
-import { Bar, Empty, LifeChip, PillarDot, Tier } from '../components/primitives';
-import { go, toast } from '../lib/events';
+import { Bar, Claim, Empty, LifeChip, Mag, PillarDot, Tier } from '../components/primitives';
+import { go, openReasoning, toast } from '../lib/events';
 import { clamp, LIFE_COLORS, PILLAR_COLORS, PILLAR_SHORT } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
 import { useUi } from '../state/store';
@@ -474,10 +474,12 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
 }
 
 // Connections tab — KG Layer-A siblings (same-capability subcaps, ranked by shared L3 platforms),
-// a deterministic projection of the link tables. News/vendor signals land with evidence (F7).
+// a deterministic projection of the link tables, plus recent gated news signals (F7) with the
+// full trust envelope (Mag · Tier · Claim · ERS) and a reasoning backlink.
 function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
   const conn = useSubcapConnections(version, node.id);
   const sibs = conn.data?.siblings ?? [];
+  const signals = conn.data?.signals ?? [];
   return (
     <div className="fade-in">
       <div className="eyebrow" style={{ marginBottom: 8 }}>
@@ -516,10 +518,36 @@ function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
       <div className="eyebrow" style={{ marginBottom: 8 }}>
         Signals
       </div>
-      <div className="banner info">
-        <Icon n="news" s={14} />
-        No public or vendor signal currently maps to this subcap — news &amp; vendor evidence light up
-        here with the intelligence layer (F7).
+      <div style={{ display: 'grid', gap: 8 }}>
+        {signals.map((sig, i) => (
+          <div key={i} className="card" style={{ padding: '10px 13px' }}>
+            <div className="row gap8" style={{ marginBottom: 5, flexWrap: 'wrap' }}>
+              <Mag m={sig.mag} />
+              <Tier t={sig.tier} />
+              <Claim label={sig.label} />
+              <span className="muted" style={{ fontSize: 10, marginLeft: 'auto' }}>
+                {sig.source} · {sig.date}
+              </span>
+            </div>
+            <div style={{ fontSize: 12.5, fontWeight: 500 }}>{sig.title}</div>
+            <div className="mt8 row gap12">
+              {sig.chain && (
+                <button className="linkbtn" onClick={() => sig.chain && openReasoning(sig.chain)}>
+                  <Icon n="eye" s={13} /> Reasoning
+                </button>
+              )}
+              <span className="muted" style={{ fontSize: 10.5 }}>
+                ERS {sig.ers.toFixed(2)} · impact {sig.score.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        ))}
+        {!signals.length && (
+          <div className="banner info">
+            <Icon n="news" s={14} />
+            No public or vendor signal currently maps to this subcap.
+          </div>
+        )}
       </div>
     </div>
   );

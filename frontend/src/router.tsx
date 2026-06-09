@@ -9,6 +9,7 @@ import { Chat } from './pages/Chat';
 import { Gates } from './pages/Gates';
 import { Lifecycle } from './pages/Lifecycle';
 import { MissionControl } from './pages/MissionControl';
+import { News } from './pages/News';
 import { Platforms } from './pages/Platforms';
 import { QA } from './pages/QA';
 import { StoryLibrary } from './pages/StoryLibrary';
@@ -34,6 +35,7 @@ const LIVE: Record<string, ReactElement> = {
   stories: <StoryLibrary />,
   lifecycle: <Lifecycle />,
   chat: <Chat />,
+  news: <News />,
   suggestions: <Suggestions />,
   gates: <Gates />,
   qa: <QA />,
