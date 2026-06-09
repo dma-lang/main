@@ -71,10 +71,17 @@ def create_app() -> FastAPI:
         """Liveness probe — restarts a hung instance."""
         return {"status": "alive"}
 
+    # Consistent error envelope (F9).
+    from app.errors import register_error_handlers
+
+    register_error_handlers(app)
+
     # --- API routers (register before the SPA mount so /api/* always wins) ---
     from app.routers import me as me_router
+    from app.routers import versions as versions_router
 
     app.include_router(me_router.router)
+    app.include_router(versions_router.router)
 
     _mount_spa(app, settings.static_dir)
     return app

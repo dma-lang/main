@@ -49,6 +49,7 @@ target-version = ["py312"]
 python_version = "3.12"
 strict = true
 files = ["app", "tests"]
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

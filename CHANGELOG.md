@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **F9 — API conventions & trust envelope**: the mandatory `TrustEnvelope`
+  (claim_label / source_tier / ers / chain_id) + DB-mirrored enums; generic `Page[T]` pagination;
+  a single error envelope (`{"error": {"code", "message"}}`); version resolution
+  (`resolve_version` → 404). `GET /api/versions` + `GET /api/versions/{version}` (Version timeline
+  read). Pydantic mypy plugin enabled. Verified end-to-end (14 DB tests; live error envelope).
 - **F2 — auth & identity**: Firebase ID-token verification (google-auth) with `@zennify.com`
   fail-closed allow-list and a deterministic hermetic dev identity; `control.users` upsert
   (config-driven `is_admin`); `GET /api/me` + `PATCH /api/me/preferences` (the server home for the
