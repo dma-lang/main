@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
+import { ChangeFlags } from './pages/ChangeFlags';
 import { Chat } from './pages/Chat';
 import { Gates } from './pages/Gates';
 import { Lifecycle } from './pages/Lifecycle';
@@ -25,6 +26,7 @@ const accessIds = ['settings', 'schema-mapping', 'onboarding', 'subcap'];
 const LIVE: Record<string, ReactElement> = {
   'mission-control': <MissionControl />,
   explorer: <CapabilityWorkbench />,
+  'change-flags': <ChangeFlags />,
   subcap: <SubcapWorkbench />,
   versions: <VersionTimeline />,
   platforms: <Platforms />,

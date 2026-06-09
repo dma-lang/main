@@ -1,6 +1,6 @@
 // Header — ported from the prototype shell.jsx, wired to live state/APIs.
 // pillar/sv/lens/version are filter+context; theme/lens persist to control.users.preferences.
-import { useMe, usePatchPreferences, useVersions } from '../api/queries';
+import { useChangeFlags, useMe, usePatchPreferences, useVersions } from '../api/queries';
 import { Dropdown } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { PILLAR_COLORS } from '../lib/helpers';
@@ -49,6 +49,9 @@ export function Header() {
   const me = useMe();
   const versionsQ = useVersions();
   const patch = usePatchPreferences();
+  const flagsQ = useChangeFlags('open');
+  const c = flagsQ.data?.counts;
+  const flagBadge = c ? (c.BLOCKING ?? 0) + (c.HIGH ?? 0) : 0;
 
   const persist = (extra: Record<string, unknown>) =>
     patch.mutate({ theme: ui.theme, lens: ui.lens, persona: ui.persona, ...extra });
@@ -104,8 +107,14 @@ export function Header() {
         <Icon n={ui.adminView ? 'shield' : 'lock'} s={14} />
         {ui.adminView ? 'Admin' : 'User'}
       </button>
-      <button className="hicon" onClick={() => go('change-flags')} title="Change flags">
+      <button
+        className="hicon"
+        style={{ position: 'relative' }}
+        onClick={() => go('change-flags')}
+        title="Change flags"
+      >
         <Icon n="bell" s={16} />
+        {flagBadge > 0 && <span className="hbadge">{flagBadge}</span>}
       </button>
       {ui.adminView && (
         <div className="costmeter" title="Monthly LLM spend vs envelope">

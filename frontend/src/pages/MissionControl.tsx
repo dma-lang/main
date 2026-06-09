@@ -1,7 +1,7 @@
 // Mission control (A1) — ported from the prototype, wired to /api/catalogue/{v}/summary.
 // Pillar tiles render real counts/completeness/decay; the concentration heatmap + flag/suggestion
 // KPIs light up once their data lands (F5 stories / F7 evidence).
-import { useSummary } from '../api/queries';
+import { useChangeFlags, useSuggestions, useSummary } from '../api/queries';
 import { Bar, Empty, Page, PillarDot } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { PILLAR_COLORS } from '../lib/helpers';
@@ -20,8 +20,13 @@ export function MissionControl() {
   const pillar = useUi((s) => s.pillar);
   const setPillar = useUi((s) => s.setPillar);
   const summary = useSummary(version);
+  const flagsQ = useChangeFlags('open');
+  const pendingQ = useSuggestions('pending');
   const pillars = summary.data?.pillars ?? [];
   const total = summary.data?.total_subcaps ?? 0;
+  const fc = flagsQ.data?.counts;
+  const highFlags = fc ? (fc.BLOCKING ?? 0) + (fc.HIGH ?? 0) : 0;
+  const pendingCount = pendingQ.data?.length ?? 0;
 
   return (
     <Page
@@ -110,11 +115,13 @@ export function MissionControl() {
         <div style={{ display: 'grid', gap: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div className="kpi" style={{ padding: '14px 15px', cursor: 'pointer' }} onClick={() => go('change-flags')}>
-              <div className="kv" style={{ fontSize: 24, color: 'var(--z-orange)' }}>0</div>
+              <div className="kv" style={{ fontSize: 24, color: highFlags ? 'var(--z-orange)' : 'var(--text-primary)' }}>
+                {highFlags}
+              </div>
               <div className="kl">High flags</div>
             </div>
             <div className="kpi" style={{ padding: '14px 15px', cursor: 'pointer' }} onClick={() => go('suggestions')}>
-              <div className="kv" style={{ fontSize: 24 }}>0</div>
+              <div className="kv" style={{ fontSize: 24 }}>{pendingCount}</div>
               <div className="kl">Suggestions pending</div>
             </div>
             <div className="kpi" style={{ padding: '14px 15px' }}>

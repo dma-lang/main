@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import text
 
 from app import db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_admin
+from app.services import change_flags as flags_svc
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
@@ -112,13 +113,18 @@ async def qa_metrics(user: dict[str, Any] = Depends(get_current_user)) -> QaMetr
     if engine is None:
         return QaMetrics(gate_pass_rate=None, total_runs=0, reasoning_chains=0, applied=0)
     async with engine.connect() as conn:
-        total = (
-            await conn.execute(text("SELECT count(*) FROM control.validation_gate_run"))
-        ).scalar() or 0
+        # The pass-rate measures AI-output trustworthiness (chat answers + suggestion/flag commits).
+        # Change-flag *detection* runs (operation='contradiction') are the gates CATCHING an
+        # anomaly, not an output failing — counting them would invert the metric, so they're
+        # excluded here (the Gates log G4 still shows their full distribution).
+        outputs = (
+            "FROM control.validation_gate_run vr "
+            "LEFT JOIN control.reasoning_chain rc ON rc.chain_id = vr.chain_id "
+            "WHERE coalesce(rc.operation, '') <> 'contradiction'"
+        )
+        total = (await conn.execute(text(f"SELECT count(*) {outputs}"))).scalar() or 0
         passed = (
-            await conn.execute(
-                text("SELECT count(*) FROM control.validation_gate_run WHERE verdict = 'pass'")
-            )
+            await conn.execute(text(f"SELECT count(*) {outputs} AND vr.verdict = 'pass'"))
         ).scalar() or 0
         chains = (await conn.execute(text("SELECT count(*) FROM control.reasoning_chain"))).scalar()
         applied = (
@@ -166,3 +172,88 @@ async def audit_log(
             .all()
         )
     return [AuditRow.model_validate(dict(r)) for r in rows]
+
+
+class ChangeFlagOut(BaseModel):
+    id: str
+    sev: str
+    kind: str
+    age: str
+    chain: str | None
+    title: str
+    body: str
+    target: str | None
+    name: str | None
+    pillar: str | None
+    gate_failed: str | None
+    before: str | None
+    after: str | None
+    stories: int
+    status: str
+
+
+class ChangeFlagsOut(BaseModel):
+    flags: list[ChangeFlagOut]
+    counts: dict[str, int]
+
+
+class FlagActionOut(BaseModel):
+    resolved: bool
+    status: str
+    gate_failed: str | None = None
+    before: str | None = None
+    after: str | None = None
+
+
+class FlagRejectBody(BaseModel):
+    reason: str = ""
+
+
+@router.get("/change-flags")
+async def change_flags(
+    status_filter: str = Query("open", alias="status"),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> ChangeFlagsOut:
+    result = await flags_svc.list_flags(status_filter)
+    return ChangeFlagsOut(
+        flags=[ChangeFlagOut(**vars(f)) for f in result.flags], counts=result.counts
+    )
+
+
+@router.post("/admin/change-flags/scan/{version}")
+async def scan_flags(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    return await flags_svc.scan(version)
+
+
+@router.post("/change-flags/{flag_id}/approve")
+async def approve_flag(
+    flag_id: str, user: dict[str, Any] = Depends(get_current_user)
+) -> FlagActionOut:
+    result = await flags_svc.approve(flag_id, str(user["uid"]))
+    if result.status == "not_found":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="change flag not found")
+    return FlagActionOut(**vars(result))
+
+
+@router.post("/change-flags/{flag_id}/reject")
+async def reject_flag(
+    flag_id: str, body: FlagRejectBody, user: dict[str, Any] = Depends(get_current_user)
+) -> FlagActionOut:
+    if not body.reason.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="a rejection reason is required")
+    result = await flags_svc.reject(flag_id, body.reason, str(user["uid"]))
+    if result.status == "not_found":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="change flag not found")
+    return FlagActionOut(**vars(result))
+
+
+@router.post("/change-flags/{flag_id}/defer")
+async def defer_flag(
+    flag_id: str, user: dict[str, Any] = Depends(get_current_user)
+) -> FlagActionOut:
+    result = await flags_svc.defer(flag_id, str(user["uid"]))
+    if result.status == "not_found":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="change flag not found")
+    return FlagActionOut(**vars(result))

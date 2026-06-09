@@ -238,6 +238,37 @@ export interface AuditRow {
   meta: Record<string, unknown>;
 }
 
+export interface ChangeFlag {
+  id: string;
+  sev: string;
+  kind: string;
+  age: string;
+  chain: string | null;
+  title: string;
+  body: string;
+  target: string | null;
+  name: string | null;
+  pillar: string | null;
+  gate_failed: string | null;
+  before: string | null;
+  after: string | null;
+  stories: number;
+  status: string;
+}
+
+export interface ChangeFlagsResp {
+  flags: ChangeFlag[];
+  counts: Record<string, number>;
+}
+
+export interface FlagActionOut {
+  resolved: boolean;
+  status: string;
+  gate_failed: string | null;
+  before: string | null;
+  after: string | null;
+}
+
 export interface LifecycleSubcap {
   id: string;
   name: string;
@@ -443,4 +474,19 @@ export const api = {
   gates: (): Promise<GatesLog> => http<GatesLog>('/api/gates'),
   qaMetrics: (): Promise<QaMetrics> => http<QaMetrics>('/api/qa/metrics'),
   auditLog: (): Promise<AuditRow[]> => http<AuditRow[]>('/api/audit-log'),
+  changeFlags: (status: string): Promise<ChangeFlagsResp> =>
+    http<ChangeFlagsResp>(`/api/change-flags?status=${status}`),
+  scanFlags: (version: string): Promise<{ created: number; candidates: number }> =>
+    http<{ created: number; candidates: number }>(`/api/admin/change-flags/scan/${version}`, {
+      method: 'POST',
+    }),
+  approveFlag: (id: string): Promise<FlagActionOut> =>
+    http<FlagActionOut>(`/api/change-flags/${id}/approve`, { method: 'POST' }),
+  rejectFlag: (id: string, reason: string): Promise<FlagActionOut> =>
+    http<FlagActionOut>(`/api/change-flags/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  deferFlag: (id: string): Promise<FlagActionOut> =>
+    http<FlagActionOut>(`/api/change-flags/${id}/defer`, { method: 'POST' }),
 };

@@ -5,6 +5,7 @@ import {
   api,
   type AuditRow,
   type CatalogueSummary,
+  type ChangeFlagsResp,
   type ChatResponse,
   type GatesLog,
   type LifecycleSummary,
@@ -135,6 +136,25 @@ export const useQaMetrics = () =>
 
 export const useAuditLog = () =>
   useQuery<AuditRow[]>({ queryKey: ['audit-log'], queryFn: api.auditLog });
+
+export const useChangeFlags = (status = 'open') =>
+  useQuery<ChangeFlagsResp>({
+    queryKey: ['change-flags', status],
+    queryFn: () => api.changeFlags(status),
+  });
+
+export function useFlagActions() {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['change-flags'] });
+  const scan = useMutation({ mutationFn: api.scanFlags, onSuccess: invalidate });
+  const approve = useMutation({ mutationFn: api.approveFlag, onSuccess: invalidate });
+  const reject = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => api.rejectFlag(id, reason),
+    onSuccess: invalidate,
+  });
+  const defer = useMutation({ mutationFn: api.deferFlag, onSuccess: invalidate });
+  return { scan, approve, reject, defer };
+}
 
 export function useSuggestionActions() {
   const qc = useQueryClient();
