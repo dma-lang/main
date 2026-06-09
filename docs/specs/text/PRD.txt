@@ -1,0 +1,510 @@
+Product requirements
+
+# Capability Intelligence Agent
+ An internal workbench that keeps Zennify’s four-pillar capability catalogue and its user-story corpus provably current, ingesting both across catalogue versions and, in later phases, live from Jira and public evidence.
+ Document
+ PRD, revised
+
+ Audience
+ Internal consultants & pillar leads
+
+ Catalogue versions
+ v5 and v7, reconciled
+
+ Delivery
+ Three phases
+
+ Status
+ Confidential draft
+
+ Capability Intelligence Agent · PRD 1 Purpose 2 Context 3 Users & goals 4 Data foundation 5 Ingestion & phases 6 AI strategy 7 Requirements 8 Surfaces 9 Non-functional 10 Decisions 11 Acceptance ☾ Dark
+
+ Section 1
+
+## Purpose
+ The Capability Intelligence Agent is an internal workbench that keeps Zennify’s four-pillar capability catalogue and its user-story corpus provably current, and lets pillar leads trace every catalogue assertion back to the evidence behind it.
+ The system ingests two corpora: the capability catalogues and the user-story corpus . Catalogues arrive in versioned workbooks whose structures differ; the system reconciles them into one canonical model and, on upload, gives an admin direct control over how each version maps to that model. Ingestion is delivered in phases, beginning with the catalogue and story foundation and ending with continuous, automatic ingestion of new stories from Jira.
+
+### Scope of this document
+ This PRD defines the problem, the data foundation, the ingestion and schema-mapping model, the phased delivery plan, the AI strategy, the functional and non-functional requirements, and the product surfaces. The companion UI/UX brief holds the visual design system and high-fidelity mockups; this document references it rather than repeating it.
+ Decision authority
+ Where this PRD conflicts with any earlier document, the decision log in section 10 is authoritative.
+
+ Section 2
+
+## Context and the problem
+ Zennify runs a financial-services consulting practice on a four-pillar capability catalogue maintained across four spreadsheet workbooks. The catalogue is the backbone of how the practice describes what it can deliver.
+ Today the catalogue is governed manually. Statements of work in Drive, completed Jira stories, public regulator activity, vendor product launches, benchmark data and DMA assessments all carry signals that should drive the catalogue forward, but those signals are not systematically ingested, weighed or surfaced. The result is drift: the catalogue can fall behind delivery reality, and pillar leads cannot easily trace a catalogue assertion back to its evidence.
+
+### Pain points
+
+- Manual upkeep. Edits are hand-made; there is no record of why a change was made or what it cascaded into.
+- Story signal is stranded. Thousands of delivered user stories describe what the practice actually builds, but they are not connected to the subcaps they prove out.
+- Vendor and market shifts are invisible. When a platform vendor changes course, nothing maps that change to the affected subcaps.
+- No provenance. An assertion in the catalogue cannot be traced to the evidence and reasoning behind it.
+
+### Opportunity
+ A workbench that ingests the catalogue workbooks and the story corpus, persists them once for every authorized user, then progressively layers delivery and public evidence, maps every signal to the subcaps it affects with an explainable reasoning trail, and proposes citation-grounded edits gated by human approval. This converts catalogue governance from manual to systematic and restores pillar-lead trust.
+
+ Section 3
+
+## Users, roles and goals
+
+### Who uses it
+ Primary users are internal consultants and pillar leads, roughly 10 to 30 power users. They own pillars, approve versioned edits, consume the quarterly digest, trace assertions back to evidence, and configure ingestion sources.
+ Roles. Every authenticated Zennify user is a power user with full read access and the day-to-day approval actions. Admins , identified by a single is_admin flag, additionally get the knowledge graph, catalogue upload and source-registry edits, version revert, and on-demand digest generation. There is no finer-grained role model in v1.
+
+### Ranked goals
+ | Rank | Goal
+
+ | 1 | Keep the catalogue provably current, with every assertion traceable to evidence.
+ | 2 | Connect the story corpus to the subcaps it proves, and keep it current from Jira.
+ | 3 | Surface vendor and market developments that should move the catalogue.
+ | 4 | Turn delivery history into productization opportunities.
+ | 5 | Hand a validated packet to the downstream DMA process.
+
+### Non-goals for v1
+
+- Client-facing use. The workbench is internal only.
+- Role-based access beyond a single admin flag. Access is governed by one is_admin flag; finer-grained RBAC is out of scope for v1.
+- Licensed-source ingestion (for example paid analyst feeds or technographics). Public sources only.
+- A cross-pillar capability. De-scoped; see the decision log.
+
+ Section 4
+
+## Data foundation: catalogues, the canonical story corpus, and version resilience
+ The data foundation has two corpora: the capability catalogue and the user-story corpus. Both arrive in catalogue workbooks, and both must be ingested across two versions whose structures differ.
+
+### 4.1 The capability catalogue
+ Four pillars, 851 subcapabilities, organized through a five-level taxonomy.
+ | Pillar | Name | Subcaps (v7)
+
+ | P1 | Strategy, governance & culture | 205
+ | P2 | Customer experience & engagement | 292
+ | P3 | Process automation & operations | 164
+ | P4 | Data & AI enablement | 190
+ | | Total | 851
+
+ | Level | Meaning | Scale
+
+ | L0 | Category | 9 across 4 pillars
+ | L1 | Capability cluster | ~70 to 80
+ | L2 | Sub_Cap_ID | 851
+ | L3 | Technology platform | ~52 (deduped)
+ | L4 | Feature | ~12,036
+
+ The catalogue also carries the productization and enablement layers:
+ | Asset | Count | Where
+
+ | Productized offerings | 13 (shared across pillars) | tab 10
+ | Data products | ~50 | tab 11
+ | Agentforce agents | ~470 | tab 8
+ | Maturity descriptors | M1 to M5 per subcap | tab 6
+ | Subverticals | 9 canonical | tab 21
+ | Value-chain clusters | 8 universal (MECE) | tab 21
+
+### 4.2 The user-story corpus
+ The story corpus is the practice’s record of what it actually delivers, and it has one canonical source : the Zennify Full Story Catalog , exported from Jira (the "Actual (Real Client)" set). This catalog is authoritative and supersedes the story tabs embedded in any catalogue workbook , including v5 and v7. It carries 14,406 real client stories mapped to subcaps, each with a match confidence, quality scores (acceptance-criteria, solution-design and delivery), a subvertical context, and a target maturity.
+ | Pillar | Real Jira stories
+
+ | P1 to P4 | 14,406 across 87 subcaps with delivery evidence
+ | Confidence | HIGH 12,417 · MEDIUM 1,873 · LOW 116
+
+ Synthetic stories are not used for analysis by default
+ Only the real Jira stories drive the analysis in the app. Synthetic or use-case-derived stories are excluded unless a separate signal, specifically external news or a detected trend, points to the relevant subcap as an emergent area. In that case the synthetic story is surfaced as provisional and clearly labelled, never mixed silently into the delivery evidence.
+
+ | Story origin | Canonical? | Used in analysis
+
+ | Jira Full Story Catalog (real client delivery) | Yes, authoritative | Always. This is the analysis set.
+ | Synthetic / generated (use-case derived) | No | Excluded by default; surfaced only when news or trends flag the subcap as an emergent trend, and then clearly labelled synthetic.
+
+ The canonical catalog was mapped against v5 , and some of its ids carry a subvertical suffix (for example P3C1.8.CL2 ). Section 4.6 defines how those v5 mappings are carried forward to v7 and to any future version.
+
+### 4.3 Two catalogue versions, reconciled
+ Ingestion begins with two versions whose workbook structures are not the same.
+ Catalogue v5
+
+#### Looser, 10 sheets per pillar
+
+- Ten sheets per pillar, with inconsistent names and order across pillars (for example "Agentforce Offerings" vs "Agentforce Use Cases", "Technology Stack Matrix" vs "Technology Stack").
+- Sheets: Overview, Capability Map, Sub-Vertical Matrix, Maturity Descriptors, Regulatory Frameworks, Product Catalog, Integration Map, Agentforce Offerings, Technology Stack, Gap Integration Log.
+- No user-story catalogue. Stories appear only as gap-story counts and samples in the Gap Integration Log.
+- Subcaps: P1 199, P2 292, P3 162, P4 187.
+- Subcap id column is Sub-Cap ID ; capability is Cap ID / Capability .
+
+ Catalogue v7
+
+#### Canonical, 25 tabs per pillar
+
+- 25 canonical tabs per pillar ( 1_Overview through 21_VC_Mapping_PerSubcap , plus Z1_QA_Gates , Z2_Plan_Revisions ), consistently named and ordered.
+- Carries 3_User_Stories_Catalogue and 14_CrossPillar_Stories tabs, but for analysis both are superseded by the canonical Jira catalog, and the cross-pillar tab is not ingested.
+- Ships reconciliation tabs: _R1_Source_Reference (v5 to v7 crosswalk) and _R2_Dropped_Stories (P4 also has _R3 ).
+- Subcaps: P1 205, P2 292, P3 164, P4 190 (851).
+- Subcap id column is Sub_Cap_ID ; snake_case throughout.
+
+#### How the structures reconcile
+ The two versions are reconciled into one canonical internal model rather than stored as rival schemas. On ingest the system:
+
+- Detects the schema from the workbook signature (sheet names and header shape) and selects the right adapter, v5 or v7.
+- Normalizes each sheet into canonical entities (subcap, story, maturity descriptor, L3 platform, L4 feature, offering, data product, agent, value-chain mapping).
+- Bridges subcap lineage across versions using v7’s _R1_Source_Reference crosswalk, which already maps each v7 Sub_Cap_ID to its v5.0 original id and carries the old v5 fields. A subcap therefore keeps a continuous identity from v5 to v7.
+- Records what could not be matched. Stories or rows that fail to match (v7 captures these in _R2_Dropped_Stories ; for example P3 has 488) are retained for review, never silently dropped.
+- Versions every ingest. Each successful ingest is a snapshot; deviations from the canonical shape are flagged but do not block ingest.
+
+#### Sheet to tab map
+ | v5 sheet | v7 canonical tab | Canonical entity
+
+ | Capability Map | 2_Capability_Map | Subcap master record
+ | (none) | 3_User_Stories_Catalogue | User story
+ | Maturity Descriptors | 6_Maturity_Descriptors | Maturity descriptor (M1 to M5)
+ | Product Catalog | 7_Product_Catalogue | Platform component
+ | Technology Stack / Integration Map | 4_L3_Detailed | L3 platform
+ | (implicit in Key Features) | 5_L4_Detailed_Features | L4 feature
+ | Agentforce Offerings / Use Cases | 8_Agentforce_Agents_List | Agentforce agent
+ | Sub-Vertical Matrix | 21_VC_Mapping_PerSubcap | Subvertical applicability + value chain
+ | Gap Integration Log | _R2_Dropped_Stories + change flags | Unmatched / dropped evidence
+ | (none) | 10–13, 15–19 | Offerings, data products, matrices, completeness, cascade
+
+#### Field-level example, the subcap record
+ | Canonical field | v7 column | v5 column
+
+ | subcap_id | Sub_Cap_ID | Sub-Cap ID (via _R1 )
+ | name | Sub_Cap_Name | Sub-Capability
+ | category / cluster | Category / L1_Capability | Category Name / Capability
+ | tier | Tier | Tier
+ | platforms | L3_Platforms_Addressing_SubCap | Primary Products / Integration Points
+ | features | L4_Features_Available | Key Features
+ | status | Zennify_Status | Zennify Offerings (implied)
+
+ Why reconciliation matters
+ v5 and v7 disagree on sheet names, sheet order, column names and, most importantly, on whether a story catalogue exists at all. Without a reconciliation layer the same subcap would appear as two unrelated records and the v5-era context would be lost. The canonical model plus the _R1 crosswalk keep one identity per subcap across versions.
+
+### 4.4 Admin control over the schema (mapping studio)
+ Auto-detection is a proposal, not a verdict. To stay resilient to however a future version structures its workbook, the admin who uploads a catalogue gets an interactive schema-mapping studio that opens as part of the upload and gives them full control over how that version maps to the canonical model. The studio is the setup step that makes each version’s persistent relational database functional.
+ In the studio an admin can:
+
+- Review and confirm the auto-mapping. Every source field is mapped to a canonical field with a confidence score and a status; the admin confirms the high-confidence matches and resolves the ones flagged for review.
+- Override any mapping by picking a different canonical field, or remapping a field the auto-mapper guessed wrong.
+- Add custom fields for columns that have no canonical home, so nothing in the source is silently discarded.
+- Define relations from the UI (for example subcap addresses platform, subcap delivered-by story) that apply to this version of the catalogue.
+- Cascade compatible relations to other versions. A relation defined for one version can be propagated to other catalogues where the participating fields exist and are type-compatible, so the admin does not redefine the same relation per version.
+ Applying writes to the backend. When the admin applies the mapping, the configuration is written to the backend schema and the system provisions the persistent relational database for that catalogue version : tables for the canonical entities, the confirmed and custom fields as columns, and the defined relations as foreign keys. The mapping is stored per version and is re-runnable, so a correction re-provisions cleanly. This is what turns an uploaded workbook into a queryable, relational, persistent store.
+ One studio, every version
+ The studio runs for v5, for v7, and for any future version. Because mappings and relations are configuration rather than code, the product stays resilient to structural change in the catalogue without an engineering release.
+
+### 4.5 Persistence
+ Once a version’s mapping is applied and its database provisioned, the catalogue persists durably and is immediately available to every authenticated user. No re-upload is required across sessions, users or restarts. Re-ingesting a newer version creates a new versioned database rather than overwriting history.
+
+### 4.6 Carrying story mappings forward across versions
+ The canonical stories are mapped against v5, but the app analyses against the active version (v7 today, a later version tomorrow). A carry-forward correlation moves each story’s subcap mapping to the target version and confirms the two subcaps are actually similar before the link is maintained. This is the heart of the resilience model: delivery evidence is never stranded on an old version, and it is never silently attached to a subcap that has drifted in meaning.
+ The correlation is deterministic first and semantic second:
+
+- Normalize the id. Strip any subvertical suffix ( P3C1.8.CL2 → P3C1.8 + CL2 ) so the base subcap can be matched and the subvertical kept as context.
+- Bridge with the crosswalk. Use the target version’s _R1_Source_Reference to map the v5 base id to its target id. This is exact and cheap.
+- Confirm similarity. Embed both subcaps (name plus description) with the catalogue-tuned model and take cosine similarity. At or above 0.86 the link is carried forward automatically; between 0.70 and 0.86 it is flagged for a one-click admin confirmation; below 0.70 it is treated as unmapped.
+- Fall back when there is no crosswalk hit. Find the nearest subcap in the target version semantically, and route it to review rather than guessing.
+- Maintain the result. Confirmed links are written into the target version’s database; review and unmapped rows go to a queue and the Story carry-forward surface; nothing is dropped. The job is idempotent and re-runnable for every future version.
+ carry_forward_subcap_mappings.py (core) python
+ CONFIRM_AT = 0.86 # similarity >= CONFIRM_AT -> carry forward automatically
+REVIEW_AT = 0.70 # REVIEW_AT <= sim < CONFIRM_AT -> flag for a one-click admin confirm
+ # similarity < REVIEW_AT -> unmapped, propose nearest neighbour
+
+ID_RE = re.compile(r"^(?P<base>P\d+C\d+(?:\.\d+)*?)(?:\.(?P<sv>[A-Z]{2}\d*))?$")
+
+def normalize_id(sub_cap_id):
+ # "P3C1.8.CL2" -> ("P3C1.8", "CL2"); keep the subvertical as context
+ m = ID_RE.match(sub_cap_id.strip())
+ return (m.group("base"), m.group("sv")) if m else (sub_cap_id.strip(), None)
+
+def carry_one(story, source_cat, target_cat, crosswalk):
+ base, sv = normalize_id(story.sub_cap_id)
+
+ # 1) deterministic bridge first: the target version's _R1 crosswalk
+ candidate = crosswalk.get(story.sub_cap_id) or crosswalk.get(base)
+ via = "crosswalk" if candidate else None
+
+ if candidate and candidate in target_cat:
+ # 2) confirm the v5 subcap and its target counterpart really are similar
+ sim = cosine(embed(subcap_text(source_cat, base)),
+ embed(subcap_text(target_cat, candidate)))
+ else:
+ # 3) no crosswalk hit: nearest neighbour in the target, routed to review
+ candidate, sim = nearest_subcap(subcap_text(source_cat, base), target_cat)
+ via = "nearest_neighbour" if candidate else "none"
+
+ if candidate and sim >= CONFIRM_AT:
+ status = "confirmed"
+ elif candidate and sim >= REVIEW_AT:
+ status = "review"
+ else:
+ status = "unmapped"
+
+ return CarryResult(story.story_key, story.sub_cap_id, base, sv or story.story_sv_code,
+ candidate if status != "unmapped" else None,
+ round(sim, 3), status, story.confidence_level, via or "none")
+
+def carry_forward(source_version="v5", target_version="v7", include_synthetic=False):
+ stories = load_canonical_stories() # the Jira Full Story Catalog
+ if not include_synthetic: # synthetic excluded unless a trend flags it
+ stories = [s for s in stories if not s.is_synthetic]
+ source_cat = load_catalogue(source_version)
+ target_cat = load_catalogue(target_version)
+ crosswalk = load_crosswalk(target_version)
+ return [carry_one(s, source_cat, target_cat, crosswalk) for s in stories]
+
+ Why this is resilient
+ The same routine runs v5 to v7 today and v7 to v8 next year. Exact crosswalks do the cheap work; embeddings only confirm; thresholds keep borderline cases in front of a human; and the full script ships alongside this document so it can be wired to the provisioned databases and run on each new version.
+
+ Section 5
+
+## Ingestion model and phased delivery
+ Ingestion is staged so that cost and risk match leverage. Each phase is shippable on its own and leaves the product in a coherent state.
+
+### 5.1 What gets ingested
+ | Corpus | Examples | Phase
+
+ | Capability catalogues | v5 and v7 pillar workbooks | 1
+ | Canonical stories | Jira Full Story Catalog: real client delivery (supersedes the workbook story tabs) | 1
+ | Internal evidence | Statements of work in Drive | 2
+ | Public evidence | Regulator activity, benchmark data | 2
+ | Vendor evidence | Vendor newsrooms and product feeds | 2
+ | Live Jira stories | New completed stories, ingested continuously | 3
+
+### 5.2 The three phases
+ | | Phase 1 foundation | Phase 2 evidence & reasoning | Phase 3 live & automation
+
+ | Goal | Stand up the catalogue and story foundation, reconciled, mapped and persistent. | Layer delivery and public evidence with an explainable reasoning trail. | Keep the corpus current automatically and complete the synthesis surfaces.
+ | Ingestion | v5 + v7 catalogues through the schema-mapping studio; the canonical Jira story catalog, with its v5 mappings carried forward to the active version. | SOWs (AI-matched), news, vendor feeds, benchmarks. | Continuous Jira story ingestion.
+ | Surfaces | Login, Schema mapping, Mission control, Capability explorer, Subcap deep dive, Value chain atlas, Platform catalog, Use case explorer, Story library, Maturity heatmap, Version timeline, Diff viewer, Settings. | SOW library, News watch, Trends monitor, AI suggestions, Benchmarks studio, Quarterly digest, Lifecycle manager, Change flags, Validation gates log, QA & audit, Reasoning chain viewer, AI chat. | Client journey atlas, Knowledge graph (admin), What-if simulator.
+ | Exit criteria | Both versions ingest, map and provision a persistent relational database; 851 subcaps and the 14,406 real Jira stories queryable; v5 story mappings carried forward to v7 with similarity confirmed; lineage preserved. | Evidence maps to subcaps with reasoning and gates; suggestions apply under version control; monthly cycle and digest run. | New Jira stories appear and match automatically; low-confidence matches route to review; DMA packet exports validate.
+
+ Phase boundaries are about ingestion, not rewrites
+ Every phase reuses the same canonical model and the same trust surfaces. Phase 2 and Phase 3 add corpora and automation; they do not re-platform what Phase 1 built.
+
+### 5.3 Continuous Jira ingestion (Phase 3)
+ The canonical Jira Full Story Catalog is a point-in-time export. Phase 3 keeps it live: the system ingests new completed stories from Jira continuously , extending the same canonical source rather than relying on a frozen file. For each new story it:
+
+- pulls the issue and its fields on a schedule or webhook;
+- matches it to subcaps with the catalogue-tuned model , assigning a match confidence and a short rationale;
+- writes high-confidence matches into the story corpus, and routes low-confidence or unmatched stories to the change-flags inbox and a review queue rather than auto-merging them;
+- records the match as an explainable reasoning trail, so a pillar lead can see why a story was linked to a subcap.
+
+ Section 6
+
+## AI strategy
+ The AI strategy is retrieval-first and explainable. Models read the catalogue and the evidence and reason over them; they do not replace the catalogue’s own structure.
+
+### 6.1 Retrieval-first, with catalogue-tuned matching
+ Answers and matches are grounded in retrieved catalogue and evidence, not in model memory. The story-to-subcap and SOW-to-subcap matchers use a model tuned on the catalogue ontology : subcap names and descriptions, L4 features, and the existing story-to-subcap pairs. This gives the matcher a deeper understanding of what each subcap means at Zennify than an off-the-shelf model would have. The same embedding space powers the story carry-forward in section 4.6, so a subcap means the same thing whether it is being matched, retrieved, or carried between versions.
+ The analysis set is the real Jira stories. Synthetic stories are not retrieved into analysis; they enter only when an external news or trend signal flags a subcap as emergent, and then they are clearly labelled as provisional.
+
+### 6.2 Reasoning is shown in plain language
+ Every AI output carries a claim label , its sources , and a reasoning trail that reads in plain language from the first line, with no opaque codes. The reasoning surface states the question, the ordered steps the model took, the evidence with readable source descriptions, any contradictions, the conclusion, an adversarial self-review, and the checks it ran shown as plain pass or needs-review results.
+ | Claim label | Meaning
+
+ | FACT | Directly supported by a trustworthy source.
+ | INFERENCE | A reasonable conclusion from evidence.
+ | HYPOTHESIS | A plausible idea that needs more evidence.
+ | CEILING ESTIMATE | A best-case bound, not a confirmed value.
+
+ Source trust is expressed as a readable tier (regulator down to vendor self-promotion) and an evidence reliability score that blends tier, recency, specificity and corroboration.
+
+### 6.3 Where AI is deliberately not used
+
+- Persona parsing is a deterministic split of the semicolon-delimited persona cell, not a model.
+- The toggle cascade (deactivating a subcap and propagating to dependent rows) is deterministic.
+- The validation gates are deterministic checks, not model judgement.
+
+ Section 7
+
+## Functional requirements
+ Requirements are tagged with a priority and the phase that delivers them.
+ | ID | Requirement | Priority | Phase
+
+ | FR-1 | Ingest catalogues across v5 and v7 , reconcile to the canonical model, persist for all users. | P0 | 1
+ | FR-2 | Schema-mapping studio : on upload, auto-map source fields to the canonical model with a confidence; let an admin confirm or override mappings, add custom fields, define relations for that version, and cascade compatible relations to other versions; applying provisions the version’s persistent relational database. | P0 | 1
+ | FR-3 | Canonical Jira story corpus : ingest the Jira Full Story Catalog as the authoritative story source, superseding the workbook story tabs; exclude synthetic stories from analysis unless a news or trend signal flags the subcap as an emergent trend. | P0 | 1
+ | FR-4 | Story carry-forward correlation : carry the canonical v5 story-subcap mappings forward to the active version, confirm semantic similarity (crosswalk first, embeddings to confirm), maintain confirmed links, and route borderline matches to review; re-runnable for every future version. | P0 | 1
+ | FR-5 | Multi-lens capability map (pillar, category, cluster, subcap, value-chain, subvertical, maturity, vendor, use-case tag). | P0 | 1
+ | FR-6 | Versioning, diff and change flags over catalogue snapshots. | P0 | 1
+ | FR-7 | SOW library: AI-match SOWs to subcaps with the catalogue-tuned model, each match carrying a claim label, confidence and reasoning link. | P0 | 2
+ | FR-8 | External evidence ingestion (news, benchmarks) with impact scoring to subcaps. | P0 | 2
+ | FR-9 | Vendor intelligence : vendor profiles and a developments feed, classified into 8 event types and mapped to affected subcaps; vendor by subcap impact heatmap. | P0 | 2
+ | FR-10 | Consultant reasoning loop with leverage tiers, and 8 deterministic validation gates. | P0 | 2
+ | FR-11 | Suggestion lifecycle: propose, gate, apply under version control, reject with reason. | P0 | 2
+ | FR-12 | Benchmarks with bootstrap confidence bands and an adversary verdict. | P0 | 2
+ | FR-13 | Lifecycle manager : trace subcaps through delivery; rank most-delivered subcaps, map to offerings, find high-delivery gaps, and have AI bundle them into a proposed, AI-named new offering. | P0 | 2
+ | FR-14 | Monthly consultant cycle and quarterly strategic digest. | P0 | 2
+ | FR-15 | Catalogue-grounded RAG chat with inline citations and a reasoning backlink per turn. | P0 | 2
+ | FR-16 | Reasoning transparency : every AI output is explainable in plain language, no opaque codes. | P0 | 2
+ | FR-17 | Audit and QA dashboard; all audit-grade exports are signed. | P0 | 2
+ | FR-18 | Continuous Jira story ingestion that extends the canonical catalog, with automatic subcap matching and low-confidence routing to review. | P0 | 3
+ | FR-19 | Client journey and validated DMA handoff packet. | P1 | 3
+ | FR-20 | Knowledge graph, admin-only : deterministic plus AI-proposed edges, gated before commit. | P0 | 3
+ | FR-21 | What-if simulator (read-only sandbox) with cascade preview. | P1 | 3
+ | FR-22 | Persona switcher; dark mode in v1 scope. | P1 | 1
+
+ Explicitly dropped
+ The cross-pillar capability is dropped: there is no cross-pillar browsing, no cross-pillar dependency feature, and the cross-pillar story tab is not ingested. The knowledge graph may still propose semantic-similarity edges between subcaps, but nothing in the product is organized around cross-pillar relationships.
+
+ Section 8
+
+## Product surfaces
+ The product is 27 pages across nine functional groups, plus the login screen and the header Settings surface. Each surface is owned by a phase. The companion UI/UX brief holds the full layouts and mockups.
+ | Code | Page | Objective | Phase
+
+ | A · Explore
+ | A1 | Mission control | Health and attention at a glance; leads with a story-concentration heatmap tied to offering coverage. | 1
+ | A2 | Capability explorer | Interactive column drilldown from pillar to a single subcap. | 1
+ | A3 | Subcap deep dive | Everything known about one subcap, including its use cases and user stories. | 1
+ | A4 | Value chain atlas | The 8 value-chain clusters and where the catalogue sits, by subvertical. | 1
+
+ | Code | Page | Objective | Phase
+
+ | B · Catalogue tools
+ | B1 | Platform catalog | Browse the L3 platforms, grouped by vendor. | 1
+ | B2 | Use case explorer | Browse use cases by archetype, drill to the owning subcap. | 1
+ | B3 | Maturity heatmap | Spot missing or thin maturity descriptors. | 1
+ | B4 | Knowledge graph | Reveal structural relationships. admin only | 3
+
+ | Code | Page | Objective | Phase
+
+ | C · Project validation
+ | C1 | SOW library | AI-match SOWs to subcaps with a catalogue-tuned model. | 2
+ | C2 | Story library | Browse and filter the canonical 14,406 real-story Jira corpus; synthetic stories are excluded by default. | 1
+ | C3 | Project-subcap trace | Everything that has touched a subcap, in time order. | 2
+
+ | Code | Page | Objective | Phase
+
+ | D · Public intelligence
+ | D1 | News watch | Turn public news into subcap-scored signal. | 2
+ | D2 | Trends monitor | Watch trends staged for the monthly cycle. | 2
+ | D3 | AI suggestions | Apply or reject AI-proposed edits with full evidence. | 2
+ | D4 | Benchmarks studio | Ground claims in defensible external benchmarks. | 2
+
+ | Code | Page | Objective | Phase
+
+ | E · Strategic synthesis
+ | E1 | Quarterly strategic digest | Consolidate a quarter of signal into priorities per subvertical. | 2
+
+ | Code | Page | Objective | Phase
+
+ | F · Lifecycle & competition
+ | F1 | Lifecycle manager | Trace subcaps through delivery; map the most-delivered to offerings and let AI bundle uncovered ones into a proposed offering. | 2
+ | F2 | Vendor intelligence | Vendors and the developments that move the catalogue. | 2
+ | F3 | Client journey atlas | Entity-resolved client view and DMA packet. | 3
+
+ | Code | Page | Objective | Phase
+
+ | G · Versioning & QA
+ | G1 | Version timeline | Inspectable, reversible catalogue snapshots. | 1
+ | G2 | Diff viewer | What changed between two versions. | 1
+ | G3 | Change flags inbox | Anomalies that need a pillar lead. | 2
+ | G4 | Validation gates log | Transparency on how the gates run. | 2
+ | G5 | QA & audit dashboard | Accuracy, budget and auditability. | 2
+
+ | Code | Page | Objective | Phase
+
+ | H · Reasoning & RAG
+ | H1 | Reasoning chain viewer | Audit how an AI output was reached, in plain language. | 2
+ | H2 | AI chat | Catalogue-grounded answers with citations. | 2
+
+ | Code | Page | Objective | Phase
+
+ | I · Sandbox
+ | I1 | What-if simulator | Test a catalogue change safely before proposing it. | 3
+
+ | Code | Page | Objective | Phase
+
+ | Access & administration
+ | AUTH | Login | Two-panel sign-in; Google, restricted to @zennify.com, fails closed. | 1
+ | SCHEMA | Schema mapping | Admin control over how a version maps to the canonical model; confirm fields, add custom fields and relations, provision the version’s database. admin only | 1
+ | SET | Settings | Preferences for all; catalogue upload and source config for admins. | 1
+
+ Section 9
+
+## Non-functional requirements
+
+### 9.1 Authentication and access
+ Sign-in is Firebase Auth with Google, restricted to the @zennify.com domain; the domain check fails closed, so non-staff never see product surface. Admin actions are gated by a single is_admin flag. There is no finer-grained RBAC in v1.
+
+### 9.2 Persistence
+ The catalogue and story corpus persist durably after the first authorized ingest, for every user, with no re-upload. New versions are new snapshots.
+
+### 9.3 Cost discipline
+ Cost is matched to leverage through three cadences: hourly evidence ingest, a monthly consultant cycle, and a quarterly digest. A visible cost meter and a monthly envelope keep spend in view; breaking changes carry extra, intentional friction.
+
+### 9.4 Dark mode and accessibility
+ Dark mode ships in v1 and every surface is verified in both themes. WCAG 2.1 AA is the floor.
+
+### 9.5 Observability and reliability
+ Each ingest run records timestamps, files attempted and loaded, schema deviations and per-sheet row counts. Source health (last poll, errors, items ingested) is surfaced. When a primary model is unavailable the system routes to a fallback and shows a degraded-mode flag.
+
+### 9.6 Security and compliance
+ Data-loss-prevention runs on every SOW that reaches a model. Audit logs are retained; audit-grade exports are signed and timestamped. Right-to-be-forgotten purges are admin-gated.
+
+ Section 10
+
+## Decision log
+ This log is authoritative where it conflicts with earlier documents.
+ | # | Decision | Resolution
+
+ | D1 | Primary user | Internal consultants and pillar leads (~10 to 30).
+ | D2 | Pillar scope | All four pillars; v1 ingests every workbook.
+ | D3 | Subverticals | 9 canonical: BK (RB alias), CL, CIB, FC, CU, WM (AM alias), RIA, IC, IB. IB is insurance brokerages.
+ | D4 | Lifecycle vocabulary | Market-signal states (emerging, rising, stable, declining, fading, dead) are retained on subcaps; the Lifecycle Manager page keeps its name but its job is delivery-to-offering (see D14).
+ | D5 | Audit exports | All signed, timestamped, immutable in v1.
+ | D6 | Public sources only | No licensed-source ingestion in v1.
+ | D7 | Catalogue versions | Ingest v5 and v7 and reconcile to one canonical internal model.
+ | D8 | Version lineage | Bridge subcap identity across versions using v7’s _R1_Source_Reference crosswalk.
+ | D9 | Admin schema control | On upload, an admin confirms or overrides the auto-mapping, adds custom fields and relations, and cascades compatible relations across versions; applying provisions that version’s persistent relational database.
+ | D10 | Persistence model | One persistent relational database per catalogue version, provisioned by the mapping studio; first ingest persists for all users, no re-upload.
+ | D11 | Canonical story source | The Jira Full Story Catalog (real client delivery, 14,406 stories) is the authoritative story corpus and supersedes the story tabs in every catalogue workbook.
+ | D12 | Synthetic stories | Synthetic or use-case-derived stories are excluded from analysis unless external news or a detected trend flags the subcap as emergent; then they are surfaced as provisional and labelled.
+ | D13 | Story carry-forward | The canonical mappings were made against v5; a carry-forward correlation moves them to the active version, confirms similarity, maintains confirmed links and routes borderline ones to review. Re-runnable for any future version.
+ | D14 | Live Jira | Phase 3 extends the canonical catalog by ingesting new completed Jira stories continuously, matched to subcaps with confidence.
+ | D15 | Phased delivery | Three phases: foundation; evidence and reasoning; live Jira and automation.
+ | D16 | Cross-pillar | Cross-pillar capability dropped ; cross-pillar story tab is not ingested and there is no cross-pillar surface.
+ | D17 | Lifecycle Manager | Name retained; the page traces delivery and surfaces offering opportunities (AI bundles uncovered high-delivery subcaps into a proposed offering).
+ | D18 | Knowledge graph | AI-augmented; propose, gate, present; never auto-merge. Admin-only .
+ | D19 | SOW matching | SOW to subcap matching is AI , using a model tuned on the catalogue.
+ | D20 | Reasoning style | Reasoning is shown in plain language , no opaque codes.
+ | D21 | Page set | Subvertical Compare removed; the product is 27 pages plus login and Settings.
+
+ Section 11
+
+## Acceptance and phase exit
+ Acceptance is organized by phase exit. Each phase must pass its criteria before the next begins.
+
+### Phase 1 foundation
+ | Phase 1 exit criteria | Check
+
+ | Both versions ingest | v5 and v7 pillar workbooks ingest; schema adapter selected automatically.
+ | Schema mapping works | On upload the studio proposes mappings with confidence; an admin can confirm, override, add a custom field, and add a relation.
+ | Database provisioned | Applying a mapping provisions a persistent relational database for that version; data is queryable and survives a restart.
+ | Reconciliation holds | 851 subcaps resolve to one identity each; v5 lineage attached via _R1 .
+ | Canonical stories load | The 14,406 real Jira stories ingest as the analysis set; synthetic stories are excluded by default.
+ | Carry-forward holds | v5 story-subcap mappings carry forward to v7 with similarity confirmed; borderline matches are flagged for review, none dropped.
+ | Unmatched is visible | Dropped or unmatched rows are listed, not lost.
+ | Persistence | A second user sees the catalogue without re-uploading.
+
+### Phase 2 evidence & reasoning
+ | Phase 2 exit criteria | Check
+
+ | Evidence maps to subcaps | SOWs AI-match to subcaps with a reasoning trail; news and vendor items carry impact magnitude.
+ | Gated suggestions | Suggestions pass the 8 gates and apply under version control; reject requires a reason.
+ | Reasoning is readable | Any AI output opens a plain-language reasoning chain with no codes.
+ | Synthesis runs | Monthly cycle and quarterly digest produce output; offering opportunities proposes a bundled offering.
+
+### Phase 3 live & automation
+ | Phase 3 exit criteria | Check
+
+ | Live Jira | New completed Jira stories appear and match automatically.
+ | Low-confidence routing | Below-threshold matches route to change flags, not auto-merge.
+ | Admin graph | Knowledge graph is reachable only by admins; edges are gated before commit.
+ | DMA packet | Client journey exports a validated, signed DMA packet.
+
+ Out of scope for v1
+ Client-facing access; role-based access beyond the single admin flag; licensed-source ingestion; a cross-pillar capability surface.
+
+ © 2026 Zennify · Confidential · Capability Intelligence Agent PRD

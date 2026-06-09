@@ -1,0 +1,22 @@
+# Local hermetic-dev dependency: Postgres 16 with pgvector.
+# Usage: docker compose -f docker-compose.dev.yml up
+# Then (backend): DATABASE_URL=postgresql+asyncpg://cia:cia@localhost:5432/cia uv run alembic upgrade head
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: cia
+      POSTGRES_PASSWORD: cia
+      POSTGRES_DB: cia
+    ports:
+      - "5432:5432"
+    volumes:
+      - cia_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cia"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cia_pgdata:

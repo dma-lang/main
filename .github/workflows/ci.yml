@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (lint · type · test · migrate)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: cia
+          POSTGRES_PASSWORD: cia
+          POSTGRES_DB: cia
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cia"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      # Ephemeral Postgres 16 + pgvector for the migration test (see CLAUDE.md safeguard 5).
+      DATABASE_URL: postgresql+asyncpg://cia:cia@localhost:5432/cia
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv (Python 3.12)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --group dev
+      - run: uv run ruff check .
+      - run: uv run black --check .
+      - run: uv run mypy .
+      - run: uv run pytest
+      - name: Alembic migrate + downgrade against ephemeral Postgres
+        run: |
+          if [ -f alembic.ini ]; then
+            uv run alembic upgrade head
+            uv run alembic downgrade base
+          else
+            echo "No alembic config yet (Stage 0 scaffold) — migration test starts in Stage 1 (F3)."
+          fi
+
+  frontend:
+    name: frontend (lint · type · test · build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build

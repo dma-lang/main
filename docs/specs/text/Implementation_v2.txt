@@ -1,0 +1,147 @@
+Implementation steps
+
+# Capability Intelligence Agent
+ The phased build plan: three phases plus a cross-cutting track, each task with an owner, a done criterion, an effort estimate and a dependency chain, gated by phase exit criteria tied to the PRD.
+ Document
+ Implementation Steps
+
+ Audience
+ Delivery engineering
+
+ Effort
+ ~105 engineer-days, 10-12 weeks
+
+ Status
+ Confidential draft
+
+ Capability Intelligence Agent · Implementation 1 Overview 2 Build sequence 3 Phase 1 4 Phase 2 5 Phase 3 6 Cross-cutting 7 Release gates 8 Sequencing ☾ Dark
+
+ Section 1
+
+## Overview and how to read
+ This is the delivery team’s build plan. It turns the PRD, TRD, App Flow and Backend Schema into sequenced tasks across three phases, each with an owner role, a measurable done criterion, an effort estimate in engineer-days, and a dependency chain so nothing starts before its inputs are merged.
+
+### 1.1 How to read it
+ Role codes: BE backend, FE frontend, ML machine learning, OPS platform. Effort is in engineer-days (1d = one focused day). Dependencies are task IDs; never start a task before its dependencies are merged. Tasks reference the requirement they satisfy ( FR-n ) and the document section that specifies them.
+
+### 1.2 Team assumption
+ The plan assumes a small team working parallel tracks (one backend-primary, one frontend-primary, ML tasks shared or deferred where flagged). A single engineer can run the same sequence; each phase simply takes longer. The plan is greenfield: it builds the foundation first rather than modifying an existing codebase.
+ The critical path runs through Phase 1
+ Until a catalogue version is provisioned (P1-06) and the canonical stories are carried forward (P1-09), no downstream surface has data. Phase 1 is the gating work; Phases 2 and 3 layer onto it and are each shippable on their own.
+
+ Section 2
+
+## Build sequence at a glance
+ The work is three phases plus a cross-cutting track, roughly 105 engineer-days in total, which is about 10 to 12 calendar weeks for a two-to-three person team running backend, frontend and ML in parallel.
+ | Phase | Scope | Eng-days | Requirements
+
+ | Phase 1 foundation | Service, auth, schema-mapping engine, per-version provisioning, sheet relationships and cascade, canonical Jira ingest and carry-forward, relational read surfaces, versioning, dark mode. | ~41 | FR-1 to FR-6, FR-22
+ | Phase 2 evidence & reasoning | Evidence ingestion, ERS and reasoning chains, the eight gates, suggestion lifecycle, vendor and benchmarks, lifecycle manager, monthly cycle and digest, grounded chat, signed exports. | ~40 | FR-7 to FR-17
+ | Phase 3 live & automation | Continuous Jira, client journey and DMA packet, admin knowledge graph, what-if sandbox. | ~14 | FR-18 to FR-21
+ | Cross-cutting | Eval harness, SLO alerts, cost attribution and degraded mode, audit and security. Runs across all phases. | ~10 | NFRs
+
+### 2.1 Parallel tracks and merge points
+ Backend owns ingestion, provisioning, the gates and the API; frontend owns the shell, state and surfaces; ML owns embeddings, matching and the eval harness. The tracks merge at three recurring points: schema model changes (frontend consumes generated API types), new endpoints (frontend consumes them), and the design tokens (owned by frontend, consumed everywhere).
+
+ Section 3
+
+## Phase 1 tasks: foundation
+ Phase 1 builds the foundation: a secure service, the schema-mapping engine and per-version relational provisioning, the sheet relationships and the cascade they drive, the canonical story corpus and carry-forward, and the read surfaces over it.
+ | ID | Role | Task and done criterion | d | Depends on
+
+ | P1-01 | OPS | Stand up the GCP project, the single Cloud Run service (FastAPI + static SPA), Secret Manager, and a Cloud SQL for PostgreSQL 16 instance with the vector and pgcrypto extensions. Done: the container deploys and the database accepts CREATE EXTENSION. | 2 | -
+ | P1-02 | BE | Firebase Auth middleware with Google sign-in restricted to @zennify.com (fails closed), the single is_admin flag, and the users table. Done: a non-domain account is blocked and admin routes are gated. (TRD 11) | 2 | P1-01
+ | P1-03 | BE | Control-plane migrations: users, catalogue_version, catalogue_sheet, ingest_run, source_field_mapping, relation_def, audit_log. Done: migrations apply and the app role cannot UPDATE or DELETE the audit log. (Schema 6) | 2 | P1-01
+ | P1-04 | BE | Workbook ingestion with layout detection adapters for v5 and v7, enumerating every sheet into catalogue_sheet with its role. Done: all four pillar workbooks parse and their sheets are recorded. (Schema 4, TRD 5) | 3 | P1-03
+ | P1-05 | BE+FE | Schema-mapping studio: auto-map fields with a confidence; admin confirm, override, custom fields; declare relations between sheets with cardinality and cascade flags; cascade compatible relations. Done: v5 and v7 are mapped and relation_def is populated. (FR-2, Schema 4) | 5 | P1-04
+ | P1-06 | BE | Provisioning: apply a mapping to create the cat_<version> schema, tables, and foreign keys / link tables from relation_def, then bulk-load rows, transactionally and idempotently. Done: cat_v5 and cat_v7 provision and a re-run rebuilds cleanly. (TRD 5, Schema 12) | 3 | P1-05
+ | P1-07 | BE | Cascade engine: compute a subcap toggle’s dependency set by walking the cascade relations in relation_def; write cascade_report; expose the completeness view. Done: the toggle preview matches the workbook cascade semantics. (Schema 4) | 2 | P1-06
+ | P1-08 | BE | Canonical Jira story ingest (the 14,406-row catalog), superseding the workbook story tabs, with the is_synthetic flag set. Done: the corpus loads and synthetic rows are excluded from analysis by default. (FR-3) | 2 | P1-03
+ | P1-09 | ML+BE | Carry-forward correlation: crosswalk bridge plus embedding confirmation, thresholds 0.86 / 0.70, results to story_subcap_carry, idempotent on (story, version). Done: v5 mappings carry to v7 with similarity, borderline queued, re-run upserts. (FR-4) | 3 | P1-06, P1-08
+ | P1-10 | ML | Catalogue-tuned embeddings baseline; populate subcap vectors and full-text; build the HNSW and GIN indexes. Done: a hybrid query returns ranked subcaps. (TRD 7) | 2 | P1-06
+ | P1-11 | FE | App shell and routing; the Zustand store with the six URL-serialized state objects; the header surface; dark-mode tokens. Done: state survives navigation and deep links, and the theme toggles. (App Flow 3, FR-22) | 4 | P1-02
+ | P1-12 | FE | Read surfaces: Mission control, Capability explorer, Subcap deep dive, Value chain atlas, Platform catalog, Use case explorer, Story library, Maturity heatmap. Done: all render from provisioned data and honour the active filters. (FR-5) | 6 | P1-06, P1-11
+ | P1-13 | BE+FE | Versioning, the diff viewer, and the change-flags inbox scaffold. Done: two versions diff and flags are listable. (FR-6) | 3 | P1-06
+ | P1-14 | OPS | CI pipeline, hermetic dev mode for the model stack, and the dev / staging / prod environments. Done: one image promotes across environments and dev runs with no provider credentials. (TRD 13) | 2 | P1-01
+
+ Section 4
+
+## Phase 2 tasks: evidence and reasoning
+ Phase 2 layers delivery and public evidence onto the foundation with an explainable, gated reasoning trail.
+ | ID | Role | Task and done criterion | d | Depends on
+
+ | P2-01 | BE | Evidence ingestion framework: SOW chunking and redaction, news, vendor and benchmark feeds, regulatory excerpts, into evidence_item with a source tier and an ERS. Done: items ingest with tier and score. (FR-7, FR-8) | 4 | P1-06
+ | P2-02 | ML | SOW-to-subcap and news-impact matching on the catalogue-tuned model, each emitting a reasoning chain. Done: matches carry a claim label and a reasoning link. (FR-7) | 3 | P1-10, P2-01
+ | P2-03 | BE | Persist reasoning chains, steps and citations; the reasoning-viewer API. Done: every AI output writes a retrievable chain. (FR-16) | 2 | P2-01
+ | P2-04 | BE | The eight deterministic validation gates G1 to G8. Done: a proposal runs the gates and a failure routes to the change-flags inbox with the failing gate named. (TRD 8) | 3 | P2-03
+ | P2-05 | BE+FE | Suggestion lifecycle: propose, gate, apply under version control, reject with a reason, expire, stage. Done: an apply only commits after the gates pass. (FR-11) | 4 | P2-04
+ | P2-06 | BE | Vendor intelligence: developments classified into eight event types, with a vendor-by-subcap heatmap derived from evidence frequency and recency. Done: the heatmap is evidence-driven, not a static join. (FR-9) | 3 | P2-01
+ | P2-07 | ML+BE | Benchmarks studio with bootstrap confidence bands and an adversary verdict. Done: a benchmark shows its band and verdict. (FR-12) | 3 | P2-03
+ | P2-08 | BE | Lifecycle manager: rank the most-delivered subcaps, map to offerings, find high-delivery gaps, and bundle them into an AI-named offering opportunity. Done: opportunities generate with an evidence basis and reasoning. (FR-13) | 3 | P1-09, P2-03
+ | P2-09 | BE | The monthly consultant cycle job and the quarterly digest job (strong-model synthesis over pre-curated trends). Done: the cycle stages suggestions and the digest publishes. (FR-14) | 3 | P2-05
+ | P2-10 | FE | Phase-2 surfaces: SOW library, News watch, Trends monitor, AI suggestions, Benchmarks studio, Quarterly digest, Lifecycle manager, Change flags inbox, Validation gates log, QA and audit, Reasoning chain viewer. Done: each renders with its trust metadata. | 7 | P2-03, P2-05
+ | P2-11 | BE+FE | Catalogue-grounded chat: hybrid retrieval, inline citations, a reasoning backlink per turn. Done: the fixed set of grounded queries passes. (FR-15) | 4 | P1-10
+ | P2-12 | BE | HMAC-signed exports for the digest and DMA packet, recorded in export_manifest. Done: an export verifies against the signature. | 1 | P2-09
+
+ Section 5
+
+## Phase 3 tasks: live and automation
+ Phase 3 makes the corpus self-updating and completes the synthesis and admin surfaces.
+ | ID | Role | Task and done criterion | d | Depends on
+
+ | P3-01 | BE | Continuous Jira ingestion (schedule or webhook) that extends the canonical corpus, auto-matching new stories to subcaps and routing low-confidence ones to review. Done: new stories appear and match. (FR-18) | 3 | P1-08, P2-02
+ | P3-02 | BE+FE | Client journey atlas and the validated DMA handoff packet (signed). Done: the packet exports and validates. (FR-19) | 4 | P2-12
+ | P3-03 | BE+FE | Knowledge graph (admin): Layer A from the provisioned relations, a Layer B proposer (semantic-similarity and shared-feature) routed through the gates into pending_edge and the change-flags inbox. Done: no proposed edge is ever written live. (FR-20) | 4 | P2-04
+ | P3-04 | BE+FE | What-if simulator: a read-only sandbox with a cascade preview that can be promoted to a suggestion. Done: nothing is committed in place. (FR-21) | 3 | P1-07, P2-05
+
+ Section 6
+
+## Cross-cutting workstreams
+ Four workstreams run across all three phases rather than in one of them. They are what keep the product fast, affordable, accurate and auditable.
+ | ID | Role | Workstream and done criterion | Phase
+
+ | X-01 | ML+OPS | Eval harness and golden datasets; track retrieval MRR and trigger a contrastive embedding fine-tune when it drops below target. Done: the harness runs offline and gates releases. | -
+ | X-02 | OPS | SLO alert rules: page p95, chat p95, provisioning time, carry-forward time, availability. Done: alerts fire against the targets in the TRD. | -
+ | X-03 | BE | Cost attribution per model call, the 80% alert and 90% throttle, and degraded-mode auto-routing with a banner. Done: cost-by-feature is queryable and a provider outage degrades rather than breaks. | -
+ | X-04 | BE+OPS | Audit logging on every mutation and a security pass (IAM-restricted buckets, secret hygiene, fail-closed auth). Done: the audit trail is continuous and exports are signed. | -
+
+ Section 7
+
+## Release gates
+ Each phase has an explicit exit gate tied to the PRD acceptance criteria. A phase is not done until every item passes.
+
+### Phase 1 foundation
+
+- Both v5 and v7 provision a persistent relational database that is durable for all users with no re-upload.
+- 851 subcaps and the 14,406 real Jira stories are queryable; synthetic stories are excluded by default.
+- The sheet relationships are captured and drive both the foreign keys and the subcap toggle cascade preview.
+- v5 story mappings carry forward to v7 with similarity confirmed; borderline matches are queued, none dropped.
+- Dark mode and the six-object filter state work across navigation and deep links.
+
+### Phase 2 evidence & reasoning
+
+- Evidence maps to subcaps with an ERS and an explainable reasoning chain.
+- Every AI proposal runs the eight gates; failures route to change flags; an apply only commits after passing.
+- The monthly cycle stages suggestions and the quarterly digest publishes with adversarial verdicts.
+- Catalogue-grounded chat passes the fixed query set, with citations and a reasoning backlink per turn.
+
+### Phase 3 live & automation
+
+- New Jira stories ingest continuously and match, with low-confidence routed to review.
+- The DMA packet exports and validates and is signed.
+- Knowledge-graph Layer B proposals are gated and human-approved; nothing auto-merges.
+- The what-if sandbox previews a cascade without committing anything.
+
+ Section 8
+
+## Sequencing notes
+ Sequencing notes that keep the critical path clear; none of these blocks the Phase 1 foundation.
+ | Note | Guidance
+
+ | Provisioning is the gate | Sequence P1-04 to P1-06 first and protect it; every later task depends on a provisioned version.
+ | Relationships before surfaces | Land the schema-mapping relations (P1-05) and the cascade engine (P1-07) before the read surfaces, so the surfaces and the toggle preview are correct from the start.
+ | Carry-forward calibration | Run P1-09 on the real v5-to-v7 data early; tune the 0.86 / 0.70 thresholds from the observed confirmed/review split before relying on them.
+ | ML can be deferred, not skipped | If no ML engineer is available, ship Phase 1 with the baseline embedding and defer the fine-tune (X-01); matching quality improves later without reshaping the data.
+ | Models may be unavailable | Build P1-14 hermetic mode and X-03 degraded routing early so progress never blocks on provider credentials.
+
+ © 2026 Zennify · Confidential · Capability Intelligence Agent Implementation Steps

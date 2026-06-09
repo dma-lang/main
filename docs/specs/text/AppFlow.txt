@@ -1,0 +1,484 @@
+App flow & user journeys
+
+# Capability Intelligence Agent
+ How users move through the workbench: the global state that follows them, eleven named journeys, four system-initiated flows, the cross-cutting behaviours, and a per-page state contract.
+ Document
+ App Flow & Journey Atlas
+
+ Audience
+ Engineering, design & pillar leads
+
+ Surfaces
+ 27 pages + login, schema mapping, settings
+
+ Status
+ Confidential draft
+
+ Capability Intelligence Agent · App Flow 1 Overview 2 Principles 3 State model 4 App map 5 Journeys 6 System flows 7 Cross-cutting 8 Page contracts ☾ Dark
+
+ Section 1
+
+## Overview and scope
+ This document defines the navigation logic, the user journeys, the system-initiated flows, the cross-cutting state machines, and the per-page state contracts of the workbench. It is the single reference for "what should happen when..." for any interaction.
+ It is sequenced for its readers: principles first, then the global state model engineering relies on, then the visual map, then the named journeys, then the system flows and cross-cutting behaviour, and finally a page-by-page state-contract appendix. Visual mockups live in the UI/UX brief; navigation and state live here.
+
+### 1.1 The shape of the product
+ The audience is a small, expert group doing high-stakes catalogue governance, so the flow optimises for trust, recoverability and traceability over novice onboarding. Every AI output links to its reasoning chain; every state-mutating action is reversible; every transition preserves the user’s filter context; every approval gate is explicit.
+
+ Section 2
+
+## Design principles
+ Seven principles shape every flow in the product.
+ | Principle | UX implication
+
+ | Trust is the primary outcome | The reasoning viewer is reachable from every surface that shows AI output; the show-reasoning affordance is never buried.
+ | Recognition beats recall | Filters, lenses and the active subvertical are always visible and carried between pages; users recognise context, they do not re-enter it.
+ | Progressive disclosure | Surfaces lead with the headline (health, concentration, attention) and reveal depth on demand.
+ | Reversibility | State-mutating actions show a what-will-change preview and are reversible; the cascade preview is the canonical pattern.
+ | The catalogue is the gravity well | Most journeys end at a catalogue mutation or a synthesised artifact; the subcap deep dive is the common destination.
+ | Failure is a designed state | Empty, degraded, low-confidence and unmapped states are designed surfaces with a next action, not error pages.
+ | Mechanical governance | Commits pass deterministic gates; approvals are explicit; the audit trail is continuous from entry to mutation.
+
+ Section 3
+
+## Global state model
+ Six pieces of state propagate across pages. They live client-side in a Zustand store and are serialized into the URL for deep links. On every page load the URL is parsed first; missing parameters fall back to the user’s saved preferences.
+ | State object | Values | Effect
+
+ | Active subvertical | One of the 9 (or all) | Filters every catalogue and evidence view to that subvertical.
+ | Active pillar(s) | P1 to P4 (or all) | Scopes lenses, heatmaps and the explorer.
+ | Claim-label filter | Any of FACT / INFERENCE / HYPOTHESIS / CEILING_ESTIMATE | Controls which AI assertions are shown.
+ | Source-tier floor | T1 to T5 | Hides evidence below the chosen reliability tier.
+ | Persona lens | A catalogue persona (or none) | Re-frames a subcap’s view around a role.
+ | Scope context | Current subcap id or search term | Carried across drilldowns so a trail never loses its subject.
+
+### 3.1 Propagation rule
+ On every navigation the destination page reads the current state and applies it as its initial filter. The user does not re-filter on arrival. A deep link reproduces the exact filtered view.
+
+### 3.2 The header surface (always visible)
+ The header carries the Zennify mark and primary nav, the persona switcher, the theme toggle (light or dark), a live cost meter, a notification bell for open flags and suggestions, and the global filter controls for the six state objects. Settings and the admin schema-mapping surface are reached from here.
+ Theme and cost are header state, not filters
+ Theme is a saved preference and the cost meter is read-only telemetry; neither changes what data a page shows. The six objects above are the only state that filters content, which is why only they are URL-encoded.
+
+ Section 4
+
+## The app map
+ The product is 27 pages across nine functional groups, plus login, the admin schema-mapping surface and Settings. Most journeys start at Mission Control and end either at a catalogue mutation (suggestion applied, status changed, version reverted) or at a published artifact (signed digest or DMA packet). The audit trail is continuous from entry to mutation.
+ | Group | Surfaces
+
+ | A · Explore | Mission control, Capability explorer, Subcap deep dive, Value chain atlas
+ | B · Catalogue tools | Platform catalog, Use case explorer, Maturity heatmap, Knowledge graph (admin)
+ | C · Project validation | SOW library, Story library, Project-subcap trace
+ | D · Public intelligence | News watch, Trends monitor, AI suggestions, Benchmarks studio
+ | E · Strategic synthesis | Quarterly strategic digest
+ | F · Lifecycle & competition | Lifecycle manager, Vendor intelligence, Client journey atlas
+ | G · Versioning & QA | Version timeline, Diff viewer, Change flags inbox, Validation gates log, QA & audit
+ | H · Reasoning & RAG | Reasoning chain viewer, AI chat
+ | I · Sandbox | What-if simulator
+ | Access & admin | Login, Schema mapping (admin), Settings
+
+ The full surface inventory, with objectives and contents, is in the UI/UX brief. This document is concerned with how a user moves between them and what state each consumes.
+
+ Section 5
+
+## Core user journeys
+ Eleven named journeys describe the recurring tasks. Each is shown as a flow (start in teal, decision in blue, caution in amber, success in green, data in grey) with a short rationale.
+
+### J1 · Onboard a catalogue version
+ upload
+ Upload catalogue
+ Admin drops pillar workbooks (any version)
+
+ →
+ map
+ Schema mapping
+ Auto-map, confirm, custom fields
+
+ →
+ relations
+ Relations & cascade
+ Define FKs; cascade compatible ones
+
+ →
+ apply
+ Apply & provision
+ Per-version relational DB stood up
+
+ →
+ carry
+ Carry-forward
+ Canonical Jira mappings moved + confirmed
+
+ →
+ live
+ Catalogue live
+ Durable for every user
+
+ The marquee resilience journey. The empty state is rare: once any admin provisions a version it is live for everyone. The mapping step is where a new workbook structure is absorbed without a code change, and carry-forward attaches the canonical delivery evidence to the new version automatically.
+
+### J2 · Daily triage
+ mc
+ Mission control
+ Heatmap + attention counts
+
+ →
+ pick
+ Open item
+ Flagged subcap or suggestion
+
+ →
+ act
+ Act
+ Triage to resolution
+
+ Answers "is the system healthy" and "what needs me right now" in seconds; the story-concentration heatmap leads.
+
+### J3 · Suggestion review
+ sugg
+ AI suggestion
+ Claim label + evidence + reasoning link
+
+ →
+ review
+ Review reasoning
+ Open the chain; inspect sources
+
+ →
+ gates
+ Run gates
+ G1 to G8 must pass
+
+ →
+ apply
+ Apply or reject
+ Versioned commit, or reject with reason
+
+ Every apply runs the eight gates and is versioned and reversible; a reject always records a reason.
+
+### J4 · Subcap status change with cascade
+ sub
+ Subcap
+ Open from explorer or deep dive
+
+ →
+ change
+ Change status
+ Pick new lifecycle state
+
+ →
+ preview
+ Cascade preview
+ Exactly what dependent rows change
+
+ →
+ commit
+ Confirm
+ Transactional write + audit entry
+
+ Destructive actions show a what-will-change preview before commit; relational foreign keys drive the cascade, written in one transaction.
+
+### J5 · AI-proposed edge review (admin)
+ prop
+ Nightly proposer
+ Semantic-similarity / shared-feature edge
+
+ →
+ gates
+ Gates
+ G1 to G8 on the pending edge
+
+ →
+ flag
+ Change flags
+ Pillar lead reviews
+
+ →
+ commit
+ Approve / reject / defer
+ Commit or retain; never auto-merge
+
+ No proposed edge is ever written live; semantic-similarity and shared-feature edges only, gated and human-approved.
+
+### J6 · Catalogue-grounded chat
+ ask
+ Ask
+ Catalogue-grounded question
+
+ →
+ ret
+ Retrieve
+ Lexical + dense + structured
+
+ →
+ ans
+ Cited answer
+ Reasoning backlink per turn
+
+ →
+ stage
+ Optional stage
+ Capture as suggestion
+
+ Grounded and cited, with a reasoning backlink on every turn; an answer can be staged as a suggestion.
+
+### J7 · News investigation
+ sub
+ Subcap
+ From deep dive
+
+ →
+ news
+ News watch
+ Impact-scored items
+
+ →
+ pat
+ Spot pattern
+ Cluster of related rules
+
+ →
+ stage
+ Stage suggestion
+ Before the insight is lost
+
+ Captures the "why are three rules touching this subcap this month" insight as a staged suggestion.
+
+### J8 · Vendor scan
+ vend
+ Vendor
+ Profile + developments
+
+ →
+ feed
+ Events feed
+ 8 event types, affected subcaps
+
+ →
+ heat
+ Impact heatmap
+ Vendor x subcap
+
+ →
+ stage
+ Stage suggestion
+ Capability expansion
+
+ The capability-expansion workflow: vendor movement points to where a counter-offering is needed.
+
+### J9 · Quarterly digest reading
+ dig
+ Digest
+ Quarterly synthesis
+
+ →
+ exp
+ Expand SV
+ Priorities per subvertical
+
+ →
+ verd
+ Adversarial verdict
+ Per priority
+
+ →
+ exp2
+ Signed export
+ HMAC PPTX, archived
+
+ Subvertical sections are collapsible and default-collapsed so the digest is scannable; exports are signed and archived.
+
+### J10 · What-if simulation
+ pick
+ Pick change
+ In the sandbox
+
+ →
+ sim
+ Simulate
+ Cascade preview, read-only
+
+ →
+ insp
+ Inspect impact
+ No commit
+
+ →
+ prom
+ Discard or promote
+ Promote to a suggestion
+
+ A read-only sandbox: a change can be inspected and promoted to a suggestion, but nothing is committed in place.
+
+### J11 · Version revert (admin)
+ ver
+ Versions
+ Pick a snapshot
+
+ →
+ diff
+ Diff viewer
+ Forced review before revert
+
+ →
+ conf
+ Confirm
+ States what is NOT reverted
+
+ →
+ rest
+ Snapshot restored
+ Evidence timestamps preserved
+
+ No blind revert: the flow forces a diff review and the confirmation states what is not reverted (evidence timestamps).
+
+ Section 6
+
+## System-initiated flows
+ Four flows run without a user trigger. They are scheduled by Cloud Scheduler, executed as Cloud Run Jobs, and emit notifications when they complete or need attention.
+
+### SYS-Ingest · continuous & hourly
+ sched
+ Trigger
+ Schedule or webhook
+
+ →
+ pull
+ Pull
+ New Jira stories, news, vendor events
+
+ →
+ classify
+ Classify & match
+ Flash classify, embed, match to subcaps
+
+ →
+ route
+ Route
+ High-confidence linked; low-confidence to review
+
+### SYS-CarryForward · on a new version
+ newv
+ New version provisioned
+ Mapping applied
+
+ →
+ cross
+ Crosswalk
+ v5 ids to target ids
+
+ →
+ confirm
+ Similarity confirm
+ 0.86 auto / 0.70 review
+
+ →
+ maintain
+ Maintain links
+ Confirmed written; borderline queued
+
+ Triggered when a version is provisioned; it is the system half of journey J1 and keeps delivery evidence attached as the catalogue evolves.
+
+### SYS-Monthly · consultant cycle
+ open
+ Cycle opens
+ Monthly
+
+ →
+ gather
+ Gather signal
+ News, vendor, SOW, benchmarks per subcap
+
+ →
+ gates
+ Gates
+ Proposals run G1 to G8
+
+ →
+ stage
+ Stage
+ Suggestions queued for pillar-lead review
+
+### SYS-Digest · quarterly synthesis
+ q
+ Quarter closes
+ Quarterly
+
+ →
+ sum
+ Summarise
+ Opus over pre-curated trend summaries
+
+ →
+ adv
+ Adversarial review
+ Verdict per priority
+
+ →
+ pub
+ Publish
+ Digest ready; export is signed
+
+ Notifications, not surprises
+ Each system flow reports into the notification bell and the QA dashboard. A flow that needs a human (low-confidence matches, borderline carry-forward, contradicted evidence) routes to the Change Flags inbox rather than acting on its own.
+
+ Section 7
+
+## Cross-cutting flows
+ Behaviours that apply across every page rather than to one journey.
+ | Flow | Behaviour
+
+ | Reasoning access | Any surface showing AI output exposes a show-reasoning affordance that opens the reasoning chain viewer in context.
+ | Filter preservation | The six state objects travel with every navigation and into deep links; arrival never resets context.
+ | Approval gates | Any commit (suggestion apply, edge commit, status change) passes the deterministic gates; failures route to Change Flags.
+ | Degraded mode | If a model provider is unavailable or over budget, surfaces show a degraded-mode banner and auto-route to the fallback model.
+ | Empty state | Before any version is provisioned, the app routes an admin to upload and schema mapping; non-admins see a waiting state.
+ | Synthetic visibility | Synthetic stories stay hidden until a trend flags their subcap as emergent, then appear labelled provisional.
+
+ Section 8
+
+## Page state-contract appendix
+ Each surface declares the state it consumes on arrival, its primary action, and where it exits to. This is the contract the global state model (section 3) is implemented against.
+ | Surface | Consumes | Primary action | Exits to
+
+ | A · Explore
+ | Mission control | subvertical, pillar | Open flagged item; jump to a top subcap | Deep dive, AI suggestions, Change flags
+ | Capability explorer | pillar, scope | Drill pillar to subcap | Subcap deep dive
+ | Subcap deep dive | scope (subcap), persona | Run AI audit; open evidence; change status | Reasoning viewer, Story library, SOW library
+ | Value chain atlas | subvertical, pillar | Expand a cluster | Capability explorer
+ | B · Catalogue tools
+ | Platform catalog | pillar | Open a platform | Subcap deep dive
+ | Use case explorer | subvertical, pillar | Drill to owning subcap | Subcap deep dive
+ | Maturity heatmap | pillar, source-tier | Spot a thin descriptor | Subcap deep dive
+ | Knowledge graph (admin) | pillar | Inspect edges; review pending edges | Change flags, Reasoning viewer
+ | C · Project validation
+ | SOW library | subvertical | Open an AI-matched SOW; confirm a match | Subcap deep dive, Reasoning viewer
+ | Story library | pillar, subvertical, claim-label | Filter the canonical corpus; open a story | Subcap deep dive
+ | Project-subcap trace | scope (subcap) | Follow the timeline | Reasoning viewer
+ | D · Public intelligence
+ | News watch | subvertical, source-tier | Open an item; stage a suggestion | AI suggestions, Reasoning viewer
+ | Trends monitor | subvertical | Inspect a trend; promote a synthetic story | AI suggestions
+ | AI suggestions | pillar, claim-label | Apply or reject | Reasoning viewer, Version timeline
+ | Benchmarks studio | subvertical | Inspect a benchmark and its verdict | Reasoning viewer
+ | E · Strategic synthesis
+ | Quarterly digest | subvertical | Expand priorities; export signed PPTX | Subcap deep dive
+ | F · Lifecycle & competition
+ | Lifecycle manager | subvertical, pillar | Inspect delivery-to-offering; stage a bundled offering | AI suggestions, Subcap deep dive
+ | Vendor intelligence | subvertical | Open a vendor event; stage a suggestion | Subcap deep dive, Reasoning viewer
+ | Client journey atlas | subvertical | Open a client; export DMA packet | Subcap deep dive
+ | G · Versioning & QA
+ | Version timeline | none | Open a snapshot; start a revert | Diff viewer
+ | Diff viewer | none | Compare two versions; confirm a revert | Version timeline
+ | Change flags inbox | pillar | Resolve a flag; approve a pending edge | Reasoning viewer, Knowledge graph
+ | Validation gates log | none | Inspect a gate run | Reasoning viewer
+ | QA & audit | none | Review accuracy, budget, audit trail | Reasoning viewer
+ | H · Reasoning & RAG
+ | Reasoning chain viewer | scope (chain) | Audit how an output was reached | Back to the originating surface
+ | AI chat | subvertical, pillar | Ask; open a turn’s reasoning; stage | Reasoning viewer, AI suggestions
+ | I · Sandbox
+ | What-if simulator | pillar | Simulate a change; promote to suggestion | AI suggestions
+ | Access & admin
+ | Login | none | Sign in with Google (@zennify.com) | Mission control
+ | Schema mapping (admin) | none | Confirm mapping; relations; apply; carry-forward | Settings, Version timeline
+ | Settings | none | Preferences; upload a catalogue; configure sources | Schema mapping
+
+ © 2026 Zennify · Confidential · Capability Intelligence Agent App Flow

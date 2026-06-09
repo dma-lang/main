@@ -1,0 +1,44 @@
+[project]
+name = "cia-backend"
+version = "0.0.0"
+description = "Capability Intelligence Agent — FastAPI backend"
+requires-python = ">=3.12"
+# Stage 0 keeps runtime deps minimal (config validation only). Stage 1 (F1–F3) adds
+# fastapi, uvicorn, sqlalchemy[asyncio], asyncpg, pgvector, alembic, google-genai, etc.,
+# and commits uv.lock (CI then switches `uv sync` to `--frozen`).
+dependencies = [
+  "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+  "ruff>=0.6",
+  "black>=24.8",
+  "mypy>=1.11",
+  "pytest>=8.3",
+  "types-PyYAML>=6.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["app", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]

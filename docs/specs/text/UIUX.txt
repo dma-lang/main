@@ -1,0 +1,1274 @@
+# Capability Intelligence Agent
+ UI/UX design brief and interactive mockups. A Zennify-branded design system for an internal consultant workbench: 27 pages, a full component library, and a trust-first evidence model, in light and dark mode.
+ Document
+ UI/UX brief v1.0
+
+ Status
+ For design sign-off
+
+ Scope
+ 27 product pages, 9 groups
+
+ Themes
+ Light + dark, WCAG AA
+
+ Classification
+ Internal, Zennify only
+
+ Capability intelligence Philosophy Tokens Type Components Layout 27 pages Mockups Dark & a11y ☾ Dark
+
+ 01
+
+## From brand to product
+
+ The Zennify brand is calm, clean, modern and human-first. In a workbench where consultants commit catalogue changes on AI evidence, those four principles become concrete, enforceable rules.
+ | Brand principle | Product implication | Anti-pattern prevented
+
+ | Calm | Dense information discloses progressively: an irreducible summary is visible, depth on demand. No gradients, animation, or decorative chrome. | Overwhelming dashboards
+ | Clean | White space is first-class. 8px base grid. Hierarchy from background-colour contrast, never drop shadows. | Cards with shadows fighting for attention
+ | Modern | Consistent 6px radius on surfaces, 4px on tags. No pill shapes, no border-left accent bars. Colour carries meaning, not decoration. | Generic AI-looking UI
+ | Human-first | Trust is the outcome. Every AI output shows claim label, source tier, and a reasoning-chain link. Irreversible actions get preview modals. | Black-box AI with no provenance
+
+ 1
+
+#### Trust is the primary outcome
+
+ Claim + tier chips render on every AI card, never hidden in overflow. The reasoning-chain link is always a visible affordance.
+
+ 2
+
+#### Recognition beats recall
+
+ Pillar palette, lifecycle colour, claim-label style and tier-chip shape are identical across all 27 pages. Orange always means the same thing.
+
+ 3
+
+#### Progressive disclosure
+
+ Card summary is one line plus chips; depth expands on demand. Modals for depth, not page hops.
+
+ 4
+
+#### Reversibility
+
+ Destructive actions are filled orange, never teal. Confirm modals list exact impact counts. Cancel has equal visual weight to confirm.
+
+ 5
+
+#### The catalogue is the gravity well
+
+ Any Sub_Cap_ID anywhere is a drilldown link. Consistent teal-on-hover, no underline.
+
+ 6
+
+#### Failure is a designed state
+
+ Degraded-mode banners are persistent and amber. Empty states carry a recovery CTA, never a bare 'No data'.
+
+ 7
+
+#### Mechanical governance
+
+ Every state-mutating button previews what will change. Apply and confirm are teal; revert and reject are orange.
+
+ 02
+
+## Design tokens
+
+ Every colour and spacing value is a CSS custom property. The dark theme is a token override on the root, so the entire product re-themes from one attribute. These are the only permitted brand colours.
+
+ Dark green
+ #1c4a4d
+ Body text, dark surfaces
+
+ Dark teal
+ #185f60
+ Secondary text, H2, hover
+
+ Teal
+ #27bbaf
+ Primary accent, active, numbers
+
+ Light teal
+ #62d7b8
+ Text on dark
+
+ Light green
+ #b0eed3
+ Soft fills, mint chips
+
+ White green
+ #e8f7f6
+ Alt rows, success bg
+
+ White purple
+ #f2f4f9
+ Card bg, alt rows
+
+ Light blue
+ #a5c6ff
+ Info chips on dark
+
+ Blue
+ #3d81f6
+ Data elements, links
+
+ Purple grey
+ #c7d3ec
+ Dividers, borders
+
+ Slate
+ #8094c0
+ Muted text, INFERENCE
+
+ Light orange
+ #ffcb99
+ WARN fills
+
+ Orange
+ #fe9732
+ Warnings, HIGH severity, destructive
+
+ White
+ #ffffff
+ Light backgrounds
+
+ Light mode surfaces
+ Base #ffffff
+ Raised #f2f4f9
+ Overlay #e8f7f6
+ Text primary #1c4a4d
+
+ Dark mode surfaces
+ Base #0d1f20
+ Raised #142e2f
+ Overlay #1a3839
+ Text primary #e8f7f6
+
+ Every value is a CSS custom property. Components reference var(--token) only, so flipping [data-theme="dark"] on the root re-themes the whole product. No hardcoded hex in any component. Try the theme toggle in the top bar.
+
+ 03
+
+## Typography
+
+ DM Sans is the sole typeface, embedded from bundled files. A tight scale keeps dense screens calm and legible.
+ Display
+ 32px / 700
+ Page hero, empty-state titles
+
+ Catalogue freshness
+ H1 page title
+ 24px / 600
+ Section headings
+
+ Mission control
+ H2 section
+ 18px / 600
+ Card titles, panel headings
+
+ AI suggestions
+ H3 subsection
+ 15px / 500
+ Sub-panel, accordion titles
+
+ Maturity descriptors
+ H4 label
+ 13px / 600
+ Form labels, table headers, stat labels
+
+ Source tier
+ Body
+ 14px / 400
+ All body text, card descriptions
+
+ Every AI assertion carries a claim label and a reasoning-chain link.
+ Mono
+ 13px / 400
+ Sub_Cap_IDs, chain IDs, code spans
+
+ P1C2.3.1 · 7.2 / 8
+ Eyebrow
+ 11px / 600
+ ALL CAPS group labels
+
+ A · Explore
+
+ DM Sans is the sole typeface, weights 400 / 500 / 700 only. Sentence case everywhere except eyebrows. Mono (Consolas) is reserved for IDs and code. No em dashes anywhere.
+
+ 04
+
+## Component library
+
+ Twenty-plus shared components render identically across all 27 pages. Chips are the most visible consistency requirement: a claim label or tier chip looks the same everywhere it appears.
+ Chips and badges, the single most visible consistency requirement
+ Claim labels FACT INFERENCE HYPOTHESIS CEILING_ESTIMATE
+ Source tiers T1 T2 T3 T4 T5
+ Gate verdicts PASS WARN FAIL
+ Lifecycle states emerging rising stable declining fading dead
+ Impact magnitude HIGH MEDIUM LOW
+ Suggestion status pending applied rejected expired staged
+
+ Buttons
+ Apply Compare Reject Cancel Disabled
+ Apply / confirm are teal; reject / revert / deactivate are orange. Cancel is a ghost button with equal weight to confirm.
+
+ Source attribution row
+ T1 FACT OCC bulletin 2025-01 · Jan 2025 · ERS 0.88
+ T2 INFERENCE Celent: bank tech 2026 · ERS 0.73
+ T5 HYPOTHESIS Vendor blog post · Nov 2024 · ERS 0.31
+
+ Degraded-mode banners (persistent, non-dismissible)
+ Reasoning degraded, single-model analysis in effect
+ Approaching monthly LLM envelope, $8.6k of $10.0k used
+ Throttled, non-essential operations paused. Chat, suggestions and what-if continue.
+ Catalogue refresh paused, last sync 4h ago
+ Q2 2026 digest published, 27 priorities across 9 subverticals
+
+ Progress and cost meters
+ Completeness 7.2 / 8
+
+ Cost meter, near limit
+
+ Cost meter, throttled
+
+ Gate result rows (reasoning chain viewer)
+ PASS G1 Source tier
+ 0.88
+ PASS G3 ERS
+ 0.82
+ WARN G6 Adversarial
+ 0.61
+
+ Data table
+ | Gate | Pass | Warn | Fail | p95 score
+
+ | G2 Source quality | 94% | 4% | 2% | 0.86
+ | G3 ERS threshold | 88% | 9% | 3% | 0.81
+ | G6 Adversarial | 71% | 22% | 7% | 0.64
+
+ Empty state with recovery CTA
+ No pending suggestions
+ The monthly cycle produces new suggestions around the 1st of each month.
+
+ 05
+
+## Layout and grid
+
+ A fixed sidebar with fluid main content, on an 8px base grid. Three desktop breakpoints; tablet collapses the sidebar to a drawer; mobile is out of scope per the PRD.
+ | Breakpoint | Viewport | Sidebar | Notes
+
+ | Desktop XL | ≥ 1440px | 240px fixed | Dev workstation target
+ | Desktop | 1280-1439px | 220px fixed | Most consultant laptops
+ | Desktop S | 1024-1279px | 180px, icon-only at 1024 | Tablet landscape
+ | Tablet | 768-1023px | Hidden drawer | Portrait, hamburger
+ | Mobile | < 768px | Not supported | Excluded per PRD
+
+ Header 56px · logo · pillar · SV · lens · persona bell · cost · theme · avatar · gear
+ Sidebar 240px
+ 9 group sections
+28 nav items
+active = overlay fill
+
+ Title bar 64px  · breadcrumbs / context pills
+ Content area , padding 24px 32px, layout varies per page
+
+#### List pages
+ Single column, max-width 900px, centred. Suggestions, news, change flags.
+
+#### Detail pages
+ Dual column at 1280px+, single below. Subcap deep dive, reasoning chain.
+
+#### Full-canvas pages
+ Fill remaining width, no max-width. Knowledge graph, capability explorer drilldown.
+
+#### Dashboard pages
+ 3-column grid at 1280px+, 2-column at 1024px. Mission control, QA dashboard.
+
+ 06
+
+## The 27 pages, plus access
+
+ Nine functional groups, A through I, plus the login screen and the header Settings surface. Each entry leads with the page’s objective - the one job it exists to do - followed by what it contains. A short note up top explains the is_admin access model.
+ Roles & access Access is a single is_admin flag, not full role-based access control (RBAC beyond is_admin is out of scope for v1). Every authenticated Zennify user is a power user with full read and the day-to-day approval actions. Admins additionally get: the knowledge graph (which lives in the admin area), catalogue upload & source-registry edits (AG-7), version revert (AG-5), on-demand digest generation (AG-6), and the schema-mapping step that provisions each catalogue version’s database. These admin actions live on existing pages plus the Settings and schema-mapping surfaces.
+ A · Explore 4 pages
+ A1 Mission control
+ Answer ‘is the system healthy?’ and ‘what needs me right now?’ in one glance.
+ Four pillar tiles (subcap count, active/inactive, decay candidates, % completeness), a story-concentration heatmap of the most-delivered subcaps by quarter with productized-offering coverage, source-health widget, open suggestion and flag counts, recent reasoning-chain runs, quick links. Empty state routes a first user to Settings to upload a catalogue.
+
+ A2 Capability explorer
+ Drill down interactively from pillar to a single subcap, then open its deep dive for use cases and user stories.
+ Interactive column drilldown Pillar → Category → L1 cluster → Sub_Cap_ID (each selection filters the next), debounced search-as-you-type, lens-stack filters, right preview pane with Open deep dive CTA. The deep dive it opens is where use cases (tab 5) and user stories are read.
+
+ A3 Subcap deep dive
+ Show everything known about one subcap on one scrollable page.
+ Stacked sections: identity + status toggle, completeness, M1–M5 maturity, personas, L3/L4, use cases, user stories, themes, offerings, subvertical applicability, SOW/news/vendor signals, benchmarks, lifecycle, reasoning chains, Run AI audit.
+
+ A4 Value chain atlas
+ Show the 8 universal value-chain clusters and where the catalogue sits in each, by subvertical.
+ Eight MECE clusters as a horizontal pipeline (per-cluster subcap counts) plus radial wheel. Subvertical filter reveals SV-specific stage names from tab 21; expand a cluster → stages → mapped subcaps → deep dive.
+
+ B · Catalogue tools 4 pages
+ B1 Platform catalog
+ Browse the technology platforms the catalogue is built on, grouped by vendor.
+ ~52 L3 platforms (deduped across pillars). Per-platform card with ID, category, subcap and L4 counts, reference URL. Click → addressing subcaps, or jump to vendor intelligence.
+
+ B2 Use case explorer
+ Browse the use-case layer by archetype, and drop into the owning subcap.
+ ~3,000+ use cases across 22 archetype tags in 5 families. Family tabs, tag cards with counts and examples, click a use case → parent subcap deep dive.
+
+ B3 Maturity heatmap
+ Spot where maturity descriptors are missing or thin across the catalogue.
+ Subcap × M1–M5 (4,255 cells) filterable by pillar, lifecycle, persona, tier. Aggregation switch (L1×M), cell-hover descriptor preview, click → deep-dive maturity section.
+
+ B4 Knowledge graph
+ Reveal the structural relationships the flat catalogue hides. Admin-only.
+ Two-layer graph in the admin area. Layer selector (deterministic / +AI-proposed / full), node-kind filter, centrality and community panels, shortest path, impact analysis, Cypher box, mini-map, synthesis-findings tab, right detail drawer. Only admins review and commit AI-proposed edges.
+
+ C · Project validation 3 pages
+ C1 SOW library
+ Use AI to read each ingested SOW and match it to the subcaps it actually delivered.
+ SOWs by status with a redaction-confirmation banner; AI matches SOW text to subcaps using a model tuned on the catalogue ontology (subcap names, descriptions, L4 features and the story-to-subcap pairs), each match carrying a claim label, confidence and reasoning link; per-SOW mention list with excerpts. Sort by ingestion date, match count or confidence.
+
+ C2 Story library
+ Browse and filter the canonical Jira story corpus.
+ 14,406 real client stories (the canonical Jira catalog) with server-side pagination. Synthetic and use-case-derived stories are excluded by default and only appear, clearly labelled, when a news or trend signal flags the subcap as emergent. Filter by pillar / subcap / quality threshold / match confidence, with a per-story quality and reasoning breakdown.
+
+ C3 Project-subcap trace
+ See everything that has ever touched a subcap, in time order.
+ Pick a subcap: chronological timeline mixing SOW, story, benchmark, news, vendor, lifecycle and suggestion events, each with excerpt, confidence and reasoning link. CSV export.
+
+ D · Public intelligence 4 pages
+ D1 News watch
+ Turn raw public news into subcap-scored signal.
+ Impact-segmented news filtered by source, tier, FS relevance, date, affected pillar, subvertical and magnitude. Per-item card with top-3 affected subcaps + magnitude chips, reasoning link, Run consultant loop.
+
+ D2 Trends monitor
+ Watch the trends being staged for the monthly consultant cycle.
+ Aggregated trends with affected subcaps, evidence count, time window, status (staged / promoted / consumed). Drill into the evidence cluster. A trend here is also what can promote an otherwise-excluded synthetic story into view, clearly labelled as provisional, when it points to a subcap as emergent.
+
+ D3 AI suggestions
+ Let a pillar lead confidently apply or reject AI-proposed catalogue edits.
+ Monthly-cycle suggestions filtered by kind / status / gate / pillar / breaking. KPI bar, suggestion cards with rationale, evidence trail, reasoning link, Apply / Reject. Breaking → Review (COMMIT tier).
+
+ D4 Benchmarks studio
+ Ground catalogue claims in defensible external benchmarks.
+ Distribution charts with bootstrap CI band, methodology and sources panel, subcap mappings, adversary verdict chip (BENCHMARK / INDICATIVE / EXPLORATORY), QoQ toggle, coverage-gap warnings.
+
+ E · Strategic synthesis 1 page
+ E1 Quarterly strategic digest
+ Consolidate a quarter of signal into board-ready priorities per subvertical.
+ Quarter selector, Opus-authored executive summary, cross-SV themes, 9 collapsible subvertical sections with 3–5 priority cards (narrative, evidence trail, recommended actions, adversarial review, claim labels). QoQ delta toggle, Export PPTX (signed, admin-gated generate), per-priority comments.
+
+ F · Lifecycle & competition 3 pages
+ F1 Lifecycle manager
+ Trace subcaps through delivery and turn that history into productization.
+ Ranks the most-delivered subcaps (from SOWs and stories), maps each to a productized offering, flags high-delivery subcaps lacking an offering, and bundles those into an AI-named, AI-scoped proposed new offering with an evidence basis and reasoning link. Promote to a staged suggestion. Replaces the old market-signal lifecycle Kanban, which overlapped the SOW library and client journey atlas.
+
+ F2 Vendor intelligence
+ Understand the platform vendors Zennify builds on and the developments that should move the catalogue.
+ Vendor profiles (90-day developments, dominant subcaps, lost-to flags, peer adoption %); a developments feed classified into 8 competitive-event types (product_launch, partnership, deprecation, pricing_change, executive_move, security_incident, regulatory_action, case_study) each mapped to affected subcaps with a claim label; an evidence-driven vendor×subcap impact heatmap; per-vendor consultant loop.
+
+ F3 Client journey atlas
+ See a unified, entity-resolved view of each client and hand a packet to the DMA team.
+ Client list, per-client timeline with 9+ event types, KPI strip (subcaps touched, vendor stack, last DMA score), Export DMA packet as validated signed JSON.
+
+ G · Versioning & QA 5 pages
+ G1 Version timeline
+ Make every catalogue snapshot inspectable and reversible.
+ All snapshots with label, summary, creator, timestamp, per-pillar subcap counts and current flag. Cascade-aware breaking-change summary, admin-gated revert.
+
+ G2 Diff viewer
+ Show exactly what changed between two catalogue versions.
+ Field-by-field: added / removed / modified subcaps, pillar and category deltas. Explain diff (Gemini Pro narrative), export PDF (signed).
+
+ G3 Change flags inbox
+ Surface the anomalies a pillar lead must resolve before trusting the queue.
+ Flags filtered by severity / kind / target / age. Per-flag card with resolution form; acknowledge / resolve / dismiss; purpose-built AI-proposed-edge and entity-conflict workflows.
+
+ G4 Validation gates log
+ Give transparency into how the 8 deterministic gates are running.
+ Per-gate pass / warn / fail distribution over 90 days, recent runs with chain links, gate-failure remediation hints, cost KPIs.
+
+ G5 QA & audit dashboard
+ Prove the system is accurate, on-budget and auditable.
+ Gate pass-rate per week, hallucination and citation checks, daily / monthly LLM spend against envelope, reasoning-chain volume, source-pull failures, open findings, eval scores per golden dataset.
+
+ H · Reasoning & RAG 2 pages
+ H1 Reasoning chain viewer
+ Let anyone audit, in plain language, exactly how an AI output was reached - the core trust surface.
+ Full-screen modal that reads top to bottom with no opaque codes: a titled question, the ordered steps the model took, the evidence with readable source descriptions (who said it, how trustworthy, how recent), any contradictions, the conclusion, an adversarial self-review, and the checks it ran shown as plain pass / needs-review results, plus a note that the run is reproducible.
+
+ H2 AI chat
+ Answer catalogue questions with grounded, citable evidence.
+ Conversation list, thread with inline citations and a reasoning backlink per turn, source-hover previews, visible cost meter, context panel, Save / Export PDF.
+
+ I · Sandbox 1 page
+ I1 What-if simulator
+ Let a lead test a catalogue change safely before proposing it.
+ Read-only sandbox. Action editor across 7 kinds (incl. workbook-native toggle with full XLOOKUP cascade), simulate, lifecycle and adoption delta panels, transition list, affected-subcap count, KG orphans, benchmark recompute preview, Promote to suggestion.
+
+ Access & administration 3 surfaces
+ AUTH Login
+ Gate the workbench to Zennify staff only.
+ The only pre-auth surface. Firebase Auth + Google sign-in, restricted to @zennify.com; the domain check fails closed, so non-staff never see product surface. Client-facing usage is explicitly out of scope.
+
+ SCHEMA Schema mapping
+ Give an admin control over how each catalogue version maps to the canonical model, provision its persistent relational database, and carry the canonical story mappings forward.
+ Opens on upload. Auto-maps each source field to a canonical field with a confidence; the admin confirms or overrides every mapping, adds custom fields, defines relations for that version, and can cascade compatible relations to other versions. Applying writes the backend schema and provisions the persistent relational database for that catalogue. It also carries the canonical Jira story mappings forward from v5: each is similarity-confirmed, with confirmed links maintained and borderline ones routed to review. Stored per version and re-runnable. Admin-only.
+
+ CFG Settings
+ Personal preferences for everyone; catalogue and source administration for admins.
+ Header-accessible from every page. All users: theme, default persona, default lens. Admin section (gated by the is_admin flag, visually distinct and announced as admin-only): upload pillar workbooks of any version (which launches schema mapping) or configure a Drive folder, edit the ingestion-source registry, trigger manual pulls, set the cost envelope, view secret-rotation status. First successful ingest persists for every user, no re-upload.
+
+ 07
+
+## Page mockups
+
+ Fourteen mockups plus the reasoning-chain modal, each in the real app shell (header with the Zennify mark, sidebar, content). They run from the login screen through the explore → deep-dive → value-chain drilldown, the AI surfaces, vendor intelligence, the admin schema-mapping step and the Settings page. Toggle the theme in the top bar to see every mockup re-theme; two are shown in dark mode.
+ AUTH Login Pre-auth
+ /login
+
+## Capability Intelligence
+ The internal workbench that keeps Zennify’s capability catalogue provably current.
+
+- ✓ Trust-first. Every AI output carries a claim label, its sources, and a reasoning trail you can open.
+- ✓ One living catalogue. 851 subcaps across 4 pillars, kept current from SOWs, news and vendor signals.
+- ✓ Evidence, not opinion. Suggestions are gated by 8 deterministic checks before a human ever sees them.
+
+### Sign in
+ Use your Zennify Google account. Access is limited to staff; this workbench is not for client use.
+ G Continue with Google ● Restricted to @zennify.com · other domains are turned away
+ Having trouble? Contact it-help@zennify.com .
+Capability Intelligence Agent · v1.0 · © 2026 Zennify
+
+ The only pre-auth surface, now a two-panel screen: a brand panel that states the product’s trust-first promise, and a Google sign-in restricted to @zennify.com. The domain check fails closed, so non-staff never see product surface; client usage is out of scope.
+ A1 Mission control Group A · Explore
+ /mission-control
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ A · Explore
+ Mission control
+ Capability explorer
+ Subcap deep dive
+ Value chain atlas
+ B · Catalogue tools
+ Platform catalog
+ Use case explorer
+ Maturity heatmap
+ Knowledge graph
+ C · Project validation
+ SOW library
+ Story library
+ Project-subcap trace
+
+### Mission control
+ Pull all sources
+
+ Catalogue refresh paused, last sync 2h ago
+ P1
+ 205
+ subcaps
+
+ Strategy & gov · 78% complete
+
+ P2
+ 292
+ subcaps
+
+ Customer exp · 91% complete
+
+ P3
+ 164
+ subcaps
+
+ Process & ops · 84% complete
+
+ P4
+ 190
+ subcaps
+
+ Data & AI · 73% complete
+
+ 3
+ High flags · 7 med
+
+ 12
+ Suggestions pending
+
+ 24/26
+ Sources healthy
+
+ Story concentration · most-delivered subcaps
+ Cell intensity = real delivery volume per quarter, from the canonical Jira story catalog. The right column shows whether each top subcap maps to a productized offering.
+
+ Q3-24
+ Q4-24
+ Q1-25
+ Q2-25
+ Q3-25
+ Q4-25
+ Offering
+ P2C1.1 Digital onboarding
+
+ ● OFF-001
+ P1C2.3.1 DSCR analytics
+
+ ● OFF-004
+ P3C2.1 Loan origination
+
+ ● OFF-002
+ P4C1.3 Customer 360 data
+
+ ● OFF-007
+ P2C4.2 Conversational service
+
+ ○ none
+ P3C4.1 Payments posting
+
+ ○ none
+
+ Offering coverage
+ Of the top delivered subcaps, how many sit inside a productized offering.
+ 68% covered · 2 of the top 6 have no offering
+
+ Recent reasoning chains
+ News impact on DSCR analytics · 2m ago
+Suggestion: descriptor update · 14m ago
+Delivery scan: onboarding · 1h ago
+
+ Answers ‘is the system healthy?’ and ‘what needs me?’ in under ten seconds. The headline panel is now a story-concentration heatmap of the most-delivered subcaps by quarter, with a column showing whether each maps to a productized offering, plus an offering-coverage summary.
+ A2 Capability explorer Group A · Explore
+ /explorer
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ A · Explore
+ Mission control
+ Capability explorer
+ Subcap deep dive
+ Value chain atlas
+ B · Catalogue tools
+ Platform catalog
+ Use case explorer
+ Maturity heatmap
+ Knowledge graph
+ C · Project validation
+ SOW library
+ Story library
+ Project-subcap trace
+
+### Capability explorer
+ Objective: drill down interactively from pillar to a single subcap, then open its deep dive to read its use cases and user stories.
+
+ ⌕ Search Sub_Cap_Name, ID or L1 capability… (debounced 200ms) Lens stack ▾
+ Click to drill in; each column filters the next. Search jumps straight to a leaf.
+ Pillar
+ P1 Strategy & governance 205 ›
+ P2 Experience 292 ›
+ P3 Operations 164 ›
+ P4 Data & AI 190 ›
+
+ Category
+ Risk & credit 88 ›
+ Governance 61 ›
+ Culture & org 56 ›
+
+ L1 capability cluster
+ Credit risk analytics 24 ›
+ Portfolio monitoring 19 ›
+ Regulatory capital 17 ›
+ Stress testing 12 ›
+
+ Sub_Cap
+ DSCR analytics P1C2.3.1
+ LTV recompute P1C2.3.2
+ Covenant tracking P1C2.3.3
+ Exposure rollup P1C2.3.4
+
+ Selected
+ DSCR analytics
+ P1C2.3.1 T1 rising
+ Real-time debt-service-coverage recomputation across commercial portfolios.
+ Completeness 7.2 / 8
+
+ Open deep dive ▸ Show recent AI activity ↗
+
+ Drilldown path
+ Pillar → Category → L1 cluster → Sub_Cap_ID → Deep dive: use cases + user stories
+
+ Pure interactive drilldown, no chart. Click across columns Pillar → Category → L1 cluster → Sub_Cap; each selection filters the next. The preview pane and the explicit ladder show that a subcap opens its deep dive, where its use cases and user stories are read.
+ A3 Subcap deep dive Group A · Explore
+ /subcap/P1C2.3.1
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ A · Explore
+ Mission control
+ Capability explorer
+ Subcap deep dive
+ Value chain atlas
+ B · Catalogue tools
+ Platform catalog
+ Use case explorer
+ Maturity heatmap
+ Knowledge graph
+ C · Project validation
+ SOW library
+ Story library
+ Project-subcap trace
+
+### DSCR analytics
+ rising T1 M3 avg Active P1C2.3.1
+
+ Run AI audit
+ Identity
+ Maturity descriptors
+ Personas
+ Lifecycle + signals
+ L3 platforms
+ L4 features
+ Use cases (9)
+ User stories (42)
+ Offerings (3)
+ News mentions (7)
+ Vendor activity
+ Benchmarks
+ KG connections
+ Reasoning chains
+ AI audit
+
+ Identity
+ Sub_Cap_ID P1C2.3.1 Category Credit risk analytics Tier T1 Status Active ⇕ Completeness
+ 7.2 / 8
+ Maturity descriptors
+ M1
+ Narrative + feature anchors
+
+ M2
+ Narrative + feature anchors
+
+ M3
+ Narrative + feature anchors
+
+ M4
+ Narrative + feature anchors
+
+ M5
+ No descriptor
+
+ Use cases from tab 5 · 9
+ Real-time DSCR recalculation Covenant breach early warning Portfolio stress test +6 more
+ User stories 42 mapped · quality-scored
+ As a credit analyst, I can see a recomputed DSCR within 2s of a financial update US-1042 · Q 0.91
+ As a portfolio manager, I am alerted when a covenant is at risk US-1043 · Q 0.88
+ As a CRO, I can export the portfolio risk position to the board pack US-1051 · Q 0.83
+
+ News mentions affecting this subcap
+ HIGH T1 FACT
+ OCC issues 2025 guidance on real-time DSCR decisioning
+ occ.gov · Jan 2025 · ERS 0.88
+
+ The gravity well, and the drilldown destination. Sticky section nav on the left; the right column surfaces use cases (tab 5) and quality-scored user stories alongside maturity and impact-scored signals.
+ A4 Value chain atlas Group A · Explore
+ /value-chain
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ A · Explore
+ Mission control
+ Capability explorer
+ Subcap deep dive
+ Value chain atlas
+ B · Catalogue tools
+ Platform catalog
+ Use case explorer
+ Maturity heatmap
+ Knowledge graph
+ C · Project validation
+ SOW library
+ Story library
+ Project-subcap trace
+
+### Value chain atlas
+ Objective: show the 8 universal MECE value-chain clusters and where the catalogue sits in each, by subvertical - so a pillar lead can spot coverage and gaps at a glance.
+
+ Subvertical: CL ▾ ◉ Radial view
+
+ 8 clusters, left to right. Counts are subcaps mapped to each cluster for the selected subvertical.
+ VCC-01
+ Acquire & onboard
+ 118
+ subcaps
+ Lead, KYC, account open
+ VCC-02
+ Engage & serve
+ 164
+ subcaps
+ Service, advice, support
+ VCC-03
+ Originate & underwrite
+ 132
+ subcaps
+ Apply, decision, fund
+ VCC-04
+ Transact & process
+ 96
+ subcaps
+ Payments, posting, recon
+ VCC-05
+ Manage risk & comply
+ 124
+ subcaps
+ Risk, fraud, regulatory
+ VCC-06
+ Operate & service ops
+ 71
+ subcaps
+ Back office, exceptions
+ VCC-07
+ Analyse & decide
+ 98
+ subcaps
+ Reporting, insight, BI
+ VCC-08
+ Govern & enable
+ 48
+ subcaps
+ Data, platform, controls
+
+ VCC-03 Originate & underwrite - expanded
+ Commercial Lending stages from 21_VC_Mapping_PerSubcap. Click a subcap → deep dive scoped to the subvertical.
+ Application intake
+ P3C2.1 · P2C1.1
+
+ Credit decisioning
+ P1C2.3.1 · P1C2.4
+
+ Documentation
+ P3C2.2
+
+ Funding & booking
+ P3C4.1 · P4C1.3
+
+ The 8 universal MECE value-chain clusters as a left-to-right pipeline with per-cluster subcap counts; expanding a cluster reveals subvertical-specific stages and the subcaps mapped to each.
+ F1 Lifecycle manager Group F · Lifecycle & competition
+ /lifecycle-manager
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ AI suggestions
+ Benchmarks studio
+ E · Strategic synthesis
+ Quarterly digest
+ F · Lifecycle & competition
+ Lifecycle manager
+ Vendor intelligence
+ Client journey atlas
+ G · Versioning & QA
+ Version timeline
+ Diff viewer
+ Change flags inbox
+ Validation gates log
+ QA & audit dashboard
+
+### Lifecycle manager
+ Objective: trace subcaps through delivery, check the most-delivered ones against our productized offerings, and let AI bundle high-delivery subcaps that have no offering into a proposed new one.
+
+ Last 24 months ▾ Subvertical ▾
+
+ 312
+ Subcaps delivered
+
+ 13
+ Productized offerings
+
+ 68%
+ Top subcaps covered
+
+ 5
+ High-delivery gaps
+
+ Most-delivered subcaps, mapped to offerings
+ Delivery volume comes from ingested SOWs and stories. The right side shows whether each one is already packaged.
+ Digital onboarding P2C1.1 OFF-001 Onboarding accelerator in offering 47 projects
+
+ DSCR analytics P1C2.3.1 OFF-004 DMA accelerator in offering 39 projects
+
+ Loan origination P3C2.1 OFF-002 Lending suite in offering 33 projects
+
+ Conversational service P2C4.2 no offering no offering 31 projects
+
+ Payments posting & recon P3C4.1 no offering no offering 28 projects
+
+ Customer 360 data model P4C1.3 no offering no offering 26 projects
+
+ HYPOTHESIS AI-named
+ Suggested new offering · bundles 3 high-delivery subcaps with no current offering
+ "Conversational Operations Fabric"
+ Named and scoped by AI. These three are delivered together in 22 of the last 40 projects but are not packaged, so each engagement re-scopes them from scratch.
+ P2C4.2 P3C4.1 P4C1.3
+ Basis: 22 co-delivered projects, 9 SOWs Show reasoning ↗
+ Rename Dismiss Promote to suggestion ▸
+
+ Traces subcaps through delivery and turns that history into productization. It ranks the most-delivered subcaps, maps each to a productized offering, flags the high-delivery subcaps with no offering, and lets AI bundle them into a proposed new offering with an innovative name and a reasoning trail.
+ D3 AI suggestions Group D · Public intelligence
+ /suggestions
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ Story library
+ Project-subcap trace
+ D · Public intelligence
+ News watch
+ Trends monitor
+ AI suggestions
+ Benchmarks studio
+ E · Strategic synthesis
+ Quarterly digest
+ F · Lifecycle & competition
+ Lifecycle manager
+ Vendor intelligence
+ Client journey atlas
+ G · Versioning & QA
+
+### AI suggestions
+
+ Kind ▾ Status ▾ Gate ▾ Pillar ▾ □ Breaking only
+ 12
+ Pending
+
+ 34
+ Applied this month
+
+ 8
+ Rejected
+
+ pending PASS Descriptor update $0.002
+ 12 min
+ Update DSCR analytics M3 descriptor with 2025 OCC data
+ Target: P1C2.3.1 · P1 · Monthly cycle. Current M3 references superseded guidelines; two independent T1 sources corroborate the change.
+ T1 FACT T1 FACT
+ Show reasoning Open subcap → Reject Apply ▸
+
+ pending PASS ⚠ BREAKING $0.008
+ 1h
+ Retire P1C3.1.5, lifecycle dead with no evidence for 12 months
+ Target: P1C3.1.5 · negative-search trail documented (G8).
+ T1 INFERENCE
+ Show reasoning Reject Review (breaking) ▸
+
+ Each suggestion shows claim labels, evidence trail and a reasoning link. Breaking changes divert Apply to a Review (COMMIT-tier) flow in orange.
+ H2 AI chat Group H · Reasoning & RAG
+ /chat
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ Today
+ DSCR subcap query
+ OCC 2025 impact?
+ Yesterday
+ Vendor X vs P2C4
+ This week
+ What-if on P3
+
+ What subcaps address nCino collateral management?
+ Three subcaps map to nCino collateral management:
+ P2C4.2.1 Collateral tracking
+ P2C4.2.3 Pledging workflow
+ P2C4.1.1 UCC lien management
+ T1 FACT OCC 2025-01 ERS 0.86
+ Show reasoning
+
+ Ask anything about the catalogue... →
+
+ Context
+ Pillar: P2
+SV: All
+Lifecycle: All
+ Corpus
+ 851 subcaps
+14,406 real stories
+42 SOW chunks
+ Cost
+ $0.012
+
+ Shown in dark mode. Catalogue-grounded RAG with inline citations, a reasoning backlink per turn, and a live cost meter in the context panel.
+ F2 Vendor intelligence Group F · Lifecycle & competition
+ /vendor-intelligence
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ Benchmarks studio
+ E · Strategic synthesis
+ Quarterly digest
+ F · Lifecycle & competition
+ Lifecycle manager
+ Vendor intelligence
+ Client journey atlas
+ G · Versioning & QA
+ Version timeline
+ Diff viewer
+ Change flags inbox
+ Validation gates log
+ QA & audit dashboard
+ H · Reasoning & RAG
+
+### Vendor intelligence
+ Objective: track the platform vendors Zennify builds on and the developments that should move the catalogue - mapped to the exact subcaps they affect.
+
+ Pillar ▾ Event type ▾ Run consultant loop
+
+ Salesforce
+ FSC, Agentforce, Data Cloud
+ Last 90 days 18 developments
+ Dominant subcaps 31 subcaps
+ Peer adoption P2 · P4
+
+ nCino
+ Cloud Banking, nIQ
+ Last 90 days 23 developments
+ Dominant subcaps 12 subcaps
+ Peer adoption P1 · P3
+
+ Databricks
+ Lakehouse, Mosaic AI
+ Last 90 days 9 developments
+ Dominant subcaps 14 subcaps
+ Peer adoption P4
+
+ Developments affecting the catalogue
+ Each item is classified into one of 8 competitive-event types and mapped to the subcaps it moves, with a claim label and reasoning link.
+ Salesforce
+ Agentforce 3 ships autonomous service agents with guardrail policies
+ affects P2C1.1, P2C4.2, P4C1.3 · T5 vendor · May 2026 · HYPOTHESIS
+
+ product_launch Show reasoning ↗
+
+ nCino
+ Legacy commercial origination UI sunset announced for Q1 2027
+ affects P1C2.3, P3C2.1 · T5 vendor · Apr 2026 · FACT
+
+ deprecation Show reasoning ↗
+
+ Databricks
+ Native FSC connector with Salesforce Data Cloud announced
+ affects P4C1.3 · T4 press · Apr 2026 · INFERENCE
+
+ partnership Show reasoning ↗
+
+ Twilio
+ Conversations API tier restructured for FS volume
+ affects P2C4.2 · T5 vendor · Mar 2026 · INFERENCE
+
+ pricing_change Show reasoning ↗
+
+ Vendor × subcap impact heatmap
+ Cell intensity = development evidence frequency × recency (not a static platform join). Click a cell for the developments behind it.
+
+ P1C2.3
+ P1C3.1
+ P2C1.1
+ P2C4.2
+ P3C2.1
+ P4C1.3
+ Salesforce
+
+ nCino
+
+ Databricks
+
+ MuleSoft
+
+ Twilio
+
+ Rebuilt around the objective: understand the platform vendors Zennify builds on and the developments that move the catalogue. Vendor profiles, a developments feed classified into 8 event types and mapped to affected subcaps, and an evidence-driven vendor×subcap impact heatmap (not a static platform join).
+ B4 Knowledge graph Group B · Catalogue tools (admin)
+ /admin/knowledge-graph
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ Admin only The knowledge graph lives in the admin area; only admins can review and commit AI-proposed edges.
+ Value chain atlas
+ B · Catalogue tools
+ Platform catalog
+ Use case explorer
+ Maturity heatmap
+ Knowledge graph
+ C · Project validation
+ SOW library
+ Story library
+ Project-subcap trace
+ D · Public intelligence
+ News watch
+ Trends monitor
+ AI suggestions
+
+ Layer A ● + AI proposed ○ Full ○
+ ⌕ Cypher query... Node kind ▾ ⛶ Fit
+
+ P1C2
+ OFF
+ DATA
+ L3
+ theme
+ Solid edges deterministic (Layer A) · dashed orange edges AI-proposed (Layer B), gated before commit.
+
+ Node: P1C2.3.1
+ 8 outgoing · 3 incoming edges
+
+ Synthesis findings
+Pending edges (4)
+ AI proposed
+ Semantic-similarity edge proposed (shared L4 features), confidence 0.91
+
+ Admin-only, shown in dark mode. Solid edges are deterministic Layer A; dashed orange edges are AI-proposed (semantic-similarity / shared-feature) edges, gated in the Change Flags inbox before commit.
+ E1 Quarterly strategic digest Group E · Strategic synthesis
+ /digest
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ News watch
+ Trends monitor
+ AI suggestions
+ Benchmarks studio
+ E · Strategic synthesis
+ Quarterly digest
+ F · Lifecycle & competition
+ Lifecycle manager
+ Vendor intelligence
+ Client journey atlas
+ G · Versioning & QA
+ Version timeline
+ Diff viewer
+ Change flags inbox
+
+### Strategic digest
+ Q2 2026 ▾ □ Compare Q1 Export PPTX
+
+ Executive summary
+ Q2 2026 · 9 subverticals · 27 priorities identified. Cybersecurity compliance and real-time decisioning dominate across retail and commercial books. Adversarial review demoted 2 priorities and elevated 1.
+
+ Cross-SV theme: cybersecurity compliance appears in 7 of 9 subverticals at rank ≤ 2
+ Retail banking (BK) expand ∨
+ HIGH #1 Digital lending pipeline automation
+ OCC 2025-09 mandates real-time decisioning. Affected: P1C3.1.2 , P1C3.1.4 , P1C3.2.1
+ adversarial PASS Show reasoning Stage as suggestion ▸
+
+ Commercial lending (CL) collapsed ›
+
+ Opus-authored executive summary, cross-subvertical themes, and collapsible per-subvertical priority cards with adversarial-review verdicts.
+ G3 Change flags inbox Group G · Versioning & QA
+ /change-flags
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ Lifecycle manager
+ Vendor intelligence
+ Client journey atlas
+ G · Versioning & QA
+ Version timeline
+ Diff viewer
+ Change flags inbox
+ Validation gates log
+ QA & audit dashboard
+ H · Reasoning & RAG
+ Reasoning chain viewer
+ AI chat
+ I · Sandbox
+ What-if simulator
+
+### Change flags
+
+ 3 BLOCKING 7 HIGH 12 MED 4 LOW
+ Severity ▾ Kind ▾ Pillar ▾ Status ▾
+ BLOCKING ai_proposed_edge
+ 5m ago
+ AI proposed: semantic-similarity edge
+ P1C2.3.1 (subcap) → OFF-004 DMA accelerator (offering). Confidence 0.91 · 4 shared L4 features.
+ Show reasoning View edge detail Defer Reject Approve edge ▸
+
+ HIGH contradicted_evidence
+ 1h ago
+ New benchmark contradicts the M3 descriptor for DSCR analytics
+ Descriptor implies batch recompute; a 2025 OCC source and 2 SOWs describe real-time decisioning as table stakes.
+ Resolution: ○ Open suggestion to revise M3 ○ Mark descriptor under review ○ Dismiss
+ View evidence Acknowledge Resolve ▸
+
+ Severity-ranked anomalies with inline resolution. AI-proposed edges and contradicted-evidence flags each get a purpose-built workflow.
+ SCHEMA Schema mapping Header surface (admin)
+ /settings/schema-mapping
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ A · Explore
+ Mission control
+ Capability explorer
+ Subcap deep dive
+ Value chain atlas
+ B · Catalogue tools
+ Platform catalog
+ Use case explorer
+ Maturity heatmap
+ Knowledge graph
+ C · Project validation
+ SOW library
+ Story library
+ Project-subcap trace
+
+### Schema mapping
+ Objective: give an admin control over how each catalogue version maps to the canonical model - confirm auto-mapped fields, add custom fields and relations, cascade compatible relations across versions, and carry the canonical story mappings forward.
+
+ Admin only Detected layout: v5 · Pillar 1 · 10 sheets · adapter auto-selected. Confirm the proposed field mapping, add custom fields, then apply.
+
+ Source field (this version) Canonical field Confidence Status
+ Sub-Cap ID → subcap_id ▾
+
+ 98%
+ confirmed
+ Sub-Capability → name ▾
+
+ 97%
+ confirmed
+ Category Name → category ▾
+
+ 95%
+ confirmed
+ Capability → l1_capability ▾
+
+ 88%
+ confirmed
+ Key Features → l4_features ▾
+
+ 74%
+ review
+ Primary Products → l3_platforms ▾
+
+ 69%
+ review
+ Regulatory Notes → unmapped ▾
+ -
+ custom
+
+ + Add custom field Re-run auto-map 2 fields need review · 1 unmapped
+ Relations for this version
+ subcap addresses → l3_platform auto-detected
+ subcap delivered_by → user_story via match confidence
+ + new relation … → entity
+ Cascade compatible relations to v7 applies where fields match
+
+ Apply mapping
+ Applying writes this mapping to the backend schema and provisions the persistent relational database for the v5 catalogue. Stored per version; re-runnable.
+
+ Preview tables Apply & provision ▸
+ Story carry-forward
+ Canonical source: the Jira Full Story Catalog (real client delivery). Its v5 subcap mappings are carried forward to this version and similarity-confirmed before they are maintained. Crosswalk first, embeddings to confirm, borderline to review.
+
+ 14,406 stories · 87 subcaps mapped in v5
+ Confirmed 82 Review 4 Unmapped 1 Synthetic stories excluded unless a trend flags them Review borderline ▸
+
+ The setup step that makes each catalogue version’s persistent relational database functional. On upload the system auto-maps source fields to the canonical model with a confidence per field; the admin confirms or overrides, adds custom fields, defines relations for that version, and can cascade compatible relations to other versions. Applying writes the backend schema and provisions the database. The same step carries the canonical Jira story mappings forward from v5, similarity-confirmed, with borderline matches routed to review.
+ CFG Settings & admin Header surface
+ /settings
+
+ P1 P2 P3 P4 All SV ▾ Lens ▾ Persona ▾ ◉ 3 $4.3k ☾ AK
+ A · Explore
+ Mission control
+ Capability explorer
+ Subcap deep dive
+ Value chain atlas
+ B · Catalogue tools
+ Platform catalog
+ Use case explorer
+ Maturity heatmap
+ Knowledge graph
+ C · Project validation
+ SOW library
+ Story library
+ Project-subcap trace
+
+### Settings
+ Objective: personal preferences for everyone; and, for admins, the one place to upload catalogues, configure ingestion sources, and trigger pulls.
+
+ Your preferences · all users
+ Theme System ▾ Default persona Pillar lead ▾ Default lens Pillar ▾
+
+ Admin only These controls are gated by the is_admin flag. Everyone can edit personal preferences above; only admins see this section.
+ Catalogue ingestion
+ Upload the four pillar workbooks of any version (v5 or v7) or point at a Drive folder. On upload the schema-mapping step opens so you can confirm the field mapping; first successful ingest persists for every user, no re-upload.
+ Drop pillar workbooks here, or browse
+ P1 Strategy · P2 Experience · P3 Operations · P4 Data & AI · .xlsx
+
+ Or: Drive folder ▾ Open schema mapping ▸ Last ingest: v7 P1–P4 · 851 subcaps · mapping applied · 3 Jun 2026 Pull all sources now
+
+ Ingestion source registry ~35 feeds · edit is admin-gated (AG-7)
+ SEC EDGAR (external) T1 hourly Healthy · 12m ago
+ Salesforce newsroom (vendor) T5 hourly Healthy · 4m ago
+ nCino blog (vendor) T5 hourly Source down · 27h ago
+ Google Drive · SOWs (internal) T2 on change Healthy · 1h ago
+
+ Header-accessible from every page. Preferences for all users; an admin-only section (gated by the is_admin flag) is where catalogues are uploaded, the schema-mapping step is launched, and the ingestion sources are configured and pulled.
+ H1 Reasoning chain viewer Group H · Reasoning & RAG
+ The trust surface, opened from any ‘Show reasoning’ link as a focus-trapped modal. Rewritten to read in plain language from the first line: a titled question, the steps the model took in order, the evidence with readable source descriptions, and the checks it ran - no opaque codes.
+ Why the system proposed: update the M3 descriptor for DSCR analytics inference verdict: needs human review ran 2m ago · cost $0.014 · reproducible
+
+ ×
+ Every step the model took to reach this, in order. Nothing here is hidden behind a code.
+ Step 1 · Frame the question
+ Does the 2025 OCC guidance change what good looks like for DSCR analytics at the M3 maturity level?
+
+ Step 2 · Gather evidence
+ Pulled 8 supporting items from regulators, analyst notes and Zennify SOWs, newest first.
+ fact tier 1 OCC 2025 real-time decisioning guidance · regulator (tier 1) · reliability 0.87
+ inference tier 2 Celent bank tech outlook 2026 · analyst (tier 2) · reliability 0.72
+
+ Step 3 · Weigh source reliability
+ Ranked each item by how trustworthy and how recent it is before using it.
+
+ Step 4 · Check for contradictions
+ Looked for anything that disagrees. One analyst note is softer but nothing contradicts the core finding.
+
+ Step 5 · Form the conclusion
+ Real-time decisioning is now expected, so the M3 descriptor reads as out of date.
+
+ Step 6 · Argue against itself
+ A second pass tried to disprove the conclusion; it held, but on a thinner evidence base than ideal.
+
+ Step 7 · Label the confidence
+ Marked the change as an inference, not a hard fact, and routed it for human review.
+
+ Checks the system ran before showing this
+ Passed Source reliability
+ Are the sources trustworthy enough to act on?
+
+ 0.88
+ Passed Evidence strength
+ Is there enough corroborating evidence?
+
+ 0.82
+ Needs review Adversarial review
+ Did the conclusion survive an attempt to disprove it?
+
+ 0.61
+
+ 08
+
+## Dark mode and accessibility
+
+ WCAG 2.1 AA is the floor. Dark mode ships in v1 and every surface is verified in both themes.
+ Dark mode is in v1 scope. Both themes pass WCAG AA on all surfaces. Colour is never the only signal, per WCAG 1.4.1.
+ | Text | Background | Ratio | Level
+
+ | #e8f7f6 primary | #0d1f20 base | 14.2:1 | AAA
+ | #62d7b8 secondary | #0d1f20 base | 8.1:1 | AAA
+ | #999999 tertiary | #0d1f20 base | 4.7:1 | AA
+ | #27bbaf interactive | #0d1f20 base | 4.9:1 | AA
+ | #ffcb99 warn text | #2a1e0f warn bg | 6.2:1 | AAA
+
+ | Element | Colour signal | Non-colour signal
+
+ | Gate verdict | green / yellow / red | Text PASS / WARN / FAIL always shown
+ | Lifecycle state | multiple colours | Text emerging … dead always shown
+ | Impact magnitude | red / orange / teal | Text HIGH / MEDIUM / LOW always shown
+ | Pillar tile health | colour bar | Numeric percent + check / flag icon
+ | Active nav item | background fill | font-weight 600 also applied
+ | Form error | red border | Error message text below the field
+
+#### Flash prevention
+ A synchronous inline script reads the stored theme and sets data-theme before first paint, so dark users never see a light flash.
+
+#### Keyboard + focus
+ Focus traps in modals, Esc to close, focus returns to the trigger. Drilldowns move focus to the page H1. A 2px teal focus ring on every interactive element.
+
+#### Screen readers
+ Degraded banners use role=alert; status uses aria-live polite. Cost meter is a labelled progressbar. Skip-to-content link on every page.
+
+ © 2026 Zennify · Confidential · Capability Intelligence Agent UI/UX brief

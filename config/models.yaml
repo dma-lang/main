@@ -1,0 +1,47 @@
+# Gemini / Vertex AI model pins and cost levers.
+# Pinned by version (NEVER "-latest" in prod). All calls go through backend/app/intelligence/gemini.py.
+# Access via Vertex AI in us-central1 using runtime/job SA IAM (roles/aiplatform.user) — no long-lived keys.
+# NOTE: gemini-3.1-pro-preview is a Preview model (approved for v1); swap to Gemini Pro GA here when released.
+
+provider: vertex_ai
+project: digital-maturity-assessor
+region: us-central1
+
+# Task tier -> pinned model id. The router (intelligence/router.py) escalates only when a gate/eval demands it.
+tiers:
+  classify:    gemini-3.1-flash-lite     # news/vendor typing, story-field extraction (high-volume, low-cost)
+  enrich:      gemini-3.5-flash          # canonicalise raw story / SOW / news row
+  match:       gemini-3.5-flash          # story/SOW/news -> subcap, native Google Search grounding
+  ground:      gemini-3.5-flash          # grounded retrieval-backed answers (chat)
+  synthesize:  gemini-3.1-pro-preview    # quarterly digest, benchmark verdicts, adversarial review (PREVIEW)
+  adversarial: gemini-3.1-pro-preview    # red-team / argue-the-opposite pass
+
+embedding:
+  model: gemini-embedding-001            # single shared space
+  dimensions: 768                        # MRL truncation; matches cat_<v>.subcap.embedding vector(768)
+
+# Resilient wrapper behaviour (enforced in code).
+retry:
+  retryable_status: [429, 500, 502, 503, 504]
+  max_attempts: 5
+  backoff_initial_seconds: 1
+  backoff_max_seconds: 16
+  jitter: true
+  no_retry_status: [400, 401, 403, 404]  # 4xx (except 429) are not retried; 401/403 alert on-call
+on_max_tokens: double_and_retry          # structured output returns empty on MAX_TOKENS
+on_safety: route_to_review               # never crash on a SAFETY block
+
+# Cost levers (G8 budget gate + F11 cost meter enforce these).
+cost:
+  monthly_envelope_usd: 8000             # cost meter throttles non-essential work as this is approached
+  alert_at_pct: 80
+  throttle_at_pct: 90
+  use_batch_for_async: true              # Batch API ~ -50% for <24h ingest/enrichment
+  context_cache: true                    # ~ -90% on cached input (taxonomy, long system prompts)
+  pro_input_cliff_tokens: 200000         # prune context to stay under the Pro >200k input price tier
+  grounded_search_free_monthly: 5000     # then ~ $14 / 1,000 queries; metered under G8
+  max_output_tokens_default: 2048
+  thinking_level_default: low            # higher only for synthesize/adversarial
+
+# Hermetic dev: when LLM_MODE=hermetic the wrapper returns deterministic stubs (no provider calls, no spend).
+hermetic_mode_env: LLM_MODE
