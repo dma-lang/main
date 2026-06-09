@@ -10,6 +10,8 @@ import {
   type StoryPage,
   type SubcapDetail,
   type SubcapEnrichment,
+  type StoryLibraryPage,
+  type StoryLibraryQuery,
   type SubcapNode,
   type UseCasePage,
   type UseCaseQuery,
@@ -91,5 +93,12 @@ export const useUseCases = (version: string, params: UseCaseQuery) =>
     queryKey: ['use-cases', version, params],
     queryFn: () => api.useCases(version, params),
     enabled: !!version,
+    placeholderData: (prev) => prev,
+  });
+
+export const useStoryLibrary = (params: StoryLibraryQuery) =>
+  useQuery<StoryLibraryPage>({
+    queryKey: ['story-library', params],
+    queryFn: () => api.stories(params),
     placeholderData: (prev) => prev,
   });

@@ -111,3 +111,15 @@ def test_unmapped_subcap_has_no_stories(client: TestClient) -> None:
     r = client.get("/api/catalogue/v7/subcaps/P1C1.1.1/stories")
     assert r.status_code == 200
     assert r.json()["total"] == 0
+
+
+@needs_db
+def test_story_library_endpoint(client: TestClient) -> None:
+    body = client.get("/api/stories?size=5").json()
+    assert body["total"] == 14406  # the canonical corpus (synthetic excluded)
+    assert (body["high"], body["medium"], body["low"]) == (12417, 1873, 116)
+    assert len(body["buckets"]) == 6 and sum(body["buckets"]) == 14406
+    assert len(body["items"]) == 5
+    # filters narrow the analysis set
+    hi = client.get("/api/stories?conf=HIGH&pillar=P3&min_composite=2.5&size=1").json()
+    assert 0 < hi["total"] < body["total"]

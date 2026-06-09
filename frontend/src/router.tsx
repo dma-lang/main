@@ -6,6 +6,7 @@ import { createHashRouter, Navigate } from 'react-router-dom';
 import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
 import { MissionControl } from './pages/MissionControl';
 import { Platforms } from './pages/Platforms';
+import { StoryLibrary } from './pages/StoryLibrary';
 import { SubcapWorkbench } from './pages/SubcapWorkbench';
 import { Surface } from './pages/Surface';
 import { UseCases } from './pages/UseCases';
@@ -23,6 +24,7 @@ const LIVE: Record<string, ReactElement> = {
   versions: <VersionTimeline />,
   platforms: <Platforms />,
   'use-cases': <UseCases />,
+  stories: <StoryLibrary />,
 };
 
 export const router = createHashRouter([

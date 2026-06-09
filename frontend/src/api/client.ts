@@ -174,6 +174,41 @@ export interface UseCaseQuery {
   size?: number;
 }
 
+export interface StoryLibraryRow {
+  story_key: string;
+  summary: string | null;
+  subcap_id: string;
+  subcap_name: string | null;
+  pillar: string | null;
+  sv: string | null;
+  composite_score: number | null;
+  confidence_level: string | null;
+  ac_score: number | null;
+  sd_score: number | null;
+  story_score: number | null;
+}
+
+export interface StoryLibraryPage {
+  total: number;
+  page: number;
+  size: number;
+  items: StoryLibraryRow[];
+  high: number;
+  medium: number;
+  low: number;
+  buckets: number[];
+}
+
+export interface StoryLibraryQuery {
+  pillar?: string;
+  conf?: string;
+  sv?: string;
+  min_composite?: number;
+  q?: string;
+  page?: number;
+  size?: number;
+}
+
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
@@ -227,5 +262,16 @@ export const api = {
     qs.set('page', String(p.page ?? 1));
     qs.set('size', String(p.size ?? 12));
     return http<UseCasePage>(`/api/catalogue/${v}/use-cases?${qs.toString()}`);
+  },
+  stories: (p: StoryLibraryQuery): Promise<StoryLibraryPage> => {
+    const qs = new URLSearchParams();
+    if (p.pillar) qs.set('pillar', p.pillar);
+    if (p.conf) qs.set('conf', p.conf);
+    if (p.sv) qs.set('sv', p.sv);
+    if (p.min_composite) qs.set('min_composite', String(p.min_composite));
+    if (p.q) qs.set('q', p.q);
+    qs.set('page', String(p.page ?? 1));
+    qs.set('size', String(p.size ?? 10));
+    return http<StoryLibraryPage>(`/api/stories?${qs.toString()}`);
   },
 };
