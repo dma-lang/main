@@ -5,18 +5,28 @@ over the shared ``vector(768)`` space) layers on once the embedding column is po
 shape stays the same so chat / SOW / story matching share one retrieval contract.
 """
 
-from __future__ import annotations
-
+import re
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
+
+_TOKEN = re.compile(r"[A-Za-z0-9]{2,}")
+
+
+def _or_query(question: str) -> str:
+    """Turn a question into an OR tsquery (recall over AND); websearch_to_tsquery parses it safely
+    and drops stopwords, so a broad question still matches and ranks by term overlap."""
+    return " OR ".join(_TOKEN.findall(question))
 
 
 async def retrieve(
     conn: AsyncConnection, schema: str, query: str, k: int = 5
 ) -> list[dict[str, Any]]:
     """Top-k subcaps for ``query`` in ``schema`` by lexical rank. Empty result => not grounded."""
+    web = _or_query(query)
+    if not web:
+        return []
     sql = text(
         "SELECT s.subcap_id, s.name, s.description, left(s.subcap_id, 2) AS pillar, "
         "ts_rank(s.search, websearch_to_tsquery('english', :q)) AS rank "
@@ -24,5 +34,5 @@ async def retrieve(
         "WHERE s.search @@ websearch_to_tsquery('english', :q) "
         "ORDER BY rank DESC, s.subcap_id LIMIT :k"
     )
-    rows = (await conn.execute(sql, {"q": query, "k": k})).mappings().all()
+    rows = (await conn.execute(sql, {"q": web, "k": k})).mappings().all()
     return [dict(r) for r in rows]

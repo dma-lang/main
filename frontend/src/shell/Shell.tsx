@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 
+import { ReasoningModal } from '../components/ReasoningModal';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 import { Header } from './Header';
@@ -18,10 +19,21 @@ export function Shell() {
   const [collapsed, setCollapsed] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [reasoningId, setReasoningId] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  // cia-reason carries a reasoning chain_id (string); the modal is the universal audit window.
+  useEffect(() => {
+    const h = (e: Event) => {
+      const detail = (e as CustomEvent<unknown>).detail;
+      if (typeof detail === 'string' && detail) setReasoningId(detail);
+    };
+    window.addEventListener('cia-reason', h);
+    return () => window.removeEventListener('cia-reason', h);
+  }, []);
 
   useEffect(() => {
     const h = (e: Event) => {
@@ -73,6 +85,9 @@ export function Shell() {
           </div>
         ))}
       </div>
+      {reasoningId && (
+        <ReasoningModal chainId={reasoningId} onClose={() => setReasoningId(null)} />
+      )}
     </div>
   );
 }

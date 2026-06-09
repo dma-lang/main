@@ -4,8 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   api,
   type CatalogueSummary,
+  type ChatResponse,
   type LifecycleSummary,
   type Me,
+  type ReasoningChain,
   type PlatformDetail,
   type PlatformRow,
   type StoryPage,
@@ -102,6 +104,18 @@ export const useLifecycle = (version: string) =>
     queryKey: ['lifecycle', version],
     queryFn: () => api.lifecycle(version),
     enabled: !!version,
+  });
+
+export const useChat = () =>
+  useMutation<ChatResponse, Error, { question: string; version: string }>({
+    mutationFn: ({ question, version }) => api.chat(question, version),
+  });
+
+export const useReasoning = (chainId: string | null) =>
+  useQuery<ReasoningChain>({
+    queryKey: ['reasoning', chainId],
+    queryFn: () => api.reasoning(chainId ?? ''),
+    enabled: !!chainId,
   });
 
 export const useUseCases = (version: string, params: UseCaseQuery) =>

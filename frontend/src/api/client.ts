@@ -128,6 +128,52 @@ export interface SubcapConnections {
   siblings: ConnectionSibling[];
 }
 
+export interface ChatCitation {
+  subcap_id: string;
+  name: string;
+}
+
+export interface ChatResponse {
+  grounded: boolean;
+  answer: string;
+  citations: ChatCitation[];
+  claim_label: string | null;
+  source_tier: string | null;
+  source: string | null;
+  ers: number;
+  chain_id: string | null;
+}
+
+export interface EvidenceRow {
+  claim_label: string;
+  tier: string;
+  text: string;
+}
+
+export interface ReasoningStep {
+  kind: string;
+  text: string;
+  evidence: EvidenceRow[];
+}
+
+export interface GateCheck {
+  name: string;
+  state: string;
+  detail: string;
+}
+
+export interface ReasoningChain {
+  chain_id: string;
+  title: string;
+  claim_label: string | null;
+  verdict: string | null;
+  cost: string;
+  model: string | null;
+  created_at: string | null;
+  steps: ReasoningStep[];
+  checks: GateCheck[];
+}
+
 export interface LifecycleSubcap {
   id: string;
   name: string;
@@ -292,6 +338,10 @@ export const api = {
   vendors: (v: string): Promise<VendorRow[]> => http<VendorRow[]>(`/api/catalogue/${v}/vendors`),
   lifecycle: (v: string): Promise<LifecycleSummary> =>
     http<LifecycleSummary>(`/api/catalogue/${v}/lifecycle`),
+  chat: (question: string, version: string): Promise<ChatResponse> =>
+    http<ChatResponse>('/api/chat', { method: 'POST', body: JSON.stringify({ question, version }) }),
+  reasoning: (chainId: string): Promise<ReasoningChain> =>
+    http<ReasoningChain>(`/api/reasoning/${chainId}`),
   useCases: (v: string, p: UseCaseQuery): Promise<UseCasePage> => {
     const qs = new URLSearchParams();
     if (p.pillar) qs.set('pillar', p.pillar);
