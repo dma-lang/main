@@ -5,6 +5,7 @@ import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
 import { MissionControl } from './pages/MissionControl';
+import { SubcapWorkbench } from './pages/SubcapWorkbench';
 import { Surface } from './pages/Surface';
 import { NAV } from './shell/nav';
 import { Shell } from './shell/Shell';
@@ -15,6 +16,7 @@ const accessIds = ['settings', 'schema-mapping', 'onboarding', 'subcap'];
 const LIVE: Record<string, ReactElement> = {
   'mission-control': <MissionControl />,
   explorer: <CapabilityWorkbench />,
+  subcap: <SubcapWorkbench />,
 };
 
 export const router = createHashRouter([
@@ -27,7 +29,7 @@ export const router = createHashRouter([
         path: id,
         element: LIVE[id] ?? <Surface id={id} />,
       })),
-      { path: 'subcap/:id', element: <Surface id="subcap" /> },
+      { path: 'subcap/:id', element: <SubcapWorkbench /> },
       { path: '*', element: <Surface id="not-found" /> },
     ],
   },
