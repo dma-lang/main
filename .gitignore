@@ -25,6 +25,7 @@ build/
 # ---- Node / frontend ----
 node_modules/
 frontend/dist/
+backend/static/
 frontend/.vite/
 *.tsbuildinfo
 pnpm-debug.log*

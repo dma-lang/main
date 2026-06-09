@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **F10 — frontend shell**: the React/TS shell ported faithfully from the prototype — the full
+  stylesheet (lifted verbatim), the 9-group A–I sidebar, the header (pillar/SV/lens, data-driven
+  version toggle, admin view, cost meter, theme), the shared primitives (`Claim/Tier/Mag/LifeChip/
+  Page/Empty/Dropdown/Icon`), the `cia-*` event contract, hash routing, Zustand + TanStack Query
+  wired to `/api/me` (identity/admin/preferences) and `/api/versions`. Surfaces are placeholders
+  until Stage 2. Verified by building, serving from FastAPI same-origin, and headless-rendering the
+  shell (light + dark) on live data.
 - **F9 — API conventions & trust envelope**: the mandatory `TrustEnvelope`
   (claim_label / source_tier / ers / chain_id) + DB-mirrored enums; generic `Page[T]` pagination;
   a single error envelope (`{"error": {"code", "message"}}`); version resolution

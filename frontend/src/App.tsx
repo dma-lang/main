@@ -1,25 +1,43 @@
-import { APP_VERSION } from './version';
+// App entry: query provider + auth gate. /api/me drives identity (is_admin, preferences); on 401 the
+// Login screen shows (hermetic dev auto-authenticates). Preferences hydrate the UI store on load.
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { RouterProvider } from 'react-router-dom';
 
-// Stage 0 placeholder shell. The real shell (header + 9-group sidebar A–I, version toggle,
-// the 6 propagating filters, trust components, and the 30 surfaces) is built in Stage 1+ (F10),
-// matching docs/specs/prototype/Capability_Intelligence_Agent.html.
+import { useMe } from './api/queries';
+import { Login } from './Login';
+import { router } from './router';
+import { useUi } from './state/store';
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { staleTime: 30_000, retry: false } },
+});
+
+function Gate() {
+  const me = useMe();
+  const hydrate = useUi((s) => s.hydrateFromMe);
+
+  useEffect(() => {
+    if (me.data) hydrate(me.data.preferences, me.data.is_admin);
+  }, [me.data, hydrate]);
+
+  if (me.isLoading) {
+    return (
+      <div className="muted" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+        Loading…
+      </div>
+    );
+  }
+  if (me.isError || !me.data) {
+    return <Login onRetry={() => void me.refetch()} />;
+  }
+  return <RouterProvider router={router} />;
+}
+
 export default function App() {
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        placeItems: 'center',
-        padding: 'var(--sp-8)',
-      }}
-    >
-      <div style={{ maxWidth: 560 }}>
-        <h1 style={{ color: 'var(--text-primary)' }}>Capability Intelligence Agent</h1>
-        <p style={{ color: 'var(--text-secondary)' }}>
-          Scaffold (Stage&nbsp;0). Surfaces are built in reviewable increments — see CLAUDE.md and the
-          approved plan. App version {APP_VERSION}.
-        </p>
-      </div>
-    </main>
+    <QueryClientProvider client={queryClient}>
+      <Gate />
+    </QueryClientProvider>
   );
 }
