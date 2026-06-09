@@ -33,16 +33,28 @@ def test_provision_seeds_v7_catalogue() -> None:
             assert report["subcaps"] == 851
             assert report["pillars"] == 4
             assert report["categories"] == 16
+            # Catalogue enrichment (from the comprehensive pillar workbooks) is seeded too.
+            assert report["use_cases"] > 0
+            assert report["platforms"] > 0
+            assert report["maturity"] > 0
             engine = db.get_engine()
             assert engine is not None
             async with engine.connect() as conn:
                 subcaps = (await conn.execute(text("SELECT count(*) FROM cat_v7.subcap"))).scalar()
+                use_cases = (
+                    await conn.execute(text("SELECT count(*) FROM cat_v7.use_case"))
+                ).scalar()
+                links = (
+                    await conn.execute(text("SELECT count(*) FROM cat_v7.subcap_platform"))
+                ).scalar()
                 version = (
                     await conn.execute(
                         text("SELECT status FROM control.catalogue_version WHERE version_id = 'v7'")
                     )
                 ).scalar()
             assert int(subcaps or 0) == 851
+            assert int(use_cases or 0) > 0
+            assert int(links or 0) > 0
             assert version == "provisioned"
         finally:
             engine = db.get_engine()

@@ -15,18 +15,61 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app import db
 
 _BACKEND = Path(__file__).resolve().parents[2]  # backend/ (app/services/provision.py -> backend)
 _SEED_DIR = _BACKEND / "seed"
 _TEMPLATE = _BACKEND / "alembic" / "sql" / "dataplane_template.sql"
+_ENRICH = _SEED_DIR / "catalogue_v7_enrichment.json.gz"
 
 
 def _load_catalogue() -> dict[str, Any]:
     with gzip.open(_SEED_DIR / "catalogue_v7.json.gz", "rt", encoding="utf-8") as fh:
         data: dict[str, Any] = json.load(fh)
     return data
+
+
+def _load_enrichment() -> dict[str, list[dict[str, Any]]] | None:
+    """Optional per-version catalogue enrichment (use cases, L3 platforms, personas, maturity),
+    extracted from the comprehensive pillar workbooks. Absent => base catalogue only (resilient)."""
+    if not _ENRICH.exists():
+        return None
+    with gzip.open(_ENRICH, "rt", encoding="utf-8") as fh:
+        data: dict[str, list[dict[str, Any]]] = json.load(fh)
+    return data
+
+
+async def _seed_enrichment(
+    conn: AsyncConnection, schema: str, e: dict[str, list[dict[str, Any]]]
+) -> None:
+    """Seed the enrichment tables in FK order, within the provisioning transaction."""
+
+    async def ins(rows: list[dict[str, Any]], cols: str, table: str) -> None:
+        if not rows:
+            return
+        names = [c.strip() for c in cols.split(",")]
+        binds = ", ".join(f":{n}" for n in names)
+        await conn.execute(text(f"INSERT INTO {schema}.{table} ({cols}) VALUES ({binds})"), rows)
+
+    await ins(e.get("vendors", []), "vendor_id, name", "vendor")
+    await ins(
+        e.get("l3_platforms", []),
+        "l3_id, vendor_id, name, category, description, reference_url",
+        "l3_platform",
+    )
+    await ins(e.get("personas", []), "persona_id, canonical_name, role_description", "persona")
+    await ins(
+        e.get("use_cases", []), "use_case_id, subcap_id, archetype, name, description", "use_case"
+    )
+    await ins(e.get("subcap_platforms", []), "subcap_id, l3_id", "subcap_platform")
+    await ins(e.get("subcap_personas", []), "subcap_id, persona_id", "subcap_persona")
+    await ins(
+        e.get("maturity_descriptors", []),
+        "descriptor_id, subcap_id, level, descriptor, features",
+        "maturity_descriptor",
+    )
 
 
 def _statements(sql: str) -> Iterator[str]:
@@ -80,6 +123,7 @@ async def bring_version_online(
         raise RuntimeError("database not initialised")
     cat = _load_catalogue()
     pillars, categories, caps, subcaps = _derive(cat)
+    enrich = _load_enrichment()
     schema = f"cat_{version_id}"
     ddl = _TEMPLATE.read_text(encoding="utf-8").replace("{schema}", schema)
 
@@ -117,6 +161,8 @@ async def bring_version_online(
             ),
             subcaps,
         )
+        if enrich:
+            await _seed_enrichment(conn, schema, enrich)
         await conn.execute(
             text(
                 "INSERT INTO control.catalogue_version (version_id, label, schema_name, status) "
@@ -134,4 +180,8 @@ async def bring_version_online(
         "categories": len(categories),
         "capabilities": len(caps),
         "subcaps": len(subcaps),
+        "use_cases": len(enrich["use_cases"]) if enrich else 0,
+        "platforms": len(enrich["l3_platforms"]) if enrich else 0,
+        "personas": len(enrich["personas"]) if enrich else 0,
+        "maturity": len(enrich["maturity_descriptors"]) if enrich else 0,
     }

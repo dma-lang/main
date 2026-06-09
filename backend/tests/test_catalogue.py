@@ -71,11 +71,12 @@ def test_subcap_detail(client: TestClient) -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["id"] == sid
-    # Live counts present and truthfully zero on a freshly provisioned version (enrichment / F5
-    # carry-forward seed these); also exercises the cross-schema story_catalogue_link subquery.
-    assert body["n_use_cases"] == 0
+    # Catalogue enrichment seeded by provisioning lights up the use-case / platform counts; the
+    # story count stays 0 until carry-forward runs (also exercises the cross-schema
+    # story_catalogue_link subquery, which must resolve to zero here).
+    assert body["n_use_cases"] > 0
+    assert body["n_platforms"] > 0
     assert body["n_stories"] == 0
-    assert body["n_platforms"] == 0
 
 
 @needs_db
