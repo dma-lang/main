@@ -5,9 +5,11 @@ import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
 import { Chat } from './pages/Chat';
+import { Gates } from './pages/Gates';
 import { Lifecycle } from './pages/Lifecycle';
 import { MissionControl } from './pages/MissionControl';
 import { Platforms } from './pages/Platforms';
+import { QA } from './pages/QA';
 import { StoryLibrary } from './pages/StoryLibrary';
 import { SubcapWorkbench } from './pages/SubcapWorkbench';
 import { Suggestions } from './pages/Suggestions';
@@ -31,6 +33,8 @@ const LIVE: Record<string, ReactElement> = {
   lifecycle: <Lifecycle />,
   chat: <Chat />,
   suggestions: <Suggestions />,
+  gates: <Gates />,
+  qa: <QA />,
 };
 
 export const router = createHashRouter([

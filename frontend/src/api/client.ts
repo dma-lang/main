@@ -201,6 +201,43 @@ export interface ApplyOut {
   after: string | null;
 }
 
+export interface GateStat {
+  id: string;
+  name: string;
+  pass_pct: number;
+  warn_pct: number;
+  fail_pct: number;
+  score: number;
+  runs: number;
+}
+
+export interface GatesLog {
+  gates: GateStat[];
+  total_runs: number;
+  pass_runs: number;
+  fail_runs: number;
+}
+
+export interface QaMetrics {
+  gate_pass_rate: number | null;
+  total_runs: number;
+  reasoning_chains: number;
+  applied: number;
+  hallucination_rate: number | null;
+  retrieval_mrr: number | null;
+  spend_usd: number | null;
+  envelope_usd: number;
+}
+
+export interface AuditRow {
+  audit_id: number;
+  actor: string | null;
+  action: string;
+  target_ref: string | null;
+  at: string | null;
+  meta: Record<string, unknown>;
+}
+
 export interface LifecycleSubcap {
   id: string;
   name: string;
@@ -403,4 +440,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ reason }),
     }),
+  gates: (): Promise<GatesLog> => http<GatesLog>('/api/gates'),
+  qaMetrics: (): Promise<QaMetrics> => http<QaMetrics>('/api/qa/metrics'),
+  auditLog: (): Promise<AuditRow[]> => http<AuditRow[]>('/api/audit-log'),
 };

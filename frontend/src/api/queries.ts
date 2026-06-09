@@ -3,9 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   api,
+  type AuditRow,
   type CatalogueSummary,
   type ChatResponse,
+  type GatesLog,
   type LifecycleSummary,
+  type QaMetrics,
   type Me,
   type ReasoningChain,
   type PlatformDetail,
@@ -124,6 +127,14 @@ export const useSuggestions = (status: string) =>
     queryKey: ['suggestions', status],
     queryFn: () => api.suggestions(status),
   });
+
+export const useGates = () => useQuery<GatesLog>({ queryKey: ['gates'], queryFn: api.gates });
+
+export const useQaMetrics = () =>
+  useQuery<QaMetrics>({ queryKey: ['qa-metrics'], queryFn: api.qaMetrics });
+
+export const useAuditLog = () =>
+  useQuery<AuditRow[]>({ queryKey: ['audit-log'], queryFn: api.auditLog });
 
 export function useSuggestionActions() {
   const qc = useQueryClient();
