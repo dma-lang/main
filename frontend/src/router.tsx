@@ -5,6 +5,7 @@ import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
 import { MissionControl } from './pages/MissionControl';
+import { Platforms } from './pages/Platforms';
 import { SubcapWorkbench } from './pages/SubcapWorkbench';
 import { Surface } from './pages/Surface';
 import { VersionTimeline } from './pages/VersionTimeline';
@@ -19,6 +20,7 @@ const LIVE: Record<string, ReactElement> = {
   explorer: <CapabilityWorkbench />,
   subcap: <SubcapWorkbench />,
   versions: <VersionTimeline />,
+  platforms: <Platforms />,
 };
 
 export const router = createHashRouter([
@@ -32,6 +34,7 @@ export const router = createHashRouter([
         element: LIVE[id] ?? <Surface id={id} />,
       })),
       { path: 'subcap/:id', element: <SubcapWorkbench /> },
+      { path: 'platforms/:id', element: <Platforms /> },
       { path: '*', element: <Surface id="not-found" /> },
     ],
   },

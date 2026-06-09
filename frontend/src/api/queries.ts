@@ -5,10 +5,13 @@ import {
   api,
   type CatalogueSummary,
   type Me,
+  type PlatformDetail,
+  type PlatformRow,
   type StoryPage,
   type SubcapDetail,
   type SubcapEnrichment,
   type SubcapNode,
+  type VendorRow,
   type VersionInfo,
 } from './client';
 
@@ -57,5 +60,26 @@ export const useSubcapEnrichment = (version: string, id: string | null) =>
   useQuery<SubcapEnrichment>({
     queryKey: ['subcap-enrichment', version, id],
     queryFn: () => api.subcapEnrichment(version, id ?? ''),
+    enabled: !!version && !!id,
+  });
+
+export const usePlatforms = (version: string) =>
+  useQuery<PlatformRow[]>({
+    queryKey: ['platforms', version],
+    queryFn: () => api.platforms(version),
+    enabled: !!version,
+  });
+
+export const useVendors = (version: string) =>
+  useQuery<VendorRow[]>({
+    queryKey: ['vendors', version],
+    queryFn: () => api.vendors(version),
+    enabled: !!version,
+  });
+
+export const usePlatform = (version: string, id: string | null) =>
+  useQuery<PlatformDetail>({
+    queryKey: ['platform', version, id],
+    queryFn: () => api.platform(version, id ?? ''),
     enabled: !!version && !!id,
   });

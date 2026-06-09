@@ -132,6 +132,43 @@ class SubcapEnrichment(BaseModel):
     maturity: list[Maturity]
 
 
+class PlatformRow(BaseModel):
+    l3_id: str
+    name: str
+    vendor: str | None = None
+    category: str | None = None
+    subcap_count: int
+    p1: int
+    p2: int
+    p3: int
+    p4: int
+    stories: int
+
+
+class PlatformSubcap(BaseModel):
+    id: str
+    pillar: str
+    name: str
+
+
+class PlatformDetail(BaseModel):
+    l3_id: str
+    name: str
+    vendor: str | None = None
+    category: str | None = None
+    subcaps: list[PlatformSubcap]
+
+
+class VendorRow(BaseModel):
+    vendor: str
+    plats: int
+    subcap_count: int
+    p1: int
+    p2: int
+    p3: int
+    p4: int
+
+
 _JOINS = (
     "FROM {s}.subcap s "
     "JOIN {s}.capability cap ON cap.capability_id = s.capability_id "
@@ -275,3 +312,79 @@ async def summary(
         total = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap"))).scalar()
     pillars = [PillarSummary.model_validate(dict(r)) for r in rows]
     return CatalogueSummary(version_id=v.version_id, total_subcaps=int(total or 0), pillars=pillars)
+
+
+_PLATFORMS_SQL = (
+    "SELECT l.l3_id, l.name, v.name AS vendor, l.category, "
+    "count(DISTINCT sp.subcap_id) AS subcap_count, "
+    "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P1') AS p1, "
+    "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P2') AS p2, "
+    "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P3') AS p3, "
+    "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P4') AS p4, "
+    "coalesce(sum(stc.n), 0)::int AS stories "
+    "FROM {s}.l3_platform l "
+    "LEFT JOIN {s}.vendor v ON v.vendor_id = l.vendor_id "
+    "LEFT JOIN {s}.subcap_platform sp ON sp.l3_id = l.l3_id "
+    "LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
+    "WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = sp.subcap_id "
+    "GROUP BY l.l3_id, l.name, v.name, l.category "
+    "ORDER BY subcap_count DESC, l.l3_id"
+)
+
+
+@router.get("/{version}/platforms")
+async def list_platforms(
+    version: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> list[PlatformRow]:
+    """L3 platforms with per-pillar subcap coverage + total stories (Platform catalog)."""
+    v = await resolve_version(version)
+    sql = text(_PLATFORMS_SQL.format(s=_schema(v)))
+    async with _engine().connect() as conn:
+        rows = (await conn.execute(sql, {"ver": v.version_id})).mappings().all()
+    return [PlatformRow.model_validate(dict(r)) for r in rows]
+
+
+@router.get("/{version}/platforms/{l3_id}")
+async def platform_detail(
+    version: str, l3_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> PlatformDetail:
+    s = _schema(await resolve_version(version))
+    meta_sql = text(
+        f"SELECT l.l3_id, l.name, v.name AS vendor, l.category FROM {s}.l3_platform l "
+        f"LEFT JOIN {s}.vendor v ON v.vendor_id = l.vendor_id WHERE l.l3_id = :lid"
+    )
+    subs_sql = text(
+        f"SELECT sp.subcap_id AS id, left(sp.subcap_id, 2) AS pillar, s.name "
+        f"FROM {s}.subcap_platform sp JOIN {s}.subcap s ON s.subcap_id = sp.subcap_id "
+        "WHERE sp.l3_id = :lid ORDER BY sp.subcap_id"
+    )
+    async with _engine().connect() as conn:
+        meta = (await conn.execute(meta_sql, {"lid": l3_id})).mappings().first()
+        if meta is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"platform '{l3_id}' not found")
+        subs = (await conn.execute(subs_sql, {"lid": l3_id})).mappings().all()
+    return PlatformDetail(
+        **dict(meta), subcaps=[PlatformSubcap.model_validate(dict(r)) for r in subs]
+    )
+
+
+@router.get("/{version}/vendors")
+async def list_vendors(
+    version: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> list[VendorRow]:
+    """Per-vendor deduped subcap coverage by pillar (the Platform catalog heatmap)."""
+    s = _schema(await resolve_version(version))
+    sql = text(
+        "SELECT coalesce(v.name, 'Unattributed') AS vendor, count(DISTINCT l.l3_id) AS plats, "
+        "count(DISTINCT sp.subcap_id) AS subcap_count, "
+        "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P1') AS p1, "
+        "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P2') AS p2, "
+        "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P3') AS p3, "
+        "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P4') AS p4 "
+        f"FROM {s}.l3_platform l LEFT JOIN {s}.vendor v ON v.vendor_id = l.vendor_id "
+        f"LEFT JOIN {s}.subcap_platform sp ON sp.l3_id = l.l3_id "
+        "GROUP BY coalesce(v.name, 'Unattributed') ORDER BY subcap_count DESC, vendor"
+    )
+    async with _engine().connect() as conn:
+        rows = (await conn.execute(sql)).mappings().all()
+    return [VendorRow.model_validate(dict(r)) for r in rows]

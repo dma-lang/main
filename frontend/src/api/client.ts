@@ -110,6 +110,43 @@ export interface SubcapEnrichment {
   maturity: Maturity[];
 }
 
+export interface PlatformRow {
+  l3_id: string;
+  name: string;
+  vendor: string | null;
+  category: string | null;
+  subcap_count: number;
+  p1: number;
+  p2: number;
+  p3: number;
+  p4: number;
+  stories: number;
+}
+
+export interface PlatformSubcap {
+  id: string;
+  pillar: string;
+  name: string;
+}
+
+export interface PlatformDetail {
+  l3_id: string;
+  name: string;
+  vendor: string | null;
+  category: string | null;
+  subcaps: PlatformSubcap[];
+}
+
+export interface VendorRow {
+  vendor: string;
+  plats: number;
+  subcap_count: number;
+  p1: number;
+  p2: number;
+  p3: number;
+  p4: number;
+}
+
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
@@ -149,4 +186,9 @@ export const api = {
     http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
   subcapEnrichment: (v: string, id: string): Promise<SubcapEnrichment> =>
     http<SubcapEnrichment>(`/api/catalogue/${v}/subcaps/${id}/enrichment`),
+  platforms: (v: string): Promise<PlatformRow[]> =>
+    http<PlatformRow[]>(`/api/catalogue/${v}/platforms`),
+  platform: (v: string, id: string): Promise<PlatformDetail> =>
+    http<PlatformDetail>(`/api/catalogue/${v}/platforms/${id}`),
+  vendors: (v: string): Promise<VendorRow[]> => http<VendorRow[]>(`/api/catalogue/${v}/vendors`),
 };

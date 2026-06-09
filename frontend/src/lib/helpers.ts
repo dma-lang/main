@@ -43,3 +43,13 @@ export const LIFE_LABEL: Record<string, string> = {
 export const pillarOf = (id: string): string => (id ? id.slice(0, 2) : '');
 
 export const clamp = (n: number, a: number, b: number): number => Math.max(a, Math.min(b, n));
+
+// Heat scale (pale -> deep teal), matching the prototype's heatmap cells. t in [0,1].
+export function heatBg(t: number): string {
+  const x = clamp(t, 0, 1);
+  if (x <= 0) return 'var(--surface-sunken)';
+  const a = [228, 245, 243];
+  const b = [10, 143, 134]; // #0a8f86
+  const c = a.map((v, i) => Math.round(v + (b[i] - v) * x));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+}

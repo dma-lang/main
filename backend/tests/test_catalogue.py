@@ -102,6 +102,20 @@ def test_summary(client: TestClient) -> None:
 
 
 @needs_db
+def test_platforms_and_vendors(client: TestClient) -> None:
+    plats = client.get("/api/catalogue/v7/platforms").json()
+    assert len(plats) > 0
+    top = plats[0]
+    assert top["subcap_count"] > 0
+    assert {"l3_id", "name", "vendor", "p1", "p2", "p3", "p4", "stories"} <= set(top)
+    detail = client.get(f"/api/catalogue/v7/platforms/{top['l3_id']}").json()
+    assert detail["l3_id"] == top["l3_id"]
+    assert len(detail["subcaps"]) == top["subcap_count"]
+    vendors = client.get("/api/catalogue/v7/vendors").json()
+    assert len(vendors) > 0 and vendors[0]["subcap_count"] > 0
+
+
+@needs_db
 def test_unknown_version_404(client: TestClient) -> None:
     r = client.get("/api/catalogue/v999/subcaps")
     assert r.status_code == 404
