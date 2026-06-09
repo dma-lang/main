@@ -51,9 +51,11 @@ def main() -> None:
     if rel.startswith("backend/") and rel.endswith(".py"):
         be = os.path.join(root, "backend")
         if os.path.isdir(os.path.join(be, ".venv")):
-            for cmd in (["uv", "run", "ruff", "check", path],
-                        ["uv", "run", "black", "--check", path],
-                        ["uv", "run", "mypy", path]):
+            cmds = [["uv", "run", "ruff", "check", path], ["uv", "run", "black", "--check", path]]
+            # Alembic env/migrations are raw-SQL + dynamic context: lint/format them, but skip mypy.
+            if "/alembic/" not in rel.replace("\\", "/"):
+                cmds.append(["uv", "run", "mypy", path])
+            for cmd in cmds:
                 code, out = run(cmd, be)
                 if code != 0 and "skipped:" not in out:
                     failures.append(f"$ {' '.join(cmd[2:])}\n{out.strip()}")

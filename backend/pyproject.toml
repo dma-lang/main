@@ -6,10 +6,14 @@ requires-python = ">=3.12"
 # F1 adds the web framework + settings. F3 adds sqlalchemy[asyncio], asyncpg, pgvector,
 # alembic; F6/F7 add google-genai. uv.lock is committed and CI installs with `--frozen`.
 dependencies = [
+  "alembic>=1.13",
+  "asyncpg>=0.29",
   "fastapi>=0.115",
-  "uvicorn[standard]>=0.30",
+  "psycopg[binary]>=3.2",
   "pydantic-settings>=2.5",
   "pyyaml>=6.0",
+  "sqlalchemy[asyncio]>=2.0",
+  "uvicorn[standard]>=0.30",
 ]
 
 [dependency-groups]

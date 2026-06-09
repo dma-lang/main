@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app import db
 from app._version import APP_VERSION
 from app.settings import Settings, get_settings
 
@@ -32,10 +33,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.app_env,
         settings.llm_mode,
     )
-    # F3 will create the async DB engine here.
+    db.init_engine()  # open the bounded async pool (no-op without DATABASE_URL)
     yield
-    # Graceful shutdown within the SIGTERM window (F3 will dispose the DB pool here).
-    logger.info("shutdown: draining")
+    await db.dispose_engine()  # drain the pool within the SIGTERM window
+    logger.info("shutdown: drained")
 
 
 def create_app() -> FastAPI:
@@ -54,12 +55,15 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", tags=["system"])
     async def healthz() -> dict[str, object]:
-        """Startup/readiness probe (§16). Fast; reports app + active catalogue version + mode."""
+        """Startup/readiness probe (§16). Reports app + active catalogue version + db + mode."""
+        engine = db.get_engine()
+        db_status = "ok" if await db.ping() else ("not_configured" if engine is None else "down")
         return {
             "status": "ok",
             "app_version": APP_VERSION,
-            "catalogue_version": None,  # F3+/F4 fill this from control.catalogue_version
+            "catalogue_version": await db.active_catalogue_version(),
             "llm_mode": settings.llm_mode,
+            "db": db_status,
         }
 
     @app.get("/livez", tags=["system"])

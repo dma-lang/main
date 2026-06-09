@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **F3 — control-plane schema & migrations**: Alembic baseline adopting `docs/specs/schema.sql`
+  (control plane only: 16 enums, 35 tables, 11 indexes, 1 view) via vendored, regenerable DDL;
+  async DB engine (asyncpg, bounded pool, pre-ping); sync Alembic + a one-shot advisory-lock runner
+  (`app/migrate.py`: direct connection, `lock_timeout`, at-head skip, transactional DDL — never on
+  app startup); `/healthz` now reports DB status + active catalogue version. Verified end-to-end on
+  Postgres 16 + pgvector (upgrade / downgrade / re-upgrade idempotent).
 - **F1 — service skeleton**: FastAPI app with `/healthz` + `/livez` probes (§16), env-driven
   settings (`LLM_MODE`/`PORT`/`DATABASE_URL`), graceful-shutdown lifespan, and resilient SPA static
   serving (API-only when no build is present). Verified by a live uvicorn boot on `0.0.0.0:$PORT`.
