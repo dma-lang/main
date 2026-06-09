@@ -8,9 +8,12 @@ not wired in hermetic-dev and raises, so a stray live call can never silently bi
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.settings import get_settings
+
+if TYPE_CHECKING:  # imported for type hints only — news.py imports Gemini at runtime
+    from app.intelligence.news import NewsEnrichment, RawNewsItem
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,22 @@ class Gemini:
         """Answer ``question`` using ONLY ``evidence`` (retrieved rows), never model memory."""
         if self._settings.is_hermetic:
             return self._hermetic_ground(question, evidence)
+        raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
+
+    async def fetch_news(self) -> list[RawNewsItem]:
+        """Stage-1 news fetch: the weekly grounded-search Batch call (Google Search grounding;
+        public sources only, D6). Hermetic mode never reaches this — intelligence/news.py
+        replays its recorded fixture — so a stray call can never silently spend."""
+        if self._settings.is_hermetic:
+            raise RuntimeError("hermetic news fetch is the recorded fixture (intelligence.news)")
+        raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
+
+    async def classify_news(self, item: RawNewsItem) -> NewsEnrichment:
+        """Stage-2 enrich/classify one fetched item — expected catalogue impact, claim label,
+        specificity, topic terms — on the pinned classify model (config/models.yaml). Hermetic
+        mode replays the recorded enrichment in intelligence/news.py instead."""
+        if self._settings.is_hermetic:
+            raise RuntimeError("hermetic enrichment is recorded in intelligence.news")
         raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
 
     @staticmethod

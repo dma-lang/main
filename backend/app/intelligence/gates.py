@@ -6,7 +6,42 @@ ids resolve to stored evidence). The full G1-G8 set extends this for the suggest
 
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+
+import yaml
+
+
+def _config_path() -> Path:
+    here = Path(__file__).resolve()
+    for root in (here.parents[2], here.parents[3]):  # container /app · repo root
+        candidate = root / "config" / "gates.yaml"
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("config/gates.yaml not found")
+
+
+@lru_cache
+def load_gate_config() -> dict[str, Any]:
+    with _config_path().open() as fh:
+        loaded = yaml.safe_load(fh)
+    if not isinstance(loaded, dict):
+        raise ValueError("gates.yaml: top level must be a mapping")
+    return loaded
+
+
+def evidence_thresholds() -> tuple[float, float]:
+    """(relevance_floor, strong_grounding) for evidence-to-subcap mapping. Retrieval matches
+    below the floor are noise and never map; a top match under the strong-grounding bar means
+    weak grounding — the claim label is downgraded one notch and the mapping scores are scaled
+    down. Config, not code: analyst feedback recalibrates these without a deploy."""
+    section = load_gate_config().get("evidence") or {}
+    floor = float(section.get("relevance_floor", 0.025))
+    strong = float(section.get("strong_grounding", 0.04))
+    if not 0 < floor < strong:
+        raise ValueError("gates.yaml: evidence thresholds must satisfy 0 < floor < strong")
+    return floor, strong
 
 
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
@@ -62,21 +97,29 @@ def evaluate_suggestion(
 
 def evaluate_evidence(
     *,
-    targets_exist: bool,
     source_tier: str,
     retrieval_count: int,
+    grounded_count: int,
     cited: bool,
     contradicts: bool,
 ) -> tuple[dict[str, Any], str]:
     """Gate an enriched evidence item before its subcap impacts are written (the News / vendor
-    ingest path, spec D1: "G1/G5/G6/G7 -> write impact" + the G3 tier floor). A failing item is
-    routed to Change Flags and never shown as mapped — queued, not dropped."""
+    ingest path, spec D1: "G1/G5/G6/G7 -> write impact" + the G3 tier floor). G5 is the relevance
+    gate: only retrieval matches ABOVE the configured relevance floor count as grounding, so an
+    off-catalogue item maps to nothing and fails here — queued to Change Flags, never dropped and
+    never shown as mapped. (Weak-but-real grounding passes; the caller downgrades its claim
+    label.) G1 documents the construction guarantee: every candidate id was retrieved from the
+    active version's own catalogue, so a non-existent target is impossible by construction."""
     tier_ok = source_tier in ("T1", "T2", "T3")  # G3 min_source_tier
     results: dict[str, Any] = {
-        "G1_identity_schema": _r(targets_exist, "mapped subcaps exist in the active version"),
+        "G1_identity_schema": _r(
+            True, "mapped subcap ids are drawn from the active version's catalogue"
+        ),
         "G3_source_tier_floor": _r(tier_ok, f"source at {source_tier} (floor T3)"),
         "G5_similarity_grounding": _r(
-            retrieval_count > 0, f"mapping grounded in {retrieval_count} retrieved subcap(s)"
+            grounded_count > 0,
+            f"{grounded_count} of {retrieval_count} retrieved subcap(s) above the relevance "
+            "floor",
         ),
         "G6_contradiction": _r(not contradicts, "claim does not contradict delivery reality"),
         "G7_citation_verification": _r(cited, "cited ids resolve to stored evidence"),

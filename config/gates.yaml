@@ -37,6 +37,14 @@ gates:
     description: Enforce cost/token + grounding-query budget; block proposals that exceed the envelope.
     enabled: true                # numeric caps come from config/models.yaml: cost.*
 
+# Evidence-mapping relevance thresholds (News watch D1 / vendor F2 ingest). Calibrated against
+# lexical ts_rank over the provisioned catalogue: probed real public-source items rank >= 0.029
+# on their target subcaps while off-catalogue noise tops out <= 0.017. Recalibrate (analyst
+# feedback / weekly eval) when F6 dense retrieval layers on — cosine ranks live on another scale.
+evidence:
+  relevance_floor: 0.025         # matches below this are noise — never mapped; zero above the floor -> G5 fail -> Change Flags
+  strong_grounding: 0.04         # top match below this = weak grounding -> claim label downgraded one notch, scores scaled down
+
 # Carry-forward + matching confidence bands (story_subcap_carry, sow_subcap_match).
 matching:
   auto_confirm_at: 0.86          # >= confirm

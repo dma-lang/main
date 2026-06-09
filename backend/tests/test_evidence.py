@@ -108,14 +108,15 @@ def _gate_run_count() -> int:
 @needs_db
 def test_news_scan_and_read_model(client: TestClient) -> None:
     scanned = client.post("/api/admin/evidence/scan/news/v7").json()
-    assert scanned["fetched"] == 6 and scanned["created"] == 6 and scanned["deduped"] == 0
+    assert scanned["fetched"] == 8 and scanned["created"] == 8 and scanned["deduped"] == 0
     # every fetched item is accounted for: mapped or queued to review — never dropped
-    assert scanned["mapped"] + scanned["flagged"] == 6
-    assert scanned["flagged"] >= 1  # the retire-vs-delivery contradiction (G6)
+    assert scanned["mapped"] + scanned["flagged"] == 8
+    # two distinct failure modes queue: retire-vs-delivery (G6) + off-catalogue noise (G5)
+    assert scanned["flagged"] == 2
 
     # idempotent re-scan: dedupe on (source, headline), nothing duplicated
     rescan = client.post("/api/admin/evidence/scan/news/v7").json()
-    assert rescan["created"] == 0 and rescan["deduped"] == 6
+    assert rescan["created"] == 0 and rescan["deduped"] == 8
 
     body = client.get("/api/evidence?kind=news").json()
     items = body["items"]
@@ -144,6 +145,18 @@ def test_news_scan_and_read_model(client: TestClient) -> None:
         "watchlist",
     }
 
+    # weak grounding is visible, never hidden: every catalogue match cleared the relevance floor
+    # but not the strong-grounding bar, so the claim label is downgraded one notch (INFERENCE ->
+    # HYPOTHESIS), the mapping scores are scaled down, and the downgrade is a reasoning step
+    weak = next(i for i in items if i["source"]["name"] == "American Banker")
+    assert weak["label"] == "HYPOTHESIS" and weak["impact"] == "watchlist"
+    assert weak["mag"] == "LOW"
+    assert weak["affects"], "weakly grounded still maps — only sub-floor noise maps to nothing"
+    assert max(score for _, score, *_ in weak["affects"]) < 0.75  # never reads strongly grounded
+    assert all(mag in ("MEDIUM", "LOW") for *_, mag in weak["affects"])
+    chain = client.get(f"/api/reasoning/{weak['chain']}").json()
+    assert any("downgraded INFERENCE -> HYPOTHESIS" in s["text"] for s in chain["steps"])
+
     # server-side filters
     t1 = client.get("/api/evidence?kind=news&tier=T1").json()["items"]
     assert len(t1) == 3 and all(i["tier"] == "T1" for i in t1)
@@ -159,9 +172,15 @@ def test_news_scan_and_read_model(client: TestClient) -> None:
 def test_gate_failed_item_queued_not_dropped(client: TestClient) -> None:
     flags = client.get("/api/change-flags?status=open").json()["flags"]
     evf = [f for f in flags if f["kind"] == "evidence_gate_failure"]
-    assert len(evf) == 1
-    f = evf[0]
-    assert f["gate_failed"] == "G6_contradiction"  # retire claim vs 200+ delivered stories
+    assert len(evf) == 2
+    by_gate = {f["gate_failed"]: f for f in evf}
+
+    # off-catalogue noise: no retrieval match above the relevance floor -> G5, queued not mapped
+    g5 = by_gate["G5_similarity_grounding"]
+    assert g5["sev"] == "MED" and "Streaming" in g5["title"]
+    assert g5["target"].startswith("news:")
+
+    f = by_gate["G6_contradiction"]  # retire claim vs 200+ delivered stories
     assert f["sev"] == "MED"  # T2 source; T1 would be HIGH
     assert f["target"].startswith("news:")
     assert "Forrester" in f["title"]
@@ -244,7 +263,7 @@ def test_consultant_loop_stages_gated_suggestions(client: TestClient) -> None:
 
 def test_evaluate_evidence_gates() -> None:
     ok, verdict = gates.evaluate_evidence(
-        targets_exist=True, source_tier="T1", retrieval_count=3, cited=True, contradicts=False
+        source_tier="T1", retrieval_count=3, grounded_count=3, cited=True, contradicts=False
     )
     assert verdict == "pass" and set(ok) == {
         "G1_identity_schema",
@@ -254,13 +273,39 @@ def test_evaluate_evidence_gates() -> None:
         "G7_citation_verification",
     }
     low_tier, verdict = gates.evaluate_evidence(
-        targets_exist=True, source_tier="T4", retrieval_count=3, cited=True, contradicts=False
+        source_tier="T4", retrieval_count=3, grounded_count=3, cited=True, contradicts=False
     )
     assert verdict == "fail" and gates.first_failing(low_tier) == "G3_source_tier_floor"
     contradicted, verdict = gates.evaluate_evidence(
-        targets_exist=True, source_tier="T2", retrieval_count=3, cited=True, contradicts=True
+        source_tier="T2", retrieval_count=3, grounded_count=3, cited=True, contradicts=True
     )
     assert verdict == "fail" and gates.first_failing(contradicted) == "G6_contradiction"
+    # retrieval returned rows, but none above the relevance floor: G5 names the failure
+    ungrounded, verdict = gates.evaluate_evidence(
+        source_tier="T3", retrieval_count=3, grounded_count=0, cited=True, contradicts=False
+    )
+    assert verdict == "fail" and gates.first_failing(ungrounded) == "G5_similarity_grounding"
+
+
+def test_evidence_thresholds_from_config() -> None:
+    floor, strong = gates.evidence_thresholds()
+    assert 0 < floor < strong < 1  # gates.yaml: evidence.relevance_floor / strong_grounding
+
+
+def test_impact_scores_scale_with_grounding_strength() -> None:
+    from app.services import evidence
+
+    rows = [{"subcap_id": "A", "rank": 0.05}, {"subcap_id": "B", "rank": 0.04}]
+    strong = evidence._impact_scores(rows, strength=1.0)
+    weak = evidence._impact_scores(rows, strength=0.6)
+    assert strong[0] == ("A", 0.85, "HIGH")  # strongly grounded: the full prototype band
+    assert weak[0] == ("A", round(0.85 * 0.6, 2), "LOW")  # weak: visibly cooler, never HIGH
+    assert all(w[1] < s[1] for w, s in zip(weak, strong, strict=True))
+    assert evidence._impact_scores([], strength=1.0) == []
+    # the downgrade ladder never raises a label and caps at HYPOTHESIS
+    assert evidence._DOWNGRADE["FACT"] == "INFERENCE"
+    assert evidence._DOWNGRADE["INFERENCE"] == "HYPOTHESIS"
+    assert evidence._DOWNGRADE["HYPOTHESIS"] == "HYPOTHESIS"
 
 
 def test_next_run_cron_forms() -> None:

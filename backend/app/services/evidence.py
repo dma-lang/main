@@ -1,14 +1,17 @@
-"""F7 — evidence ingestion: the ingest -> enrich -> persist -> map pipeline (News watch, D1).
+"""F7 — evidence ingestion: the five-stage news pipeline (News watch, D1; spec §17.5).
 
-The universal job shape (spec §F7): FETCH public news -> dedupe -> classify (expected catalogue
-impact + magnitude) -> score ERS (tier · recency · specificity · corroboration) -> MAP to subcaps
-via the F6 retrieval layer (grounded in the stored catalogue, never model memory) -> GATE
-(G1/G3/G5/G6/G7) -> persist evidence + per-subcap impacts + reasoning chain + citation + gate run.
-A gate-failing item is queued to Change Flags, never shown as mapped and never dropped.
+Stage 1 FETCH (intelligence.news: weekly grounded-search Batch; hermetic = recorded fixture) ->
+dedupe -> stage 2 ENRICH (intelligence.news: classify expected catalogue impact, claim label,
+specificity, topic terms) -> stage 3 MAP (F6 retrieval over the stored catalogue — by meaning,
+never model memory) -> stage 4 GATE (G1/G3/G5/G6/G7, deterministic code) -> stage 5 PERSIST
+(evidence + ERS + per-subcap impacts + reasoning chain + citation + gate run).
 
-Hermetic mode swaps ONLY the fetch stage for a deterministic fixture of real public-source items
-(no grounded-search spend); everything downstream — mapping, ERS, gates, persistence — is the same
-code live mode runs. Cadence comes from ``config/schedules.yaml`` (weekly, Monday), never code.
+Relevance is enforced, not assumed (config/gates.yaml: evidence.*): retrieval matches below the
+relevance floor are noise and never map — an item with NOTHING above the floor fails G5 and is
+queued to Change Flags (never dropped, never shown as mapped); an item whose top match clears the
+floor but not the strong-grounding bar maps with its claim label downgraded one notch and its
+mapping scores scaled down, with the downgrade documented as a reasoning step. Cadence comes from
+``config/schedules.yaml`` (weekly, Monday), never code.
 """
 
 from __future__ import annotations
@@ -24,9 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app import db
 from app.intelligence import gates, retrieval
+from app.intelligence import news as scout
+from app.intelligence.news import NewsEnrichment, RawNewsItem
 from app.jobs import schedule
 from app.services.suggestions import _catalogue_evidence
-from app.settings import get_settings
 from app.versioning import Version, get_active_version, resolve_version
 
 _SCHEMA_RE = re.compile(r"^cat_[a-z0-9_]+$")
@@ -54,89 +58,15 @@ _SOURCE_TYPE_LABEL = {
     "benchmark": "Benchmark",
 }
 
-# Hermetic fetch fixture: real public-source items (public sources only, D6). In live mode this
-# stage is the weekly Gemini grounded-search Batch call through intelligence/gemini.py; the fixture
-# keeps dev deterministic with zero spend while exercising the identical downstream pipeline.
-_SEED_NEWS: list[dict[str, Any]] = [
-    {
-        "source": "OCC newsroom",
-        "source_type": "regulator",
-        "tier": "T1",
-        "url": "https://www.occ.gov/news-issuances",
-        "published": "2026-05-18",
-        "headline": "OCC issues 2026 guidance on real-time credit decisioning and model governance",
-        "query": "real-time credit decisioning model governance risk",
-        "impact": "descriptor_revision",
-        "impact_note": "M3 real-time decisioning descriptor reads as out of date",
-        "claim_label": "FACT",
-        "specificity": 0.9,
-    },
-    {
-        "source": "Celent",
-        "source_type": "analyst",
-        "tier": "T2",
-        "url": "https://www.celent.com/insights",
-        "published": "2026-04-22",
-        "headline": "Celent: agentic service deflection now a board-level KPI at top-50 banks",
-        "query": "self-service deflection virtual agent assistant",
-        "impact": "new_use_case",
-        "impact_note": "agentic-deflection archetype for self-service subcaps",
-        "claim_label": "INFERENCE",
-        "specificity": 0.75,
-    },
-    {
-        "source": "FinCEN",
-        "source_type": "regulator",
-        "tier": "T1",
-        "url": "https://www.fincen.gov/news",
-        "published": "2026-04-09",
-        "headline": "FinCEN finalizes beneficial-ownership data-sharing rule, effective 2027",
-        "query": "beneficial ownership due diligence compliance monitoring KYC",
-        "impact": "net_new_subcap",
-        "impact_note": "beneficial-ownership surveillance not yet in the catalogue",
-        "claim_label": "FACT",
-        "specificity": 0.85,
-    },
-    {
-        "source": "TechCrunch",
-        "source_type": "trade_press",
-        "tier": "T3",
-        "url": "https://techcrunch.com/category/fintech/",
-        "published": "2026-03-12",
-        "headline": "Fintechs pilot stablecoin rails for cross-border SMB payments",
-        "query": "cross-border payments rails settlement",
-        "impact": "watchlist",
-        "impact_note": "monitored as an emerging trend, no catalogue edit warranted",
-        "claim_label": "HYPOTHESIS",
-        "specificity": 0.5,
-    },
-    {
-        "source": "Federal Reserve",
-        "source_type": "regulator",
-        "tier": "T1",
-        "url": "https://www.federalreserve.gov/newsevents.htm",
-        "published": "2026-05-29",
-        "headline": "Fed publishes supervisory expectations for generative-AI model risk",
-        "query": "AI governance model risk management responsible AI",
-        "impact": "descriptor_revision",
-        "impact_note": "model-risk descriptors predate generative-AI supervisory language",
-        "claim_label": "FACT",
-        "specificity": 0.8,
-    },
-    {
-        "source": "Forrester",
-        "source_type": "analyst",
-        "tier": "T2",
-        "url": "https://www.forrester.com/research",
-        "published": "2026-03-30",
-        "headline": "Forrester: standalone marketing automation suites absorbed into CDP platforms",
-        "query": "marketing automation platform campaign journeys",
-        "impact": "retire_candidate",
-        "impact_note": "standalone campaign tooling reading as superseded by CDP-led suites",
-        "claim_label": "INFERENCE",
-        "specificity": 0.7,
-    },
-]
+# Weak grounding never asserts more than the evidence supports (G5 no-fabrication): one notch
+# down, capped at HYPOTHESIS. CEILING_ESTIMATE is a sized-claim label — weakly grounded sizing
+# is a hypothesis, not a ceiling.
+_DOWNGRADE = {
+    "FACT": "INFERENCE",
+    "INFERENCE": "HYPOTHESIS",
+    "HYPOTHESIS": "HYPOTHESIS",
+    "CEILING_ESTIMATE": "HYPOTHESIS",
+}
 
 
 @dataclass
@@ -171,13 +101,6 @@ class NewsList:
     items: list[NewsRow]
     impacts: list[dict[str, str]]  # distinct {v, l} filter options present in the data
     scan: dict[str, Any]
-
-
-def _fetch_items() -> list[dict[str, Any]]:
-    """The fetch stage. Hermetic: deterministic fixture; live: Gemini grounded search (Batch)."""
-    if get_settings().is_hermetic:
-        return _SEED_NEWS
-    raise NotImplementedError("live grounded-search ingest is not wired in hermetic-dev")
 
 
 def _recency(published: datetime, now: datetime) -> float:
@@ -223,15 +146,18 @@ def _item_mag(impact: str, tier: str) -> str:
     return "LOW"
 
 
-def _impact_scores(rows: list[dict[str, Any]]) -> list[tuple[str, float, str]]:
-    """(subcap_id, score, mag) per mapped subcap; score scales the lexical rank into the 0.5-0.85
-    band the prototype renders, descending with retrieval rank."""
+def _impact_scores(rows: list[dict[str, Any]], strength: float) -> list[tuple[str, float, str]]:
+    """(subcap_id, score, mag) per grounded subcap. Within an item, scores descend with retrieval
+    rank across the prototype's 0.5-0.85 band; the whole band is then scaled by ``strength`` —
+    the item's ABSOLUTE grounding strength (top rank vs the strong-grounding bar, 1.0 when
+    strongly grounded) — so a weakly grounded item renders visibly cooler chips and its mags
+    follow the scaled scores. Garbage never reaches here: the caller floors matches first."""
     if not rows:
         return []
     top = max(float(r["rank"]) for r in rows) or 1.0
     out: list[tuple[str, float, str]] = []
     for r in rows:
-        score = round(0.5 + 0.35 * (float(r["rank"]) / top), 2)
+        score = round((0.5 + 0.35 * (float(r["rank"]) / top)) * strength, 2)
         mag = "HIGH" if score >= 0.75 else ("MEDIUM" if score >= 0.6 else "LOW")
         out.append((str(r["subcap_id"]), score, mag))
     return out
@@ -262,10 +188,10 @@ async def scan_news(version: str) -> dict[str, Any]:
     if engine is None:
         raise RuntimeError("database not initialised")
 
-    fetched = _fetch_items()
+    fetched = await scout.fetch_items()
     created = deduped = mapped = flagged = 0
     async with engine.begin() as conn:
-        for item in fetched:
+        for raw in fetched:
             duplicate = (
                 await conn.execute(
                     text(
@@ -273,13 +199,16 @@ async def scan_news(version: str) -> dict[str, Any]:
                         "JOIN control.evidence_item e ON e.evidence_id = n.evidence_id "
                         "WHERE n.source = :s AND n.headline = :h"
                     ),
-                    {"s": item["source"], "h": item["headline"]},
+                    {"s": raw.source, "h": raw.headline},
                 )
             ).first()
             if duplicate is not None:
                 deduped += 1
                 continue
-            ok = await _ingest_one(conn, v, schema, item)
+            # Enrich AFTER dedupe so a re-scan never re-classifies (zero marginal model spend);
+            # the live job batch-enriches new items before opening the write transaction.
+            enr = await scout.enrich(raw)
+            ok = await _ingest_one(conn, v, schema, raw, enr)
             created += 1
             if ok:
                 mapped += 1
@@ -302,28 +231,38 @@ async def scan_news(version: str) -> dict[str, Any]:
     return {"version": v.version_id, **stats}
 
 
-async def _ingest_one(conn: AsyncConnection, v: Version, schema: str, item: dict[str, Any]) -> bool:
-    """Enrich + map + gate + persist ONE fetched item. Returns True when its impacts were written
-    (gates passed); False when it was queued to Change Flags instead."""
-    published = datetime.fromisoformat(item["published"]).replace(tzinfo=UTC)
-    matches = await retrieval.retrieve(conn, schema, item["query"], k=3)
-    impacts = _impact_scores(matches)
+async def _ingest_one(
+    conn: AsyncConnection, v: Version, schema: str, raw: RawNewsItem, enr: NewsEnrichment
+) -> bool:
+    """Map + gate + persist ONE fetched-and-enriched item. Returns True when its impacts were
+    written (gates passed); False when it was queued to Change Flags instead."""
+    published = datetime.fromisoformat(raw.published).replace(tzinfo=UTC)
+    floor, strong = gates.evidence_thresholds()
+    matches = await retrieval.retrieve(conn, schema, enr.topics, k=3)
+    # Relevance floor (G5): matches below it are noise — an off-catalogue story maps to nothing.
+    grounded = [m for m in matches if float(m["rank"]) >= floor]
+    top_rank = max((float(m["rank"]) for m in grounded), default=0.0)
+    strength = min(1.0, top_rank / strong) if grounded else 0.0
+    weak = bool(grounded) and top_rank < strong
+    # Weak grounding lowers the claim, never the other way (G5 no-fabrication).
+    claim_label = _DOWNGRADE[enr.claim_label] if weak else enr.claim_label
+    impacts = _impact_scores(grounded, strength)
     contradicts = False
-    if item["impact"] == "retire_candidate":
+    if enr.impact == "retire_candidate":
         # A retire signal against a subcap with active delivery is a genuine G6 contradiction.
         delivery = await _max_delivery(conn, v.version_id, [s for s, _, _ in impacts])
         contradicts = delivery >= _CONTRADICTION_MIN_STORIES
     results, verdict = gates.evaluate_evidence(
-        targets_exist=bool(impacts),
-        source_tier=item["tier"],
+        source_tier=raw.tier,
         retrieval_count=len(matches),
+        grounded_count=len(grounded),
         cited=True,
         contradicts=contradicts,
     )
     components, ers = compute_ers(
-        tier=item["tier"],
+        tier=raw.tier,
         published=published,
-        specificity=float(item["specificity"]),
+        specificity=enr.specificity,
         corroboration=min(1.0, 0.4 + 0.2 * len(impacts)),
     )
 
@@ -337,14 +276,14 @@ async def _ingest_one(conn: AsyncConnection, v: Version, schema: str, item: dict
                 "RETURNING evidence_id"
             ),
             {
-                "t": item["headline"],
-                "u": item["url"],
-                "tier": item["tier"],
+                "t": raw.headline,
+                "u": raw.url,
+                "tier": raw.tier,
                 "p": published,
-                "sn": item["source"],
-                "st": item["source_type"],
-                "ci": item["impact"],
-                "note": item["impact_note"],
+                "sn": raw.source,
+                "st": raw.source_type,
+                "ci": enr.impact,
+                "note": enr.impact_note,
             },
         )
     ).scalar_one()
@@ -364,16 +303,16 @@ async def _ingest_one(conn: AsyncConnection, v: Version, schema: str, item: dict
             ),
             {
                 "e": evidence_id,
-                "s": item["source"],
-                "h": item["headline"],
+                "s": raw.source,
+                "h": raw.headline,
                 "p": published,
-                "r": item["specificity"],
+                "r": enr.specificity,
             },
         )
     ).scalar_one()
 
     summary = (
-        f"{_IMPACT_LABEL[item['impact']]}: {item['impact_note']}. Mapped to "
+        f"{_IMPACT_LABEL[enr.impact]}: {enr.impact_note}. Mapped to "
         f"{len(impacts)} subcap(s) via catalogue retrieval; ERS {ers:.2f}."
     )
     chain_id = (
@@ -381,19 +320,22 @@ async def _ingest_one(conn: AsyncConnection, v: Version, schema: str, item: dict
             text(
                 "INSERT INTO control.reasoning_chain "
                 "(operation, subject_ref, claim_label, summary, model, cost_usd) "
-                "VALUES ('enrich', :subj, CAST(:cl AS claim_label), :sum, 'hermetic-stub', 0) "
+                "VALUES ('enrich', :subj, CAST(:cl AS claim_label), :sum, :model, 0) "
                 "RETURNING chain_id"
             ),
-            {"subj": item["headline"], "cl": item["claim_label"], "sum": summary},
+            {"subj": raw.headline, "cl": claim_label, "sum": summary, "model": enr.model},
         )
     ).scalar_one()
-    retrieved = ", ".join(f"{s} ({sc:.2f})" for s, sc, _ in impacts) or "no subcap"
-    steps = (
+    retrieved = (
+        ", ".join(f"{s} ({sc:.2f})" for s, sc, _ in impacts)
+        or "no subcap above the relevance floor"
+    )
+    steps = [
         (
             "retrieve",
-            f"Weekly grounded scan fetched the item from {item['source']} "
-            f"({item['tier']}); hybrid retrieval over the {v.version_id} catalogue "
-            f"mapped it to {retrieved}.",
+            f"Weekly grounded scan fetched the item from {raw.source} "
+            f"({raw.tier}); topic retrieval over the {v.version_id} catalogue "
+            f"(relevance floor {floor}) mapped it to {retrieved}.",
             evidence_id,
         ),
         (
@@ -403,12 +345,24 @@ async def _ingest_one(conn: AsyncConnection, v: Version, schema: str, item: dict
             + f"{ers:.2f}.",
             None,
         ),
+    ]
+    if weak:
+        steps.append(
+            (
+                "weigh",
+                f"Grounding is weak (top retrieval rank {top_rank:.4f} is under the "
+                f"strong-grounding bar {strong}): claim label downgraded "
+                f"{enr.claim_label} -> {claim_label} and mapping scores scaled by "
+                f"{strength:.2f} — never assert more than the evidence supports (G5).",
+                None,
+            )
+        )
+    steps.append(
         (
             "conclude",
-            f"Expected catalogue impact: {_IMPACT_LABEL[item['impact']]} — "
-            f"{item['impact_note']}.",
+            f"Expected catalogue impact: {_IMPACT_LABEL[enr.impact]} — " f"{enr.impact_note}.",
             None,
-        ),
+        )
     )
     for ordinal, (kind, step_text, ev) in enumerate(steps, start=1):
         await conn.execute(
@@ -436,18 +390,18 @@ async def _ingest_one(conn: AsyncConnection, v: Version, schema: str, item: dict
         # Queued, not dropped: the item is never shown as mapped; a human resolves it (G3 inbox).
         gate = gates.first_failing(results) or "G5_similarity_grounding"
         detail = {
-            "title": f"News item failed {gate.split('_')[0]}: {item['headline']}",
+            "title": f"News item failed {gate.split('_')[0]}: {raw.headline}",
             "body": (
-                f"{item['source']} ({item['tier']}) · {_IMPACT_LABEL[item['impact']]}. "
-                f"{item['impact_note']}. The gate run failed {gate}, so no subcap impact was "
+                f"{raw.source} ({raw.tier}) · {_IMPACT_LABEL[enr.impact]}. "
+                f"{enr.impact_note}. The gate run failed {gate}, so no subcap impact was "
                 "written — review the source before it can influence the catalogue."
             ),
             "gate_failed": gate,
             "version": v.version_id,
             "news_id": str(news_id),
-            "source": item["source"],
-            "tier": item["tier"],
-            "url": item["url"],
+            "source": raw.source,
+            "tier": raw.tier,
+            "url": raw.url,
         }
         await conn.execute(
             text(
@@ -456,7 +410,7 @@ async def _ingest_one(conn: AsyncConnection, v: Version, schema: str, item: dict
             ),
             {
                 "k": _FLAG_KIND,
-                "sev": "HIGH" if item["tier"] == "T1" else "MED",
+                "sev": "HIGH" if raw.tier == "T1" else "MED",
                 "t": f"news:{news_id}",
                 "d": json.dumps(detail),
                 "c": chain_id,
