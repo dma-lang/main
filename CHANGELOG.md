@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **F2 — auth & identity**: Firebase ID-token verification (google-auth) with `@zennify.com`
+  fail-closed allow-list and a deterministic hermetic dev identity; `control.users` upsert
+  (config-driven `is_admin`); `GET /api/me` + `PATCH /api/me/preferences` (the server home for the
+  prototype's `cia_theme`/`cia_lens`/`cia_persona`); `require_admin` gate. Verified end-to-end
+  (10 DB-backed tests; live `/api/me` + preference persistence).
 - **F3 — control-plane schema & migrations**: Alembic baseline adopting `docs/specs/schema.sql`
   (control plane only: 16 enums, 35 tables, 11 indexes, 1 view) via vendored, regenerable DDL;
   async DB engine (asyncpg, bounded pool, pre-ping); sync Alembic + a one-shot advisory-lock runner

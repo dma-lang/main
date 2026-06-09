@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     # Datastore (wired in F3; optional at F1 so the service boots without a DB).
     database_url: str | None = None
 
+    # Auth (F2). Live mode verifies Firebase ID tokens; hermetic mode uses a deterministic dev user.
+    firebase_project_id: str | None = None
+    auth_email_domain: str = "zennify.com"  # sign-in restricted to this domain; fails closed
+    admin_emails: list[str] = Field(default_factory=list)  # these verified emails receive is_admin
+    hermetic_uid: str = "dev-user"
+    hermetic_email: str = "dev@zennify.com"
+    hermetic_is_admin: bool = True
+
     # CORS — only needed when the Vite dev server calls the API cross-origin. Same-origin in prod.
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
