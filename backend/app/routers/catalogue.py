@@ -169,6 +169,29 @@ class VendorRow(BaseModel):
     p4: int
 
 
+class UseCaseRow(BaseModel):
+    use_case_id: str
+    archetype: str | None = None
+    description: str | None = None
+    subcap_id: str
+    subcap_name: str
+    pillar: str
+    category: str
+
+
+class ArchetypeFacet(BaseModel):
+    archetype: str
+    count: int
+
+
+class UseCasePage(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: list[UseCaseRow]
+    archetypes: list[ArchetypeFacet]
+
+
 _JOINS = (
     "FROM {s}.subcap s "
     "JOIN {s}.capability cap ON cap.capability_id = s.capability_id "
@@ -388,3 +411,69 @@ async def list_vendors(
     async with _engine().connect() as conn:
         rows = (await conn.execute(sql)).mappings().all()
     return [VendorRow.model_validate(dict(r)) for r in rows]
+
+
+@router.get("/{version}/use-cases")
+async def list_use_cases(
+    version: str,
+    pillar: str = Query(""),
+    category: str = Query(""),
+    archetype: str = Query(""),
+    q: str = Query(""),
+    page: int = Query(1, ge=1),
+    size: int = Query(12, ge=1, le=60),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> UseCasePage:
+    """Actual use cases, filterable by pillar / area / type / text (Use case explorer)."""
+    s = _schema(await resolve_version(version))
+    joins = (
+        f"FROM {s}.use_case uc "
+        f"JOIN {s}.subcap sc ON sc.subcap_id = uc.subcap_id "
+        f"JOIN {s}.capability cap ON cap.capability_id = sc.capability_id "
+        f"JOIN {s}.category cat ON cat.category_id = cap.category_id"
+    )
+    where = (
+        " WHERE (:pillar = '' OR left(uc.subcap_id, 2) = :pillar) "
+        "AND (:category = '' OR cat.category_id = :category) "
+        "AND (:archetype = '' OR uc.archetype = :archetype) "
+        "AND (:q = '' OR uc.description ILIKE :qlike OR sc.name ILIKE :qlike)"
+    )
+    facet_where = (
+        " WHERE (:pillar = '' OR left(uc.subcap_id, 2) = :pillar) "
+        "AND (:category = '' OR cat.category_id = :category) AND uc.archetype IS NOT NULL"
+    )
+    params = {
+        "pillar": pillar,
+        "category": category,
+        "archetype": archetype,
+        "q": q,
+        "qlike": f"%{q}%",
+    }
+    items_sql = text(
+        "SELECT uc.use_case_id, uc.archetype, uc.description, uc.subcap_id, "
+        "sc.name AS subcap_name, left(uc.subcap_id, 2) AS pillar, cat.name AS category "
+        + joins
+        + where
+        + " ORDER BY uc.use_case_id LIMIT :size OFFSET :off"
+    )
+    count_sql = text("SELECT count(*) " + joins + where)
+    facet_sql = text(
+        "SELECT uc.archetype, count(*) AS count "
+        + joins
+        + facet_where
+        + " GROUP BY uc.archetype ORDER BY count DESC, uc.archetype"
+    )
+    async with _engine().connect() as conn:
+        total = (await conn.execute(count_sql, params)).scalar() or 0
+        off = (page - 1) * size
+        rows = (
+            (await conn.execute(items_sql, {**params, "size": size, "off": off})).mappings().all()
+        )
+        facets = (await conn.execute(facet_sql, params)).mappings().all()
+    return UseCasePage(
+        total=int(total),
+        page=page,
+        size=size,
+        items=[UseCaseRow.model_validate(dict(r)) for r in rows],
+        archetypes=[ArchetypeFacet.model_validate(dict(r)) for r in facets],
+    )

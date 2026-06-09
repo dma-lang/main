@@ -8,6 +8,7 @@ import { MissionControl } from './pages/MissionControl';
 import { Platforms } from './pages/Platforms';
 import { SubcapWorkbench } from './pages/SubcapWorkbench';
 import { Surface } from './pages/Surface';
+import { UseCases } from './pages/UseCases';
 import { VersionTimeline } from './pages/VersionTimeline';
 import { NAV } from './shell/nav';
 import { Shell } from './shell/Shell';
@@ -21,6 +22,7 @@ const LIVE: Record<string, ReactElement> = {
   subcap: <SubcapWorkbench />,
   versions: <VersionTimeline />,
   platforms: <Platforms />,
+  'use-cases': <UseCases />,
 };
 
 export const router = createHashRouter([

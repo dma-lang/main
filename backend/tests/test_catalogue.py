@@ -116,6 +116,21 @@ def test_platforms_and_vendors(client: TestClient) -> None:
 
 
 @needs_db
+def test_use_cases(client: TestClient) -> None:
+    r = client.get("/api/catalogue/v7/use-cases?size=5")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] > 0
+    assert len(body["items"]) == 5
+    assert len(body["archetypes"]) > 0
+    assert {"use_case_id", "archetype", "subcap_id", "pillar", "category"} <= set(body["items"][0])
+    # pillar filter narrows the set
+    p4 = client.get("/api/catalogue/v7/use-cases?pillar=P4&size=1").json()
+    assert 0 < p4["total"] < body["total"]
+    assert all(left == "P4" for left in [i["pillar"] for i in p4["items"]])
+
+
+@needs_db
 def test_unknown_version_404(client: TestClient) -> None:
     r = client.get("/api/catalogue/v999/subcaps")
     assert r.status_code == 404

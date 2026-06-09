@@ -147,6 +147,33 @@ export interface VendorRow {
   p4: number;
 }
 
+export interface UseCaseRow {
+  use_case_id: string;
+  archetype: string | null;
+  description: string | null;
+  subcap_id: string;
+  subcap_name: string;
+  pillar: string;
+  category: string;
+}
+
+export interface UseCasePage {
+  total: number;
+  page: number;
+  size: number;
+  items: UseCaseRow[];
+  archetypes: { archetype: string; count: number }[];
+}
+
+export interface UseCaseQuery {
+  pillar?: string;
+  category?: string;
+  archetype?: string;
+  q?: string;
+  page?: number;
+  size?: number;
+}
+
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
@@ -191,4 +218,14 @@ export const api = {
   platform: (v: string, id: string): Promise<PlatformDetail> =>
     http<PlatformDetail>(`/api/catalogue/${v}/platforms/${id}`),
   vendors: (v: string): Promise<VendorRow[]> => http<VendorRow[]>(`/api/catalogue/${v}/vendors`),
+  useCases: (v: string, p: UseCaseQuery): Promise<UseCasePage> => {
+    const qs = new URLSearchParams();
+    if (p.pillar) qs.set('pillar', p.pillar);
+    if (p.category) qs.set('category', p.category);
+    if (p.archetype) qs.set('archetype', p.archetype);
+    if (p.q) qs.set('q', p.q);
+    qs.set('page', String(p.page ?? 1));
+    qs.set('size', String(p.size ?? 12));
+    return http<UseCasePage>(`/api/catalogue/${v}/use-cases?${qs.toString()}`);
+  },
 };

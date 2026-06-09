@@ -11,6 +11,8 @@ import {
   type SubcapDetail,
   type SubcapEnrichment,
   type SubcapNode,
+  type UseCasePage,
+  type UseCaseQuery,
   type VendorRow,
   type VersionInfo,
 } from './client';
@@ -82,4 +84,12 @@ export const usePlatform = (version: string, id: string | null) =>
     queryKey: ['platform', version, id],
     queryFn: () => api.platform(version, id ?? ''),
     enabled: !!version && !!id,
+  });
+
+export const useUseCases = (version: string, params: UseCaseQuery) =>
+  useQuery<UseCasePage>({
+    queryKey: ['use-cases', version, params],
+    queryFn: () => api.useCases(version, params),
+    enabled: !!version,
+    placeholderData: (prev) => prev,
   });
