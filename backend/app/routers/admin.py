@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from app.deps import require_admin
-from app.services import provision
+from app.services import provision, stories
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -18,3 +18,11 @@ async def provision_version(
 ) -> dict[str, Any]:
     """Generate + seed cat_<version> and register it (admin only)."""
     return await provision.bring_version_online(version, label=f"Catalogue {version}.0")
+
+
+@router.post("/carry-forward/{version}")
+async def carry_forward(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Ingest the canonical story corpus and carry it onto cat_<version> (F5, admin only)."""
+    return await stories.carry_forward(version)

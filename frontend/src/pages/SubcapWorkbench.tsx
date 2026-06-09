@@ -1,14 +1,14 @@
 // Subcap deep dive (A2) — the prototype's Workbench detail at /subcap/:id: a sticky catalogue tree
 // (search + pillar pills + collapsible category -> cluster -> subcap) beside a detail panel (hero +
-// completeness ring + stat buttons + five tabs). Wired to GET /api/catalogue/{v}/subcaps (tree) and
-// /subcaps/{id} (detail). Overview renders live data; Maturity / Use cases / Delivery / Connections
-// are designed-empty states until their foundations (enrichment, F5 carry-forward, KG) seed them.
+// completeness ring + stat buttons + five tabs). Wired to GET /api/catalogue/{v}/subcaps (tree),
+// /subcaps/{id} (detail) and /subcaps/{id}/stories (Delivery). Overview + Delivery render live data;
+// Maturity / Use cases / Connections are designed-empty until their foundations (enrichment, KG) land.
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import type { SubcapDetail, SubcapNode } from '../api/client';
-import { useSubcap, useSubcaps } from '../api/queries';
-import { Empty, LifeChip, PillarDot, Tier } from '../components/primitives';
+import { useSubcap, useSubcaps, useSubcapStories } from '../api/queries';
+import { Bar, Empty, LifeChip, PillarDot, Tier } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { clamp, LIFE_COLORS, PILLAR_COLORS, PILLAR_SHORT } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
@@ -134,6 +134,143 @@ function OverviewTab({ d, node }: { d: SubcapDetail | undefined; node: SubcapNod
   );
 }
 
+const SCORES: [string, keyof StoryRowScores][] = [
+  ['Acceptance criteria', 'ac_score'],
+  ['Solution design', 'sd_score'],
+  ['Story score', 'story_score'],
+];
+type StoryRowScores = { ac_score: number | null; sd_score: number | null; story_score: number | null };
+
+function scoreColor(v: number): string {
+  return v >= 3 ? 'var(--interactive)' : v >= 2 ? 'var(--z-blue)' : 'var(--z-orange)';
+}
+
+// Delivery tab (F5) — confirmed Jira stories carried onto this subcap, top by composite score, each
+// expandable to its real ac/sd/ss sub-scores. The corpus has no per-quarter date dimension, so the
+// prototype's hashed quarter bars are intentionally omitted rather than faked.
+function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const stories = useSubcapStories(version, node.id);
+  const data = stories.data;
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  if (stories.isLoading) {
+    return (
+      <div className="muted fade-in" style={{ fontSize: 12 }}>
+        Loading delivery…
+      </div>
+    );
+  }
+  if (total === 0) {
+    return (
+      <EmptyTab
+        icon="book"
+        title="No mapped stories"
+        desc="No real-client stories carry forward to this subcap in the active version."
+      />
+    );
+  }
+
+  return (
+    <div className="fade-in">
+      <div className="row gap16" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div className="num" style={{ fontSize: 20, fontWeight: 700 }}>
+            {total}
+          </div>
+          <div className="muted" style={{ fontSize: 10 }}>
+            total stories
+          </div>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <LifeChip life={node.life} />
+          <div className="muted" style={{ fontSize: 10, marginTop: 4 }}>
+            lifecycle
+          </div>
+        </div>
+      </div>
+      <div className="eyebrow" style={{ marginBottom: 8 }}>
+        Mapped user stories{' '}
+        <span className="muted" style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+          · top {items.length} by composite · click to expand
+        </span>
+      </div>
+      <div style={{ display: 'grid', gap: 6 }}>
+        {items.map((st) => {
+          const isOpen = open === st.story_key;
+          const cs = st.composite_score ?? 0;
+          return (
+            <div key={st.story_key} className="card" style={{ overflow: 'hidden' }}>
+              <div
+                className="between"
+                style={{ padding: '9px 12px', cursor: 'pointer' }}
+                onClick={() => setOpen(isOpen ? null : st.story_key)}
+              >
+                <div className="row gap8" style={{ minWidth: 0 }}>
+                  <Icon n={isOpen ? 'chevD' : 'chevR'} s={13} style={{ color: 'var(--text-tertiary)' }} />
+                  <span className="mono" style={{ fontSize: 11, color: 'var(--text-primary)', flex: 'none' }}>
+                    {st.story_key}
+                  </span>
+                  <span
+                    className="muted"
+                    style={{ fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {st.summary}
+                  </span>
+                </div>
+                <b className="num" style={{ fontSize: 12, flex: 'none', color: scoreColor(cs) }}>
+                  {cs.toFixed(1)}
+                </b>
+              </div>
+              {isOpen && (
+                <div
+                  className="fade-in"
+                  style={{ padding: '4px 14px 14px', borderTop: '1px solid var(--border-subtle)' }}
+                >
+                  <div className="muted" style={{ fontSize: 11.5, margin: '10px 0' }}>
+                    Delivered against <b style={{ color: 'var(--text-secondary)' }}>{node.name}</b>
+                    {st.story_sv_code ? ` · ${st.story_sv_code}` : ''} · confidence{' '}
+                    {st.confidence_level ?? 'n/a'}.
+                  </div>
+                  <div className="row gap16" style={{ maxWidth: 460 }}>
+                    {SCORES.map(([label, key]) => {
+                      const v = st[key];
+                      return (
+                        <div key={key} style={{ flex: 1 }}>
+                          <div className="between" style={{ fontSize: 11, marginBottom: 4 }}>
+                            <span className="muted">{label}</span>
+                            <b className="num">{v != null ? v.toFixed(1) : 'n/a'}</b>
+                          </div>
+                          <Bar v={v ?? 0} max={5} color={scoreColor(v ?? 0)} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="row gap12 mt12">
+                    <button className="linkbtn" onClick={() => go('stories')}>
+                      Open in Story library <Icon n="arrowR" s={12} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {total > items.length && (
+        <button
+          className="btn subtle sm"
+          style={{ justifyContent: 'center', width: '100%', marginTop: 8 }}
+          onClick={() => go('stories')}
+        >
+          All {total} stories in the Story library <Icon n="arrowR" s={13} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function SubcapWorkbench() {
   const params = useParams<{ id?: string }>();
   const routeId = params.id ?? null;
@@ -229,11 +366,7 @@ export function SubcapWorkbench() {
         desc="Use cases are populated by enrichment from the source workbook; archetype and maturity cards appear here when the use_case table is seeded for this version."
       />
     ) : tab === 'delivery' ? (
-      <EmptyTab
-        icon="trend"
-        title="Delivery evidence lands with the story corpus"
-        desc="F5 carry-forward links the 14,406-row Jira corpus to this subcap; the six-quarter delivery bars and story rows (with ac/sd/ss sub-scores) light up then."
-      />
+      node ? <DeliveryTab version={version} node={node} /> : null
     ) : (
       <EmptyTab
         icon="graph"

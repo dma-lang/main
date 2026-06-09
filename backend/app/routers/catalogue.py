@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -79,6 +79,26 @@ class CatalogueSummary(BaseModel):
     pillars: list[PillarSummary]
 
 
+class StoryRow(BaseModel):
+    story_key: str
+    project_key: str | None = None
+    summary: str | None = None
+    confidence_level: str | None = None
+    composite_score: float | None = None
+    ac_score: float | None = None
+    sd_score: float | None = None
+    story_score: float | None = None
+    story_sv_code: str | None = None
+    tier: str | None = None
+
+
+class StoryPage(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: list[StoryRow]
+
+
 _JOINS = (
     "FROM {s}.subcap s "
     "JOIN {s}.capability cap ON cap.capability_id = s.capability_id "
@@ -125,6 +145,40 @@ async def get_subcap(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"subcap '{subcap_id}' not found")
     return SubcapDetail.model_validate(dict(row))
+
+
+@router.get("/{version}/subcaps/{subcap_id}/stories")
+async def subcap_stories(
+    version: str,
+    subcap_id: str,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> StoryPage:
+    """Confirmed delivery stories carried onto this subcap (F5), highest composite first."""
+    v = await resolve_version(version)
+    where = (
+        "FROM control.story_catalogue_link scl "
+        "JOIN control.story st ON st.story_key = scl.story_key "
+        "WHERE scl.version_id = :ver AND scl.subcap_id = :sid"
+    )
+    rows_sql = text(
+        "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
+        "st.composite_score::float AS composite_score, st.ac_score::float AS ac_score, "
+        "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
+        "st.story_sv_code, st.tier " + where + " ORDER BY st.composite_score DESC NULLS LAST, "
+        "st.story_key LIMIT :size OFFSET :off"
+    )
+    params = {"ver": v.version_id, "sid": subcap_id}
+    async with _engine().connect() as conn:
+        total = (await conn.execute(text("SELECT count(*) " + where), params)).scalar() or 0
+        rows = (
+            (await conn.execute(rows_sql, {**params, "size": size, "off": (page - 1) * size}))
+            .mappings()
+            .all()
+        )
+    items = [StoryRow.model_validate(dict(r)) for r in rows]
+    return StoryPage(total=int(total), page=page, size=size, items=items)
 
 
 @router.get("/{version}/summary")

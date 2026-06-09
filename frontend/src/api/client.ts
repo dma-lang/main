@@ -57,6 +57,26 @@ export interface SubcapDetail {
   n_platforms: number;
 }
 
+export interface StoryRow {
+  story_key: string;
+  project_key: string | null;
+  summary: string | null;
+  confidence_level: string | null;
+  composite_score: number | null;
+  ac_score: number | null;
+  sd_score: number | null;
+  story_score: number | null;
+  story_sv_code: string | null;
+  tier: string | null;
+}
+
+export interface StoryPage {
+  total: number;
+  page: number;
+  size: number;
+  items: StoryRow[];
+}
+
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
@@ -92,4 +112,6 @@ export const api = {
     http<SubcapNode[]>(`/api/catalogue/${v}/subcaps`),
   subcap: (v: string, id: string): Promise<SubcapDetail> =>
     http<SubcapDetail>(`/api/catalogue/${v}/subcaps/${id}`),
+  subcapStories: (v: string, id: string, page = 1, size = 8): Promise<StoryPage> =>
+    http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
 };
