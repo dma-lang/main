@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **F1 — service skeleton**: FastAPI app with `/healthz` + `/livez` probes (§16), env-driven
+  settings (`LLM_MODE`/`PORT`/`DATABASE_URL`), graceful-shutdown lifespan, and resilient SPA static
+  serving (API-only when no build is present). Verified by a live uvicorn boot on `0.0.0.0:$PORT`.
 - Repository scaffold (Stage 0): monorepo layout, tooling configuration, and CI skeleton.
 - `CLAUDE.md` rule sheet encoding the non-negotiable safeguards.
 - Canonical specs committed under `docs/specs/` and indexed by `docs/SPEC.md`.
