@@ -94,6 +94,16 @@ def test_subcap_enrichment(client: TestClient) -> None:
 
 
 @needs_db
+def test_subcap_connections(client: TestClient) -> None:
+    r = client.get("/api/catalogue/v7/subcaps/P1C1.1.1/connections")
+    assert r.status_code == 200
+    sibs = r.json()["siblings"]
+    assert len(sibs) > 0
+    assert {"id", "name", "pillar", "shared_platforms"} <= set(sibs[0])
+    assert all(s["id"] != "P1C1.1.1" for s in sibs)  # KG siblings exclude self
+
+
+@needs_db
 def test_summary(client: TestClient) -> None:
     r = client.get("/api/catalogue/v7/summary")
     assert r.status_code == 200

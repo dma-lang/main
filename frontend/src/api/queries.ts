@@ -13,6 +13,7 @@ import {
   type SubcapEnrichment,
   type StoryLibraryPage,
   type StoryLibraryQuery,
+  type SubcapConnections,
   type SubcapNode,
   type UseCasePage,
   type UseCaseQuery,
@@ -65,6 +66,13 @@ export const useSubcapEnrichment = (version: string, id: string | null) =>
   useQuery<SubcapEnrichment>({
     queryKey: ['subcap-enrichment', version, id],
     queryFn: () => api.subcapEnrichment(version, id ?? ''),
+    enabled: !!version && !!id,
+  });
+
+export const useSubcapConnections = (version: string, id: string | null) =>
+  useQuery<SubcapConnections>({
+    queryKey: ['subcap-connections', version, id],
+    queryFn: () => api.subcapConnections(version, id ?? ''),
     enabled: !!version && !!id,
   });
 

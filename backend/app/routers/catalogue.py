@@ -139,6 +139,17 @@ class SubcapEnrichment(BaseModel):
     offerings: list[OfferingRef]
 
 
+class ConnectionSibling(BaseModel):
+    id: str
+    name: str
+    pillar: str
+    shared_platforms: int
+
+
+class SubcapConnections(BaseModel):
+    siblings: list[ConnectionSibling]
+
+
 class PlatformRow(BaseModel):
     l3_id: str
     name: str
@@ -342,6 +353,26 @@ async def subcap_enrichment(
         maturity=[Maturity.model_validate(dict(r)) for r in maturity],
         offerings=[OfferingRef.model_validate(dict(r)) for r in offerings],
     )
+
+
+@router.get("/{version}/subcaps/{subcap_id}/connections")
+async def subcap_connections(
+    version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> SubcapConnections:
+    """KG Layer-A siblings: same-capability subcaps, ranked by shared L3 platforms."""
+    s = _schema(await resolve_version(version))
+    sql = text(
+        "SELECT s2.subcap_id AS id, s2.name, left(s2.subcap_id, 2) AS pillar, "
+        f"(SELECT count(DISTINCT sp2.l3_id) FROM {s}.subcap_platform sp2 "
+        f"WHERE sp2.subcap_id = s2.subcap_id AND sp2.l3_id IN "
+        f"(SELECT l3_id FROM {s}.subcap_platform WHERE subcap_id = :sid)) AS shared_platforms "
+        f"FROM {s}.subcap s2 "
+        f"WHERE s2.capability_id = (SELECT capability_id FROM {s}.subcap WHERE subcap_id = :sid) "
+        "AND s2.subcap_id <> :sid ORDER BY shared_platforms DESC, s2.subcap_id LIMIT 8"
+    )
+    async with _engine().connect() as conn:
+        rows = (await conn.execute(sql, {"sid": subcap_id})).mappings().all()
+    return SubcapConnections(siblings=[ConnectionSibling.model_validate(dict(r)) for r in rows])
 
 
 @router.get("/{version}/summary")

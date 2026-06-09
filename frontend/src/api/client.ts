@@ -117,6 +117,17 @@ export interface SubcapEnrichment {
   offerings: OfferingRef[];
 }
 
+export interface ConnectionSibling {
+  id: string;
+  name: string;
+  pillar: string;
+  shared_platforms: number;
+}
+
+export interface SubcapConnections {
+  siblings: ConnectionSibling[];
+}
+
 export interface LifecycleSubcap {
   id: string;
   name: string;
@@ -272,6 +283,8 @@ export const api = {
     http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
   subcapEnrichment: (v: string, id: string): Promise<SubcapEnrichment> =>
     http<SubcapEnrichment>(`/api/catalogue/${v}/subcaps/${id}/enrichment`),
+  subcapConnections: (v: string, id: string): Promise<SubcapConnections> =>
+    http<SubcapConnections>(`/api/catalogue/${v}/subcaps/${id}/connections`),
   platforms: (v: string): Promise<PlatformRow[]> =>
     http<PlatformRow[]>(`/api/catalogue/${v}/platforms`),
   platform: (v: string, id: string): Promise<PlatformDetail> =>

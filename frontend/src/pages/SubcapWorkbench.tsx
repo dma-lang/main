@@ -9,6 +9,7 @@ import { useParams } from 'react-router-dom';
 import type { SubcapDetail, SubcapEnrichment, SubcapNode } from '../api/client';
 import {
   useSubcap,
+  useSubcapConnections,
   useSubcapEnrichment,
   useSubcaps,
   useSubcapStories,
@@ -472,6 +473,58 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
   );
 }
 
+// Connections tab — KG Layer-A siblings (same-capability subcaps, ranked by shared L3 platforms),
+// a deterministic projection of the link tables. News/vendor signals land with evidence (F7).
+function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
+  const conn = useSubcapConnections(version, node.id);
+  const sibs = conn.data?.siblings ?? [];
+  return (
+    <div className="fade-in">
+      <div className="eyebrow" style={{ marginBottom: 8 }}>
+        Related subcaps · same capability, by shared platforms (Layer A)
+      </div>
+      <div style={{ display: 'grid', gap: 6, marginBottom: 16 }}>
+        {sibs.length ? (
+          sibs.map((x) => (
+            <div
+              key={x.id}
+              className="card hov"
+              style={{ padding: '9px 12px', cursor: 'pointer' }}
+              onClick={() => go('subcap/' + x.id)}
+            >
+              <div className="between">
+                <div className="row gap8" style={{ minWidth: 0 }}>
+                  <Icon n="graph" s={13} style={{ color: 'var(--z-slate)' }} />
+                  <span
+                    style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {x.name}
+                  </span>
+                </div>
+                <span className="chip soft" style={{ fontSize: 9.5, flex: 'none' }}>
+                  {x.shared_platforms} shared platform{x.shared_platforms === 1 ? '' : 's'}
+                </span>
+              </div>
+            </div>
+          ))
+        ) : (
+          <span className="muted" style={{ fontSize: 12 }}>
+            No siblings in this capability.
+          </span>
+        )}
+      </div>
+      <div className="eyebrow" style={{ marginBottom: 8 }}>
+        Signals
+      </div>
+      <div className="banner info">
+        <Icon n="news" s={14} />
+        No public or vendor signal currently maps to this subcap — news &amp; vendor evidence light up
+        here with the intelligence layer (F7).
+      </div>
+    </div>
+  );
+}
+
 export function SubcapWorkbench() {
   const params = useParams<{ id?: string }>();
   const routeId = params.id ?? null;
@@ -562,13 +615,9 @@ export function SubcapWorkbench() {
       <UseTab enr={enr} />
     ) : tab === 'delivery' ? (
       node ? <DeliveryTab version={version} node={node} /> : null
-    ) : (
-      <EmptyTab
-        icon="graph"
-        title="Connections light up with the knowledge graph"
-        desc="Deterministic KG siblings (Layer A) and recent news/vendor signals — each carrying the full trust envelope — appear here once evidence (F7) and the graph projection land."
-      />
-    );
+    ) : node ? (
+      <ConnTab version={version} node={node} />
+    ) : null;
 
   return (
     <>
