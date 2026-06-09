@@ -66,6 +66,7 @@ class PillarSummary(BaseModel):
     name: str
     subcap_count: int
     completeness: float
+    decay: int
 
 
 class CatalogueSummary(BaseModel):
@@ -122,7 +123,9 @@ async def summary(
     s = _schema(v)
     sql = text(
         "SELECT p.pillar_id, p.name, count(s.subcap_id) AS subcap_count, "
-        "coalesce(avg(s.completeness), 0)::float AS completeness "
+        "coalesce(avg(s.completeness), 0)::float AS completeness, "
+        "count(s.subcap_id) FILTER "
+        "(WHERE s.lifecycle_state IN ('declining', 'fading', 'dead')) AS decay "
         f"FROM {s}.pillar p "
         f"LEFT JOIN {s}.category cat ON cat.pillar_id = p.pillar_id "
         f"LEFT JOIN {s}.capability cap ON cap.category_id = cat.category_id "

@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { RouterProvider } from 'react-router-dom';
 
-import { useMe } from './api/queries';
+import { useMe, useVersions } from './api/queries';
 import { Login } from './Login';
 import { router } from './router';
 import { useUi } from './state/store';
@@ -15,11 +15,19 @@ const queryClient = new QueryClient({
 
 function Gate() {
   const me = useMe();
+  const versions = useVersions();
   const hydrate = useUi((s) => s.hydrateFromMe);
+  const version = useUi((s) => s.version);
+  const setVersion = useUi((s) => s.setVersion);
 
   useEffect(() => {
     if (me.data) hydrate(me.data.preferences, me.data.is_admin);
   }, [me.data, hydrate]);
+
+  useEffect(() => {
+    const vs = versions.data;
+    if (vs && vs.length > 0 && !version) setVersion(vs[0].version_id);
+  }, [versions.data, version, setVersion]);
 
   if (me.isLoading) {
     return (
