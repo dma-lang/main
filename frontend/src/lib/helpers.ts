@@ -14,6 +14,14 @@ export const PILLAR_SOFT: Record<string, string> = {
   P4: 'var(--p4-soft)',
 };
 
+// Short pillar labels for dense controls (drill columns, chips). Full names come from /summary.
+export const PILLAR_SHORT: Record<string, string> = {
+  P1: 'Strategy',
+  P2: 'Customer',
+  P3: 'Process',
+  P4: 'Data & AI',
+};
+
 export const LIFE_COLORS: Record<string, string> = {
   emerging: '#27bbaf',
   rising: '#62d7b8',

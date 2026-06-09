@@ -69,7 +69,13 @@ def test_subcap_detail(client: TestClient) -> None:
     sid = client.get("/api/catalogue/v7/subcaps").json()[0]["id"]
     r = client.get(f"/api/catalogue/v7/subcaps/{sid}")
     assert r.status_code == 200
-    assert r.json()["id"] == sid
+    body = r.json()
+    assert body["id"] == sid
+    # Live counts present and truthfully zero on a freshly provisioned version (enrichment / F5
+    # carry-forward seed these); also exercises the cross-schema story_catalogue_link subquery.
+    assert body["n_use_cases"] == 0
+    assert body["n_stories"] == 0
+    assert body["n_platforms"] == 0
 
 
 @needs_db

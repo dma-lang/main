@@ -3,6 +3,7 @@
 import type { ReactElement } from 'react';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
+import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
 import { MissionControl } from './pages/MissionControl';
 import { Surface } from './pages/Surface';
 import { NAV } from './shell/nav';
@@ -13,6 +14,7 @@ const accessIds = ['settings', 'schema-mapping', 'onboarding', 'subcap'];
 
 const LIVE: Record<string, ReactElement> = {
   'mission-control': <MissionControl />,
+  explorer: <CapabilityWorkbench />,
 };
 
 export const router = createHashRouter([

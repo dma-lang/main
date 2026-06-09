@@ -52,6 +52,9 @@ export interface SubcapDetail {
   tier: string | null;
   lifecycle_state: string;
   completeness: number | null;
+  n_use_cases: number;
+  n_stories: number;
+  n_platforms: number;
 }
 
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';

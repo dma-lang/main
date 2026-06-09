@@ -1,7 +1,7 @@
 // App entry: query provider + auth gate. /api/me drives identity (is_admin, preferences); on 401 the
 // Login screen shows (hermetic dev auto-authenticates). Preferences hydrate the UI store on load.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { RouterProvider } from 'react-router-dom';
 
 import { useMe, useVersions } from './api/queries';
@@ -19,9 +19,16 @@ function Gate() {
   const hydrate = useUi((s) => s.hydrateFromMe);
   const version = useUi((s) => s.version);
   const setVersion = useUi((s) => s.setVersion);
+  const hydrated = useRef(false);
 
+  // Seed the store from server preferences exactly once, on the first successful /api/me load.
+  // Re-running on every me.data change (e.g. a PATCH response) would clobber the user's in-session
+  // theme/lens/persona changes, so we guard with a ref.
   useEffect(() => {
-    if (me.data) hydrate(me.data.preferences, me.data.is_admin);
+    if (me.data && !hydrated.current) {
+      hydrated.current = true;
+      hydrate(me.data.preferences, me.data.is_admin);
+    }
   }, [me.data, hydrate]);
 
   useEffect(() => {

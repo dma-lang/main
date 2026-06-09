@@ -59,6 +59,10 @@ class SubcapDetail(BaseModel):
     tier: str | None = None
     lifecycle_state: str
     completeness: float | None = None
+    # Live counts (truthful now, auto-correct as F5 carry-forward / enrichment seed these tables).
+    n_use_cases: int = 0
+    n_stories: int = 0
+    n_platforms: int = 0
 
 
 class PillarSummary(BaseModel):
@@ -102,14 +106,22 @@ async def list_subcaps(
 async def get_subcap(
     version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> SubcapDetail:
-    s = _schema(await resolve_version(version))
+    v = await resolve_version(version)
+    s = _schema(v)
     sql = text(
         "SELECT s.subcap_id AS id, s.name, cat.pillar_id AS pillar, cat.name AS category, "
         "cap.name AS cluster, s.description, s.solution_type, s.tier, s.lifecycle_state, "
-        "s.completeness " + _JOINS.format(s=s) + " WHERE s.subcap_id = :sid"
+        "s.completeness, "
+        f"(SELECT count(*) FROM {s}.use_case uc WHERE uc.subcap_id = s.subcap_id) AS n_use_cases, "
+        f"(SELECT count(*) FROM {s}.subcap_platform sp WHERE sp.subcap_id = s.subcap_id) "
+        "AS n_platforms, "
+        "(SELECT count(*) FROM control.story_catalogue_link scl "
+        "WHERE scl.subcap_id = s.subcap_id AND scl.version_id = :ver) AS n_stories "
+        + _JOINS.format(s=s)
+        + " WHERE s.subcap_id = :sid"
     )
     async with _engine().connect() as conn:
-        row = (await conn.execute(sql, {"sid": subcap_id})).mappings().first()
+        row = (await conn.execute(sql, {"sid": subcap_id, "ver": v.version_id})).mappings().first()
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"subcap '{subcap_id}' not found")
     return SubcapDetail.model_validate(dict(row))
