@@ -16,6 +16,7 @@ import {
   type StoryLibraryPage,
   type StoryLibraryQuery,
   type SubcapConnections,
+  type SuggestionOut,
   type SubcapNode,
   type UseCasePage,
   type UseCaseQuery,
@@ -117,6 +118,24 @@ export const useReasoning = (chainId: string | null) =>
     queryFn: () => api.reasoning(chainId ?? ''),
     enabled: !!chainId,
   });
+
+export const useSuggestions = (status: string) =>
+  useQuery<SuggestionOut[]>({
+    queryKey: ['suggestions', status],
+    queryFn: () => api.suggestions(status),
+  });
+
+export function useSuggestionActions() {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['suggestions'] });
+  const propose = useMutation({ mutationFn: api.proposeSuggestions, onSuccess: invalidate });
+  const apply = useMutation({ mutationFn: api.applySuggestion, onSuccess: invalidate });
+  const reject = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => api.rejectSuggestion(id, reason),
+    onSuccess: invalidate,
+  });
+  return { propose, apply, reject };
+}
 
 export const useUseCases = (version: string, params: UseCaseQuery) =>
   useQuery<UseCasePage>({

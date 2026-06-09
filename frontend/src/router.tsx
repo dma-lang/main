@@ -10,6 +10,7 @@ import { MissionControl } from './pages/MissionControl';
 import { Platforms } from './pages/Platforms';
 import { StoryLibrary } from './pages/StoryLibrary';
 import { SubcapWorkbench } from './pages/SubcapWorkbench';
+import { Suggestions } from './pages/Suggestions';
 import { Surface } from './pages/Surface';
 import { UseCases } from './pages/UseCases';
 import { VersionTimeline } from './pages/VersionTimeline';
@@ -29,6 +30,7 @@ const LIVE: Record<string, ReactElement> = {
   stories: <StoryLibrary />,
   lifecycle: <Lifecycle />,
   chat: <Chat />,
+  suggestions: <Suggestions />,
 };
 
 export const router = createHashRouter([

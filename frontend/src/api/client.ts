@@ -174,6 +174,33 @@ export interface ReasoningChain {
   checks: GateCheck[];
 }
 
+export interface SuggestionOut {
+  suggestion_id: string;
+  target_subcap: string | null;
+  subcap_name: string | null;
+  pillar: string | null;
+  kind: string;
+  title: string;
+  rationale: string;
+  status: string;
+  verdict: string | null;
+  breaking: boolean;
+  claim_label: string | null;
+  source_tier: string | null;
+  ers: number;
+  chain_id: string | null;
+  cost: string;
+  created_at: string | null;
+}
+
+export interface ApplyOut {
+  applied: boolean;
+  status: string;
+  gate_failed: string | null;
+  before: string | null;
+  after: string | null;
+}
+
 export interface LifecycleSubcap {
   id: string;
   name: string;
@@ -363,4 +390,17 @@ export const api = {
     qs.set('size', String(p.size ?? 10));
     return http<StoryLibraryPage>(`/api/stories?${qs.toString()}`);
   },
+  suggestions: (status: string): Promise<SuggestionOut[]> =>
+    http<SuggestionOut[]>(`/api/suggestions?status=${status}`),
+  proposeSuggestions: (version: string): Promise<{ created: number; candidates: number }> =>
+    http<{ created: number; candidates: number }>(`/api/admin/suggestions/propose/${version}`, {
+      method: 'POST',
+    }),
+  applySuggestion: (id: string): Promise<ApplyOut> =>
+    http<ApplyOut>(`/api/suggestions/${id}/apply`, { method: 'POST' }),
+  rejectSuggestion: (id: string, reason: string): Promise<ApplyOut> =>
+    http<ApplyOut>(`/api/suggestions/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
 };
