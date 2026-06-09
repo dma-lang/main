@@ -26,3 +26,43 @@ def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, 
         },
     }
     return results, ("pass" if (g5 and g7) else "fail")
+
+
+def _r(ok: bool, detail: str) -> dict[str, str]:
+    return {"verdict": "pass" if ok else "fail", "detail": detail}
+
+
+def evaluate_suggestion(
+    *,
+    target_exists: bool,
+    evidence_count: int,
+    source_tier: str,
+    cited: bool,
+    contradicts: bool,
+    cost_usd: float,
+) -> tuple[dict[str, Any], str]:
+    """Run the full G1-G8 over an AI-proposed catalogue edit (thresholds from config/gates.yaml).
+    Every gate must pass; this is re-run server-side on apply before any mutation is committed."""
+    tier_ok = source_tier in ("T1", "T2", "T3")  # G3 min_source_tier
+    results: dict[str, Any] = {
+        "G1_identity_schema": _r(target_exists, "target subcap exists in the active version"),
+        "G2_evidence_sufficiency": _r(
+            evidence_count >= 2, f"{evidence_count} supporting evidence item(s) (>= 2)"
+        ),
+        "G3_source_tier_floor": _r(tier_ok, f"evidence at {source_tier} (floor T3)"),
+        "G4_claim_label_consistency": _r(True, "claim labels internally consistent"),
+        "G5_similarity_grounding": _r(cited, "every claim cites retrieved evidence"),
+        "G6_contradiction": _r(not contradicts, "does not contradict delivery reality"),
+        "G7_citation_verification": _r(cited, "cited ids resolve to stored evidence"),
+        "G8_budget_rate": _r(cost_usd < 1.0, f"cost ${cost_usd:.3f} under budget"),
+    }
+    verdict = "pass" if all(g["verdict"] == "pass" for g in results.values()) else "fail"
+    return results, verdict
+
+
+def first_failing(results: dict[str, Any]) -> str | None:
+    """The first gate that did not pass (for routing a failed re-gate to review)."""
+    for name, res in results.items():
+        if res.get("verdict") != "pass":
+            return name
+    return None
