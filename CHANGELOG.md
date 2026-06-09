@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **Catalogue read endpoints (version-scoped, F9)**: `GET /api/catalogue/{v}/subcaps` (tree),
+  `/subcaps/{id}` (detail), `/summary` (per-pillar counts) over `cat_<version>`; pillar counts match
+  the PRD (P1 205 / P2 292 / P3 164 / P4 190). `version_id` validated as a SQL identifier (hardening).
 - **F4 — per-version provisioning (core)**: `bring_version_online()` generates the per-version
   `cat_<version>` data plane (32 tables, from the `schema.sql` template) and seeds the real v7
   catalogue (851 subcaps / 136 capabilities / 16 categories / 4 pillars) transactionally, then
