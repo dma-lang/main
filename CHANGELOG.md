@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **F4 — per-version provisioning (core)**: `bring_version_online()` generates the per-version
+  `cat_<version>` data plane (32 tables, from the `schema.sql` template) and seeds the real v7
+  catalogue (851 subcaps / 136 capabilities / 16 categories / 4 pillars) transactionally, then
+  registers the version. Committed gzipped seed (catalogue + sample stories) extracted from the
+  prototype's data. `POST /api/admin/provision/{version}` (admin); `/api/versions` + `/healthz`
+  reflect the provisioned version. The automap workbook-ingest studio layers on top later.
 - **F10 — frontend shell**: the React/TS shell ported faithfully from the prototype — the full
   stylesheet (lifted verbatim), the 9-group A–I sidebar, the header (pillar/SV/lens, data-driven
   version toggle, admin view, cost meter, theme), the shared primitives (`Claim/Tier/Mag/LifeChip/

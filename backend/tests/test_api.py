@@ -52,10 +52,10 @@ def test_page_has_more() -> None:
 
 
 @needs_db
-def test_list_versions_empty(client: TestClient) -> None:
+def test_list_versions_returns_list(client: TestClient) -> None:
     r = client.get("/api/versions")
     assert r.status_code == 200
-    assert r.json() == []  # nothing provisioned until F4
+    assert isinstance(r.json(), list)  # may contain provisioned versions (F4+)
 
 
 @needs_db

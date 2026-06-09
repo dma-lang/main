@@ -77,9 +77,11 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
 
     # --- API routers (register before the SPA mount so /api/* always wins) ---
+    from app.routers import admin as admin_router
     from app.routers import me as me_router
     from app.routers import versions as versions_router
 
+    app.include_router(admin_router.router)
     app.include_router(me_router.router)
     app.include_router(versions_router.router)
 
