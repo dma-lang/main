@@ -43,7 +43,16 @@ def _verify_google(token: str, settings: Settings) -> dict[str, Any]:
 
     global _google_request
     if _google_request is None:
-        _google_request = google_requests.Request()
+
+        class _BoundedRequest(google_requests.Request):
+            """google-auth fetches Google's signing certs with NO timeout by default — a hung
+            fetch would hang every sign-in (§15 bounded-everything: 10s, then a clean 401)."""
+
+            def __call__(self, *args: Any, **kwargs: Any) -> Any:
+                kwargs.setdefault("timeout", 10)
+                return super().__call__(*args, **kwargs)  # type: ignore[no-untyped-call]
+
+        _google_request = _BoundedRequest()
 
     try:
         raw = id_token.verify_oauth2_token(  # type: ignore[no-untyped-call]

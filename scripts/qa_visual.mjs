@@ -43,6 +43,22 @@ async function settle(page) {
 }
 
 (async () => {
+  // STALE-BUILD TRIPWIRE: a sweep against an old bundle "passes" while testing nothing — refuse
+  // to run unless the server serves exactly the bundle frontend/dist holds right now. (This
+  // exact failure shipped: a forgotten backend/static copy shadowed weeks of fresh builds.)
+  const { readFileSync } = await import('node:fs');
+  const wanted = readFileSync(new URL('../frontend/dist/index.html', import.meta.url), 'utf8')
+    .match(/index-[\w-]+\.js/)?.[0];
+  const served = (await (await fetch(APP + '/')).text()).match(/index-[\w-]+\.js/)?.[0];
+  if (!wanted || served !== wanted) {
+    console.error(
+      `STALE BUILD: server serves ${served ?? 'nothing'} but frontend/dist has ${wanted}.\n` +
+        'Restart the server with STATIC_DIR=<repo>/frontend/dist (see scripts/dev_up.sh).',
+    );
+    process.exit(2);
+  }
+  console.log(`build check: serving ${served} (matches frontend/dist)`);
+
   const browser = await chromium.launch();
   for (const theme of THEMES) {
     for (const vp of VIEWPORTS) {

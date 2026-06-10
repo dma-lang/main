@@ -46,7 +46,18 @@ import {
   type VersionInfo,
 } from './client';
 
-export const useMe = () => useQuery<Me>({ queryKey: ['me'], queryFn: api.me, retry: false });
+// Identity changes only through explicit sign-in/sign-out — never refetch it on window focus or
+// reconnect. (The focus refetch raced the Google sign-in popup: it fired token-less the moment
+// the popup closed, and its stale 401 could land AFTER the fresh identity, bouncing the gate
+// straight back to the Login page.)
+export const useMe = () =>
+  useQuery<Me>({
+    queryKey: ['me'],
+    queryFn: api.me,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
 
 export const useVersions = () =>
   useQuery<VersionInfo[]>({ queryKey: ['versions'], queryFn: api.versions });

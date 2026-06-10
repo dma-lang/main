@@ -158,6 +158,18 @@ export async function renderGoogleButton(
     width: 320,
     logo_alignment: 'left',
   });
+  // GIS fails SILENTLY when this origin is not on the OAuth client's allow-list (it only logs
+  // [GSI_LOGGER] to the console and renders nothing) — turn that blank space into an honest,
+  // actionable state. The iframe lands fast when allowed; poll briefly before declaring failure.
+  for (let waited = 0; waited < 4000; waited += 200) {
+    if (parent.childElementCount > 0) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(
+    `Google did not render the sign-in button — usually this origin (${location.origin}) is ` +
+      "missing from the OAuth client's Authorized JavaScript origins (GCP Console → APIs & " +
+      'Services → Credentials). Add it, wait a few minutes, then retry.',
+  );
 }
 
 /** Idempotent auth init; awaited by the API layer before the first request. With GIS there is no

@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **Sign-in completed but never redirected**: when Google's popup closed, the window-focus
+  refetch re-fired the errored `/api/me` query WITHOUT the token; its stale 401 landing after the
+  fresh identity bounced the gate straight back to the Login page (and the API layer's 401
+  handler yanked the hash back to `#/login`). Identity now never refetches on focus/reconnect,
+  the sign-in cancels in-flight `['me']` fetches before installing the fresh identity, a 401
+  from a token-less request can no longer unseat a session that holds a token, and the post-
+  sign-in `/api/me` wait is bounded (20s → retryable error, never an infinite spinner). The
+  backend's Google-certs fetch is bounded too (10s — a hung fetch would have hung every sign-in).
+- **No sign-out existed**: Settings now has Sign out — clears the Google ID token and every
+  cached query, lands on the Login page.
+- **Silent blank sign-in button**: when Google refuses to render the button (origin missing from
+  the OAuth client's Authorized JavaScript origins) the Login now says exactly that, with the
+  origin to add, instead of an empty space.
+
+### Added (QA)
+- **Live-auth transition harness (`scripts/qa_transitions.mjs`)**: the sign-in flow could never
+  be automated against real Google — every auth bug hid there. The harness stubs ONLY Google's
+  GSI script (+ `/api/config` forced live) and drives the real SPA against the real hermetic
+  backend through login → mission control (including the stale-401 race, reproduced
+  deterministically), a full 25-item sidebar walk, deep-link reload session restore, and
+  sign-out → login.
+- **Stale-build tripwire** in `qa_visual` + `qa_transitions`: both refuse to run unless the
+  server serves exactly the bundle `frontend/dist` holds (a forgotten `backend/static` copy had
+  been silently shadowing fresh local builds — production was unaffected, the Docker build bakes
+  `dist` itself).
+
 ### Added
 - **Pillar-wise workbook parser (FR-1, real)**: `services/workbooks.py` parses an uploaded ZIP of
   per-pillar .xlsx capability maps into the provisioning seed — tolerant header aliasing across the

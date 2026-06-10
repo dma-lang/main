@@ -913,8 +913,11 @@ import { getToken, isLiveAuth } from '../lib/auth';
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  // Live auth attaches a fresh Firebase ID token; dev mode sends none. A 401 means no/expired
-  // session — route to the login page (the backend fails closed; this is just the UX).
+  // Live auth attaches a fresh Google ID token; dev mode sends none. A 401 from a request that
+  // CARRIED the current token means the session is no/expired — route to the login page (the
+  // backend fails closed; this is just the UX). A 401 from a token-less request while a token
+  // exists NOW is stale noise (e.g. a refetch that raced the sign-in popup) — never let it yank
+  // a freshly signed-in user back to the login page.
   const token = await getToken().catch(() => null);
   const res = await fetch(BASE + path, {
     credentials: 'include',
@@ -927,7 +930,8 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     if (res.status === 401 && isLiveAuth() && !location.hash.startsWith('#/login')) {
-      location.hash = '#/login';
+      const now = await getToken().catch(() => null);
+      if (token !== null || now === null) location.hash = '#/login';
     }
     let message = res.statusText;
     try {

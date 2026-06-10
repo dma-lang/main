@@ -67,7 +67,16 @@ export function Login() {
     setPhase('signing');
     setDetail('');
     try {
-      const me = await api.me(); // backend verifies the token + domain — fails closed (403)
+      // Bounded: a hung backend must surface as a retryable error, never an infinite spinner.
+      const me = await Promise.race([
+        api.me(), // backend verifies the token + domain — fails closed (403)
+        new Promise<never>((_, rej) =>
+          setTimeout(() => rej(new Error('The service did not respond within 20s — retry.')), 20_000),
+        ),
+      ]);
+      // Kill any in-flight token-less ['me'] refetch BEFORE installing the fresh identity —
+      // its stale 401 landing afterwards would flip the gate straight back to this page.
+      await qc.cancelQueries({ queryKey: ['me'] });
       qc.setQueryData(['me'], me); // flips the App gate; the router mounts
       location.hash = '#/mission-control';
     } catch (e) {
