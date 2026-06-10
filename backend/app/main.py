@@ -1,0 +1,138 @@
+"""FastAPI application entrypoint (F1).
+
+Single Cloud Run service: this app serves the JSON API and the built Vite/React SPA from one
+container. Binds ``0.0.0.0:$PORT`` (see the Dockerfile CMD). ``/healthz`` is the startup/readiness
+probe that gates traffic; ``/livez`` is the liveness probe. The lifespan handler drains on SIGTERM
+(F3 will open/dispose the DB pool here). No DB dependency at F1 so the service boots standalone.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from app import db
+from app._version import APP_VERSION
+from app.settings import Settings, get_settings
+
+logger = logging.getLogger("cia")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    logger.info(
+        "startup: app_version=%s env=%s llm_mode=%s",
+        APP_VERSION,
+        settings.app_env,
+        settings.llm_mode,
+    )
+    db.init_engine()  # open the bounded async pool (no-op without DATABASE_URL)
+    yield
+    await db.dispose_engine()  # drain the pool within the SIGTERM window
+    logger.info("shutdown: drained")
+
+
+def create_app() -> FastAPI:
+    logging.basicConfig(level=logging.INFO)
+    settings = get_settings()
+    app = FastAPI(title="Capability Intelligence Agent", version=APP_VERSION, lifespan=lifespan)
+
+    if settings.cors_allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_allow_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    @app.get("/healthz", tags=["system"])
+    async def healthz() -> dict[str, object]:
+        """Startup/readiness probe (§16). Reports app + active catalogue version + db + mode."""
+        engine = db.get_engine()
+        db_status = "ok" if await db.ping() else ("not_configured" if engine is None else "down")
+        return {
+            "status": "ok",
+            "app_version": APP_VERSION,
+            "catalogue_version": await db.active_catalogue_version(),
+            "llm_mode": settings.llm_mode,
+            "db": db_status,
+        }
+
+    @app.get("/livez", tags=["system"])
+    async def livez() -> dict[str, str]:
+        """Liveness probe — restarts a hung instance."""
+        return {"status": "alive"}
+
+    # Consistent error envelope (F9).
+    from app.errors import register_error_handlers
+
+    register_error_handlers(app)
+
+    # --- API routers (register before the SPA mount so /api/* always wins) ---
+    from app.routers import admin as admin_router
+    from app.routers import catalogue as catalogue_router
+    from app.routers import chat as chat_router
+    from app.routers import digest as digest_router
+    from app.routers import evidence as evidence_router
+    from app.routers import governance as governance_router
+    from app.routers import me as me_router
+    from app.routers import stories as stories_router
+    from app.routers import suggestions as suggestions_router
+    from app.routers import trends as trends_router
+    from app.routers import versions as versions_router
+
+    app.include_router(admin_router.router)
+    app.include_router(catalogue_router.router)
+    app.include_router(chat_router.router)
+    app.include_router(digest_router.router)
+    app.include_router(evidence_router.router)
+    app.include_router(governance_router.router)
+    app.include_router(me_router.router)
+    app.include_router(stories_router.router)
+    app.include_router(suggestions_router.router)
+    app.include_router(trends_router.router)
+    app.include_router(versions_router.router)
+
+    _mount_spa(app, settings.static_dir)
+    return app
+
+
+# Anchor the SPA build to the code, not the process working directory. The Dockerfile copies
+# frontend/dist -> <app root>/static and Cloud Run runs from there, so a relative STATIC_DIR must
+# resolve the same way no matter where uvicorn is launched — otherwise a wrong cwd silently serves
+# a stale (or no) build. `_APP_ROOT` is the directory that holds the `app` package.
+_APP_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _mount_spa(app: FastAPI, static_dir: str) -> None:
+    """Serve the built SPA at '/'. Mounted last so it never shadows API routes.
+
+    Resilient + observable: a relative dir resolves against the app root (cwd-independent); the
+    resolved path + file count are logged so a stale or wrong build is visible at startup, never
+    silent. An absent dir — or one missing index.html (incomplete build) — serves API-only with a
+    clear warning instead of opaque SPA 404s, so the backend still boots for API-only dev.
+    """
+    path = Path(static_dir)
+    if not path.is_absolute():
+        path = _APP_ROOT / path
+    path = path.resolve()
+    if not (path / "index.html").is_file():
+        logger.warning("SPA build at '%s' absent/incomplete; serving API only", path)
+        return
+    file_count = sum(1 for p in path.rglob("*") if p.is_file())
+    logger.info("serving SPA from '%s' (%d files)", path, file_count)
+    app.mount("/", StaticFiles(directory=path, html=True), name="spa")
+
+
+app = create_app()
+
+
+__all__ = ["app", "create_app", "Settings"]

@@ -1,0 +1,2118 @@
+Engineering · build manual
+
+# Capability Intelligence Agent
+ A page-by-page build manual with an explicit intelligence layer: shared foundations once (automap that survives renamed columns, the two-fold story pipeline with enrichment, learning loops), then every surface on its own - deeply-explained components, sources, the ingest to enrich to persist to map lifecycle, ordered steps, done-criteria and dependencies - now with per-page frontend-to-backend QA, self-healing at every stage, an explicit relationship model with discovery, safe Cloud Run deployment and migrations, a current-Gemini model strategy, and an intelligence-design section (trend-detection techniques, the self-learning loops, the consultant loop and its anti-generic safeguards, RAG information access, and source coverage).
+ Document
+ Implementation steps v3.4 (final, QA-passed)
+
+ Source of truth
+ PRD - TRD - Backend Schema - prototype
+
+ Audience
+ Delivery engineering
+
+ Status
+ Confidential
+
+ Implementation steps 1 How to read this 2 Shared foundations 3 Access & onboarding 4 A Explore 5 B Catalogue tools 6 C Project validation 7 D Public intelligence 8 E Synthesis 9 F Lifecycle & competition 10 G Versioning & QA 11 H Reasoning & RAG 12 I Sandbox 13 Cross-cutting modals 14 Build sequence 15 Failure modes & self-healing 16 Deployment & migrations 17 Model strategy & Gemini usage 18 Intelligence design (trends, news, suggestions) 19 Global acceptance ☾ Dark
+
+ Section 1
+
+## How to read this build manual
+ This is the build manual for the Capability Intelligence Agent. It is written so an engineer (or a coding agent) can build the whole system without guessing and without doing the same work twice. Read section 2 first: it specifies the shared foundations every page sits on, including the intelligence layers (automap, enrichment, matching, reasoning, gating) that keep the catalogue current and resilient. Then build pages from sections 3 to 13; each page only adds its own surface-specific work and names the foundations it reuses, so there are no overlaps.
+
+### 1.1 How each page is specified
+ Every surface uses the same fixed template, so nothing is implicit:
+ | Field | What it tells you
+
+ | Purpose | Why the surface exists.
+ | Components (each explained) | Every concrete UI piece, with what it shows, where its data comes from, and how it behaves - not just a label.
+ | Sources and relations | The exact tables it reads or writes, the plane (CP control plane / DP active-version data plane / derived view), and the relations it consumes.
+ | Data lifecycle | Three stages kept distinct. Ingest : how raw data enters. Enrich / interpret : how it is transformed into the canonical shape or into exactly what the surface needs. Persist (and map) : what is stored, and how it is linked to subcaps - always gated.
+ | Build steps | The ordered work: endpoints, jobs, scripts and frontend wiring, each with a done criterion.
+ | Done when | The single observable condition that means the surface is finished.
+ | Depends on | The foundation IDs (F1-F15) and any prior page it needs merged first.
+
+### 1.2 Conventions
+
+- Roles: BE backend, FE frontend, ML machine learning, OPS platform.
+- Version-awareness: the active catalogue version (v7 today, v5 legacy) is in the header context and part of every catalogue read and every TanStack Query key; counts, diffs and lineage are version-qualified.
+- Trust metadata is not optional: wherever a surface shows an AI-derived value it shows the claim label, source tier, ERS and a reasoning-chain link. These gate commits (F8).
+- Hermetic dev: the delivered prototype is the dev-mode frontend (deterministic data, no provider calls); build against it and swap the in-memory dataset for the endpoints surface by surface.
+
+### 1.3 Intelligence layering (the heart of this revision)
+ The app is not a static reader. Five intelligence layers keep it current and resilient, and they are built as shared foundations so every surface uses the same brain:
+ | Layer | What it does | Where it lives
+
+ | L1 Structural | Maps any workbook shape to the canonical model. Resilient to renamed columns because it classifies column values , not just names, and learns from every admin decision. | F4 automap
+ | L2 Enrichment | Transforms every raw input (new Jira story, SOW scope item, news, vendor event) into the canonical shape - scored, classified, summarised - before it is used, so the corpus stays one consistent shape. | F5, F7, page pipelines
+ | L3 Matching | One shared embedding space links stories, SOWs, offerings and carry-forward to subcaps, so “subcap” means the same thing everywhere. | F6
+ | L4 Reasoning & adversarial | Records a reasoning chain for every AI output and runs Opus adversarial review for synthesis and benchmarks. | F7
+ | L5 Gating (deterministic) | The eight validation gates sit between any proposal and any commit; code, not prompts. | F8
+
+### 1.4 The universal pattern: ingest, enrich, persist, map
+ Three of the hardest data problems - the canonical Jira corpus, the SOW corpus, and external evidence - all follow one pattern, so the scripting is consistent and there is nothing bespoke to learn per source:
+ Ingest
+ Raw source -> restricted landing
+ workbook, Jira issue, SOW file, news
+
+ →
+ Enrich
+ Transform into the canonical shape
+ score, classify, summarise, redact
+
+ →
+ Persist
+ Store with provenance
+ control plane, one consistent schema
+
+ →
+ Map
+ Link to subcaps, gated
+ embedding match -> G1/G5/G7 -> confirm
+
+ The one rule that prevents overlap
+ Ingestion, the automap intelligence, provisioning, story enrichment + carry-forward, embeddings, retrieval, the gates and the suggestion lifecycle are built once as foundations. Pages never re-implement them; they call them. If two pages seem to need the same new capability, that capability belongs in a foundation.
+
+ Section 2
+
+## Shared foundations (build once, incl. the intelligence layers)
+ Build these fifteen foundations before the pages. Every surface reuses them and never reimplements them - this is what keeps the build free of overlaps. F4, F5 and F13 carry the intelligence this revision adds (automap that survives renamed columns, the two-fold story pipeline with enrichment, the learning loops that compound); F14 and sections 15-16 carry the resilience (self-healing at every stage and safe Cloud Run deployment and migrations); F15 makes the backend schema’s relationships explicit and proposes new ones; section 17 covers the Gemini model strategy.
+
+### F1 · Service skeleton & environments (OPS, BE)
+ One Cloud Run service hosts the FastAPI backend and the built React SPA in a single container. Three environments - dev (hermetic: the full stack runs with no provider credentials, all model calls stubbed deterministically), staging (real providers, synthetic admin) and production - promote the same image; only config and secrets differ. Provider availability is a config switch, never an architectural dependency.
+ Build steps
+
+- Scaffold the FastAPI app with a routers package (one router per group in F9); serve the Vite React build as static files from the same container; the app reads PORT and listens on 0.0.0.0 (never 127.0.0.1).
+- Build the image for linux/amd64 ( docker buildx ) - an arm/Mac image is the most common "container failed to start"; verify the image runs locally before deploy.
+- Expose a cheap /healthz (readiness) and a deeper /livez (liveness); configure a Cloud Run startup probe so traffic only routes when ready, and a liveness probe so a hung instance is restarted (section 16).
+- Handle SIGTERM : stop accepting new work, drain in-flight requests, close the DB pool, and exit within the 10-second window before SIGKILL.
+- Set --min-instances 2 on the critical path (removes the rolling-deploy cold-start gap) with startup CPU boost ; set --max-instances as downstream protection sized to the Cloud SQL connection budget, not peak traffic.
+- Wire Secret Manager (mounted, never baked into the image or plain env); run as a least-privilege service account; expose LLM_MODE (hermetic | live) with a deterministic stub model stack for dev.
+- Deploy by revision with a canary then promote, and keep auto-rollback to the last healthy revision; CI builds the image once and promotes it across environments (section 16).
+ Done when. the amd64 image builds and runs locally, /healthz gates traffic, SIGTERM drains cleanly within 10s, a canary revision can be promoted or rolled back, and the app runs fully in hermetic mode with no provider credentials.
+
+### F2 · Authentication & identity (BE, FE)
+ Firebase Auth with Google sign-in restricted to @zennify.com (fails closed). Login is the only pre-auth route. A single is_admin flag gates every admin surface. Per-user preferences (theme, lens, persona) live in control.users.preferences .
+ Build steps
+
+- Create the Firebase project with domain restriction; verify the ID token in a FastAPI dependency on every route.
+- Upsert control.users on first login; expose GET /api/me returning {uid, email, is_admin, preferences}.
+- Implement an is_admin dependency that 403s non-admins; apply it to admin routers.
+- Persist preference changes via PATCH /api/me/preferences .
+ Done when. a non-@zennify.com account cannot reach any product route, /api/me returns identity plus preferences, and an admin-only test route rejects a non-admin.
+
+### F3 · Control-plane schema & migrations (BE)
+ All control.* tables and enums from schema.sql created by versioned migrations - identity, versions, ingest runs, mapping configuration, the canonical story corpus and carry-forward bridge, evidence, reasoning, suggestions, gates, governance, SOW, intelligence and audit. The control plane does not change shape when a new catalogue version arrives.
+ Build steps
+
+- Adopt the control-plane DDL from schema.sql as the Alembic baseline; enable pgcrypto and pgvector ; stamp an already-provisioned database to baseline rather than re-running create.
+- Seed the enums exactly (mapping_status, carry_status, relation_type, evidence_kind, claim_label, catalogue_impact, source_type, offering_tier, data_product_category).
+- Run migrations as a one-shot Cloud Run Job , never on app startup, and only promote a new service revision after the Job completes (section 16); the app never migrates itself.
+- Guard the runner (script below) with a Postgres advisory lock on a direct connection (not the transaction pooler), a lock_timeout , and a version-check-first skip so a re-run at head is a no-op.
+- Keep migrations idempotent and forward-safe: state lives in alembic_version in the database (not the image or Terraform state), so image rebuilds and repeated terraform apply are no-ops at head; use expand/contract for zero-downtime and CREATE INDEX CONCURRENTLY outside a transaction.
+- Never autogenerate-and-apply in production; review every revision; run migrations against an ephemeral Postgres 16 in CI, and test the downgrade.
+ app/migrate.py python
+ # app/migrate.py - safe, idempotent migrations for an autoscaled service.
+# Run as a ONE-SHOT JOB (never on app startup - autoscaled instances would race the migration).
+# Use a DIRECT DB connection, NOT the transaction pooler: pg advisory locks are session-scoped and a
+# transaction pooler (PgBouncer txn mode) releases the connection between statements, hanging the lock.
+import sqlalchemy as sa
+from alembic import command
+from alembic.config import Config
+
+LOCK_KEY = 0x0C1A_M1 # any stable 64-bit key for this app
+
+def run():
+ engine = sa.create_engine(DIRECT_URL, pool_pre_ping=True) # direct, not via the pooler
+ with engine.connect() as cx:
+ if at_head(cx): # cheap skip if already at head
+ log("schema at head; nothing to do"); return # -> Job retries / re-apply are no-ops
+ cx.execute(sa.text("SET lock_timeout = '30s'")) # bounded: a stuck holder can't hang deploys
+ if not cx.execute(sa.text("SELECT pg_try_advisory_lock(:k)"), {"k": LOCK_KEY}).scalar():
+ log("another runner holds the migration lock; exiting 0"); return
+ try:
+ command.upgrade(Config("alembic.ini"), "head") # Postgres transactional DDL: a failure rolls back
+ finally:
+ cx.execute(sa.text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_KEY})
+
+# Resilience properties:
+# - State lives in alembic_version in the DB, NOT in the image or Terraform state -> image rebuilds are safe.
+# - upgrade head at head is a no-op -> Job retries and repeated `terraform apply` are safe (idempotent).
+# - Expand/contract migrations (add nullable -> backfill -> later drop) keep old + new revisions both working.
+# - CREATE INDEX CONCURRENTLY runs OUTSIDE a transaction (op.create_index(..., postgresql_concurrently=True)).
+
+ Done when. the control plane migrates cleanly onto empty Postgres 16, a concurrent or repeated run is a safe no-op, a half-applied migration rolls back (transactional DDL), and an image rebuild or re-apply does not duplicate or lose schema state.
+
+### F4 · Schema-mapping engine with an automap intelligence layer + per-version provisioning (BE, ML)
+ The resilience core (FR-2) and intelligence layer L1. On upload it detects the workbook layout and auto-maps source fields to the canonical model even when column names have changed , because it scores four independent signals and learns from every admin decision. An admin confirms or overrides and adds custom fields; the version’s relations are captured; on apply the data-plane schema ( cat_<version> ) is provisioned: tables, FKs from relation_def , bulk-loaded rows. A new catalogue structure must never need a code release.
+ Build steps
+
+- Write parsing adapters for v5 (10 sheets/pillar) and v7 (25 tabs/pillar); an unknown layout routes to manual mapping, not failure.
+- Build the automap intelligence layer (script below): for each source column, score (a) header lexical similarity with a synonym + abbreviation dictionary, (b) header embedding similarity, (c) a value fingerprint that classifies the column by the shape and content of its sampled values (so a renamed column is still recognised), and (d) a learned-memory prior from past confirmations; combine into a confidence and a status (confirmed / review / custom).
+- Implement the learning loop : every admin confirm or override updates the memory, the synonym set and the canonical embedding centroid, so the next version or tenant maps the renamed column automatically.
+- Expose admin endpoints /automap , /confirm , /relations (CRUD on relation_def), /apply ; persist mappings to source_field_mapping and catalogue_sheet .
+- Implement the canonical cell parsers (R1): L3 cell [L3-ID] Name (count: N) split + vendor-from-prefix; same discipline for persona, use-case and story-ref cells.
+- Implement bring_version_online(version_id, workbooks) as one idempotent transaction: create schema, create tables (canonical + custom columns), add FKs, load rows, register ingest_run = provisioned.
+ ingestion/automap.py python
+ # ingestion/automap.py - multi-signal field auto-mapping with a learning memory.
+# Resilient to renamed columns: when the HEADER changes, the VALUES still reveal the field.
+
+CANONICAL = ["subcap_id","name","category","cluster","tier","platforms","features",
+ "personas","use_cases","maturity","status","story_refs","offering_refs"]
+
+def automap_fields(sheet, canonical=CANONICAL, memory=Memory()):
+ proposals = []
+ for col in sheet.columns:
+ header = normalise(col.header) # lowercase, strip punctuation, expand abbreviations
+ sample = col.sample_values(n=50) # for content fingerprinting (name-independent)
+ scores = {}
+ for canon in canonical:
+ s_lex = lexical_sim(header, SYNONYMS[canon]) # token + synonym + abbrev match
+ s_emb = cosine(embed(col.header), CANON_EMBED[canon])# semantic header match (Primary Products ~ L3_Platforms)
+ s_val = value_fingerprint(sample, canon) # data-shape / content classifier
+ s_mem = memory.prior(col.header, canon) # learned from past confirmations
+ scores[canon] = 0.30*s_lex + 0.30*s_val + 0.25*s_emb + 0.15*s_mem
+ canon, conf = argmax(scores)
+ status = ("confirmed" if conf >= CFG.auto # 0.86 (config, not code)
+ else "review" if conf >= CFG.review # 0.70
+ else "custom") # unknown -> custom column; never silently dropped
+ proposals.append(Mapping(col.header, canon, round(conf,3), status,
+ signals=scores, evidence=sample[:3]))
+ return proposals
+
+def value_fingerprint(sample, canon):
+ # The content classifier is what makes automap survive a rename - it reads VALUES, not the name.
+ if canon == "subcap_id": return frac(sample, regex=r"^P\dC\d") # P3C1.8 ...
+ if canon == "platforms": return frac(sample, contains="[L3-") # [L3-SF-...] (R1 grammar)
+ if canon == "personas": return frac(sample, looks_like=role_list) # semicolon-delimited roles
+ if canon == "maturity": return frac(sample, matches=M1_M5_prose) # five graded descriptors
+ if canon == "tier": return frac(sample, in_set={"T1","T2","T3"})
+ return value_embed_class(sample, canon) # else: a value-embedding classifier
+
+# Learning loop - the intelligence that compounds.
+# Every admin confirm/override updates the memory, the synonym set and the canonical centroid,
+# so the NEXT version (or tenant) auto-maps a renamed column correctly without a code change.
+def on_admin_decision(col_header, chosen_canon, accepted):
+ memory.record(col_header, chosen_canon, accepted)
+ if accepted:
+ SYNONYMS[chosen_canon].add(normalise(col_header))
+ CANON_EMBED[chosen_canon] = update_centroid(CANON_EMBED[chosen_canon], embed(col_header))
+
+ Done when. a workbook with renamed columns still auto-maps correctly from value fingerprints and learned memory, the real v7 workbooks provision cat_v7 transactionally, a re-run upserts, and an unknown column becomes a custom column rather than being dropped.
+
+### F5 · Canonical story pipeline - seed + continuous enrichment + carry-forward (BE, ML)
+ The canonical story corpus is two-fold . (1) Seed: the initial export of stories mapped against v5 (14,406 real stories) is loaded as the baseline analysis set and carried forward to the active version. (2) Continuous: the app connects to Jira and monitors new completed stories; each new raw story is enriched into the canonical story shape - the same fields and quality scores the seed stories carry - before it is mapped back to a subcap and persisted. This enrichment is what keeps the whole corpus one consistent shape; intelligence layer L2. Synthetic rows are flagged and excluded from analysis by default.
+ Build steps
+
+- Seed: load the v5-mapped export into control.story (provenance, is_synthetic flag); run seed_native('v5') for native v5 links; run carry_forward('v5','v7') (normalise id, crosswalk, F6 embedding confirm, bands in config) into story_subcap_carry ; create the story_catalogue_link view.
+- Connect to Jira: a Cloud Scheduler poll (or webhook) pulls new completed stories into a raw landing - the continuous monitor.
+- Enrich (the crucial step): for each raw issue run enrich_story() to derive the canonical fields and quality scores - acceptance-criteria, solution-design and story sub-scores, composite, confidence band, subvertical, target maturity, population, clean summary - so a story ingested today is indistinguishable in shape from a seed story.
+- Map back to subcaps: match the enriched story to a subcap via the F6 shared embedding space; gate (G1, G5, G7); confirmed auto-link, borderline to review, none dropped.
+- Persist: write into control.story and story_subcap_carry for the active version; idempotent on story_key so re-runs upsert.
+ ingestion/story_enrich.py python
+ # ingestion/story_enrich.py - raw Jira issue -> canonical story record -> subcap mapping.
+# The canonical corpus has ONE shape; every NEW story is enriched into that shape before it is used,
+# so a story ingested today is indistinguishable from a seed story exported against v5.
+
+def ingest_jira_story(issue, version): # issue = raw Jira fields (continuous monitor)
+ raw = extract(issue) # key, project, summary, description, AC, labels, components
+ story = enrich_story(raw) # -> canonical schema (same fields the seed corpus carries)
+ match = map_story_to_subcap(story, version) # embedding match against the ACTIVE version
+ if gate_pass(match, gates=["G1","G5","G7"]): # identity, grounding, citation
+ persist_story(story, match, version) # control.story (+ story_subcap_carry for this version)
+ else:
+ queue_for_review(story, match) # borderline -> review; never dropped
+ return story, match
+
+def enrich_story(raw):
+ # Derive the SAME quality signals the seed stories already carry, so shapes match exactly.
+ ac = score_acceptance_criteria(raw.acceptance_criteria) # 0..3 (Flash/Sonnet rubric)
+ sd = score_solution_design(raw.description) # 0..3
+ ss = score_story(raw.summary, raw.description) # 0..5
+ return CanonicalStory(
+ story_key = raw.key, project_key = raw.project,
+ summary = clean(raw.summary),
+ sub_scores = {"ac": ac, "sd": sd, "ss": ss},
+ composite = weighted(ac, sd, ss),
+ confidence = confidence_band(ac, sd, ss), # HIGH / MEDIUM / LOW
+ subvertical = classify_subvertical(raw), # BK/CL/CIB/FC/CU/WM/RIA/IC/IB
+ target_maturity = infer_target_maturity(raw), # M1..M5
+ population = infer_population(raw),
+ source_system = "jira", is_synthetic = False)
+
+def map_story_to_subcap(story, version):
+ cands = hybrid_retrieve(story.summary + " " + story.description, version, k=5) # F6 shared space
+ top = best(cands)
+ return Match(subcap=top.subcap_id, similarity=top.score, via="embedding",
+ status=band(top.score), # >=0.86 confirmed / 0.70 review / else unmapped
+ chain=reasoning(cands)) # a reasoning chain is always recorded
+
+ Done when. the seed corpus loads and carries to v7; a new Jira story is enriched to the canonical shape, mapped to a subcap, gated and persisted; borderline matches are queued and synthetic rows stay out of analysis by default.
+
+### F6 · Embeddings & hybrid retrieval (ML, BE)
+ Intelligence layer L3. One catalogue-tuned embedding space backs story matching, SOW matching, offering matching, carry-forward and chat, so a subcap means the same thing everywhere. Each subcap carries a tsvector and a vector(768) ; retrieval is hybrid in one engine: lexical (full-text + GIN), dense (pgvector + HNSW) and structured SQL filters (pillar, subvertical, claim label, source tier).
+ Build steps
+
+- Stand up the embedding service with a deterministic hermetic stub and a live provider behind the F1 switch.
+- Populate subcap.search and subcap.embedding at provision time; index with GIN and HNSW.
+- Implement a retrieval function that blends lexical rank and cosine and applies the SQL filters; expose it to chat, all matching and KG Layer B.
+- Add the eval harness: a golden set of subcap-evidence and subcap-story pairs, tracked as MRR; a drop triggers a contrastive embedding fine-tune.
+ Done when. a hybrid query returns ranked subcaps within the read SLO and retrieval MRR is tracked on the golden set.
+
+### F7 · Evidence model, ingest jobs, enrichment, ERS, reasoning & adversarial review (BE, ML)
+ Intelligence layer L4 and the shared evidence substrate. evidence_item carries the surfaceable source sub-object (name, type, url, tier, fetched_at) and, for news, a catalogue_impact class. The same ingest -> enrich -> persist -> map pattern serves SOWs, news, vendor events and benchmarks; ERS blends tier, recency, specificity and corroboration; every AI output records a reasoning chain; Opus runs the adversarial review for synthesis and benchmarks.
+ Build steps
+
+- Create the evidence, ERS and reasoning_chain/step tables (F3) and the ERS scoring function.
+- Build the async job framework (Cloud Run Jobs + Cloud Scheduler + Cloud Tasks with a DLQ) used by every ingest and cycle; cadence lives in config/schedules.yaml (below), not code - news and trends run weekly (Monday), vendor weekly, benchmarks monthly, the digest quarterly, and the Jira story monitor hourly.
+- Run model-backed ingestion through the Gemini Batch API (50% cheaper, <24h) since these jobs are not latency-critical; the weekly cadence keeps grounded-search and token spend low and predictable (section 17).
+- Implement the per-source enrichers (news classification + impact, vendor event-typing, benchmark normalisation) so each external item is enriched into a canonical evidence row before use.
+- Run a DLP redaction step before any model sees a SOW or sensitive source; tag every model call with (operation, pillar, subvertical, subcap, batch) for F11 cost.
+ config/schedules.yaml python
+ # config/schedules.yaml - cadence lives in CONFIG, not code. News + trends run WEEKLY only.
+schedules:
+ news_scan: { cron: "0 6 * * MON", job: ingest-news, enabled: true } # weekly, Mon 06:00
+ trend_detect: { cron: "30 6 * * MON", job: detect-trends, enabled: true } # weekly, after news
+ vendor_scan: { cron: "0 7 * * MON", job: ingest-vendor, enabled: true } # weekly
+ benchmark_scan: { cron: "0 3 1 * *", job: ingest-benchmark, enabled: true } # monthly
+ quarterly_digest:{ cron: "0 2 1 1,4,7,10 *", job: build-digest, enabled: true } # quarterly
+ story_monitor: { cron: "0 * * * *", job: ingest-jira, enabled: true } # hourly (continuous)
+defaults: { processing_mode: batch, max_retries: 3, dlq: true } # batch = 50% cheaper, <24h latency
+
+ Done when. an evidence row carries its source attributes, tier and ERS, a reasoning chain renders end to end, the weekly schedules fire from config, and a failed job lands in the DLQ rather than vanishing.
+
+### F8 · Validation gates + suggestion lifecycle (BE)
+ Intelligence layer L5. Eight deterministic gates (G1 identity & schema, G2 evidence sufficiency, G3 source-tier floor, G4 claim-label consistency, G5 similarity / grounding, G6 contradiction, G7 citation verification, G8 budget & rate) sit between any AI proposal and any commit; they are code, not prompts. Suggestions move propose -> gate -> apply or reject; apply re-runs the gates server-side and writes a new snapshot; any failure routes to Change Flags with the failing gate named.
+ Build steps
+
+- Implement each gate as a pure function over (payload, retrieved evidence, config); never inline a gate as a prompt.
+- Build the gate runner that persists one validation_gate_run per evaluation, linked to its reasoning chain.
+- Implement the suggestion endpoints; apply runs in a transaction that re-gates, writes the snapshot and an audit row; reject requires a reason.
+- Route any gate failure to change_flag with the gate id.
+ Done when. a proposal that fails any gate is never auto-applied and appears in Change Flags named by gate, and an apply is only written after a clean pass with a persisted gate run.
+
+### F9 · API conventions (BE)
+ A versioned REST surface (FastAPI, Pydantic v2). Every route authenticated; admin routes also check is_admin . Wherever AI output is returned the response carries the trust envelope {claim_label, source_tier, ers, chain_id}. Heavy lists are server-paginated and server-filtered; long jobs are polled.
+ Build steps
+
+- Define Pydantic response models mirroring the canonical schema; never leak raw rows.
+- Standardise pagination (page, page_size, server-side filters) and a single error model.
+- Resolve the active version from the path {version} or header context on every catalogue route.
+- Add ETag / cache headers for heavy reads and a job-status endpoint for polled jobs.
+ Done when. representative routes return typed bodies, AI routes always include the trust envelope, and every large collection paginates on the server.
+
+### F10 · Frontend shell & state (FE)
+ The shell and state model the prototype implements. React + Vite, react-router v6, Zustand for ephemeral UI, TanStack Query keyed by [version, resource, filters] . Filter state (pillar, sv, lens, page, search) is URL-serialized for deep links. The header holds the version toggle (v7 active / v5 legacy), pillar segmented control, subvertical and lens dropdowns, persona, the admin toggle, a change-flag bell, an admin-only cost meter and the theme toggle. A nine-group sidebar (A-I) is the nav.
+ Build steps
+
+- Build the shell: brand cell, header context, nine-group sidebar; gate it behind auth then first-run onboarding.
+- Configure the query client so the active version is part of every catalogue key; a version switch refetches cleanly.
+- Sync filter state to the URL hash and restore it on load.
+- Build the modal host for the cross-cutting modals (section 13); persist theme/lens/persona to users.preferences .
+- Apply the design tokens: DM Sans, the calm teal/mint/lavender palette, flat geometry, fades only (120-200ms), light and dark themes.
+ Done when. switching the version refetches every catalogue view, deep links restore filters, admin-only chrome is hidden for non-admins, and both themes pass WCAG 2.1 AA.
+
+### F11 · Observability, SLOs & cost (OPS, BE)
+ Read surfaces render at p95 < 1s and grounded chat / search at p95 < 3s. Every model call is cost-attributed; the system alerts at 80% of the monthly envelope, throttles non-essential work at 90% and auto-routes to a fallback with a degraded-mode banner rather than failing. All model calls and gate runs log to an immutable audit table.
+ Build steps
+
+- Add request timing and build the denormalised count views the heavy pages need (mission control, platform spread).
+- Implement the cost meter and budget alerts off the F7 call tags; expose a degraded-mode flag the shell reads.
+- Wire structured logging and dashboards for SLOs, gate pass-rate, hallucination rate and spend vs envelope.
+ Done when. the read SLO holds on seeded data, cost-by-feature is reportable, and a simulated provider outage flips the degraded-mode banner.
+
+### F12 · Exports & audit (BE)
+ Audit-grade exports (the quarterly digest, the DMA packet) are HMAC-signed and archived so recipients can verify them, and they are immutable. The audit log is append-only.
+ Build steps
+
+- Build the export builder (PPTX / JSON) and sign each artefact with the HMAC key from Secret Manager; record an export_manifest row.
+- Make audit_log insert-only; write a row for every apply, revert, export and admin action.
+- Expose a verification endpoint that checks an export against its signature.
+ Done when. an exported digest verifies against its signature and audit rows cannot be updated or deleted.
+
+### F13 · Intelligence layer & learning loops (ML, BE)
+ A first-class subsystem that ties the five layers together and the ingest -> enrich -> persist -> map pattern that governs every corpus. It is what makes the app improve with use rather than rot. It owns the model-tier routing, the shared embedding space, the per-source enrichers, and the learning loops that feed confirmations back into the system.
+ Build steps
+
+- Model-tier routing (current Gemini lineup, see section 17): route each job to the cheapest model that meets the bar - gemini-3.1-flash-lite for high-volume classification/extraction (news typing, vendor typing, story field extraction), gemini-3-flash for structured enrichment, gemini-3.5-flash for matching/reasoning with native grounding (story/SOW/news -> subcap), and gemini-3.1-pro-preview (or Claude Opus) for synthesis and adversarial review (digest, benchmark verdict); embeddings use gemini-embedding-2 . Models are pinned (never -latest in prod) and every call is cost-tagged (F7, F11).
+- One shared embedding space (F6): retrieval, story matching, SOW matching, offering matching and carry-forward all resolve the same “subcap”, so a match made in one pipeline is comparable to a match made in another.
+- The universal pattern: implement ingest -> enrich -> persist -> map once as a reusable job shape; the story (F5), SOW (C1) and evidence (F7) pipelines are instances of it, which is why their scripts look alike.
+- Learning loops: (1) automap memory + synonym set + centroid update on every admin mapping decision; (2) confirmed/rejected matches become labelled pairs that retrain the matcher and refresh the F6 eval golden set; (3) thresholds (0.86 / 0.70) live in config and are recalibrated from the real v5->v7 run and ongoing precision/recall.
+- Guardrails: nothing the intelligence layer produces is committed without passing the F8 gates; every output records a reasoning chain (F7).
+ Done when. each job runs on the right model tier with cost attribution, all pipelines share one embedding space, the three corpora reuse one ingest->enrich->persist->map job shape, and an admin mapping decision measurably improves the next automap.
+
+### F14 · Resilience & self-healing patterns (BE, OPS)
+ A reusable resilience layer that every job, endpoint and pipeline composes, so failures self-correct instead of corrupting state or paging a human. This is how "self-healing at every stage" is actually implemented: the patterns here are imported by ingestion, enrichment, matching, the gates, exports and the cascade engine rather than re-coded per surface. Section 15 maps each stage’s failure modes onto these patterns.
+ Build steps
+
+- Retry with backoff + jitter. Every transient external call (DB, model provider, Drive, Jira) retries with capped exponential backoff and jitter; permanent errors (4xx, schema violations) fail fast rather than retrying.
+- Idempotency keys. Every job and write carries a natural key ( story_key , a scope-item content hash, the ingest_run id) so a retry or a duplicate delivery upserts and never double-writes.
+- Circuit breaker. Per provider/source; sustained failure trips to the degraded-mode fallback (F11) with a banner, then half-opens to probe recovery - the app stays up on a fallback rather than failing.
+- Dead-letter queue + poison handling. A message that fails N times lands in the DLQ with its error and payload and is replayable; it never blocks the queue behind it.
+- Watchdog / reaper. An ingest_run or job stuck in "running" past its lease is detected, marked failed and safely re-enqueued; idempotency makes the re-run safe.
+- Reconciliation / repair jobs. Scheduled self-checks re-derive the denormalised count views, re-embed any subcap missing a vector, and re-gate rows whose inputs drifted.
+- Data-integrity self-checks. Validate that every carried_to_subcap reference resolves, detect orphaned evidence/links and dangling KG nodes, and quarantine offenders to a review queue rather than serving bad data.
+- Checkpointed, drainable jobs. Long jobs checkpoint progress so a SIGTERM mid-batch resumes rather than restarts; graceful shutdown and health/readiness/liveness are wired everywhere (F1).
+- Auto-rollback. A failed deploy never takes traffic (section 16); a failed apply re-gates and reverts to the last snapshot (F8).
+- Bounded everything. Timeouts, lock timeouts, max-retries and budget caps (F8 G8) on every path - nothing waits or spends without a ceiling.
+ Done when. a transient failure retries and succeeds, a duplicate delivery upserts cleanly, a stuck run is reaped and safely retried, a poison message lands in the DLQ without blocking the queue, and an integrity self-check quarantines a dangling reference instead of serving it.
+
+### F15 · Relationship model & discovery (intelligent schema linkage) (BE, ML)
+ The backend schema (control plane + per-version data plane; 71 tables, 20 enums, 2 views in schema.sql ) is fully relational, and every relationship is defined in one of five explicit ways. This foundation states them so the implementation is unambiguous, and adds an intelligent layer that proposes relationships the schema does not yet model.
+ Build steps
+
+- Declared relations -> foreign keys. control.relation_def rows (from_entity, to_entity, cardinality, via_sheet, is_cascade, cascade_kind) are the registry; provisioning (F4) turns each into a real FK or link table in cat_<version> , and the cascade engine reads them. The relation_type enum is the closed vocabulary: belongs_to, addresses, delivered_by, maps_to_offering, uses_platform, tagged_theme, has_persona, has_usecase, custom.
+- Many-to-many link tables. subcap_platform , offering_subcap (+ core_capability, mapping_rationale, maturity_lift), subcap_vcc and the use-case links carry m:m edges with their own attributes.
+- Cross-version lineage. control.version_crosswalk (from_version / from_subcap / to_version / to_subcap) defines how a v5 subcap maps to v7; the Diff viewer and carry-forward read it.
+- Story bridge. control.story_subcap_carry (native v5 / carried v7) plus the story_catalogue_link view define the story-to-subcap relationship per version without duplicating the 14,406-row corpus.
+- Knowledge-graph projection. kg_node / kg_edge project the declared relations as Layer A (deterministic); pending_edge holds Layer-B proposals.
+- Relationship discovery (the intelligent layer, script below). discover_relationships() scans entity pairs and scores three signals - value overlap (A’s keys hidden in B’s cells = a latent FK), co-occurrence (A and B repeatedly linked via stories or a third table) and embedding affinity (consistently close in the F6 space) - to PROPOSE relationships the schema does not yet model; every candidate is gated (G1, G5, G6) and becomes either a relation_def proposal (admin-confirmed) or a KG Layer-B pending_edge, never a live write.
+ intelligence/discover_relationships.py python
+ # intelligence/discover_relationships.py - propose NEW relationships the schema does not yet model.
+# Relationships are normally DECLARED in control.relation_def (-> FKs). This finds undeclared candidates,
+# scores three signals, gates them, and routes survivors to human approval. It never writes a live edge.
+
+def discover_relationships(version):
+ cands = []
+ for a, b in entity_pairs(version): # e.g. (subcap, offering), (subcap, l3_platform)
+ s_val = key_overlap(a, b) # 1) do A's keys appear inside B's cells? (latent FK)
+ s_co = cooccurrence(a, b, via=story_links(version)) # 2) repeatedly linked via stories / a 3rd table
+ s_emb = embedding_affinity(a, b) # 3) consistently close in the shared space (F6)
+ score = 0.45*s_val + 0.30*s_co + 0.25*s_emb
+ if score >= CFG.relation_discovery: # threshold in config, not code
+ cands.append(RelationCandidate(a, b, round(score,3),
+ cardinality=infer_cardinality(a, b),
+ evidence=sample_links(a, b, n=3)))
+ # Gate every candidate (identity, grounding, contradiction). A survivor becomes either a
+ # relation_def proposal (admin-confirmed -> a real FK) or a KG Layer-B pending_edge - never auto-applied.
+ return [c for c in cands if gate_pass(c, gates=["G1", "G5", "G6"])]
+
+ Done when. every relationship in the system is traceable to a relation_def, a link table, the crosswalk, the story bridge or the KG; and the discovery script surfaces a latent relationship (e.g. an offering scope that implicitly references subcaps) as a gated candidate rather than a silent edge.
+
+ Section 3
+
+## Access & onboarding
+ The way in. Login is the only pre-auth route; a fresh version always passes through onboarding before any read surface. These surfaces own the upload -> map -> carry-forward critical path.
+ LOGIN
+
+### Login
+   Phase 1
+ Purpose. Authenticate a Zennify staff member and establish the session identity the whole app keys off.
+ Components (each explained)
+
+- Brand split panel. Static brand/marketing panel beside the action panel; pure presentation, sets the calm-trust tone, no data.
+- Google sign-in button. Triggers the Firebase popup; on success the client holds an ID token that every API call carries (F2).
+- Domain-rejected state. Shown when the verified email is not @zennify.com ; the backend has already refused, so this is the user-facing explanation, not the enforcement.
+- Post-login router. Reads /api/me and routes to onboarding if no version is provisioned, else to Mission control.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | Firebase Auth (Google) | ext | Identity provider, domain-restricted
+ | control.users | CP | Upsert identity; read is_admin + preferences
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Nothing is ingested; the Firebase ID token is exchanged for a verified session.
+ | Enrich / interpret | The backend verifies the token, enforces the @zennify.com domain (fails closed), and resolves is_admin and preferences via /api/me.
+ | Persist (and map) | First login upserts a control.users row; later logins update last-seen only. No subcap mapping involved.
+
+ Build steps
+
+- Wire the Firebase client and the /api/me exchange (F2).
+- Render the domain-rejected state; keep login the only route reachable pre-auth.
+- Route to onboarding or Mission control by provisioned-version state.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /api/me returns {uid, email, is_admin, preferences}; the FE renders no product chrome until it resolves.
+- Fails closed. A non-@zennify.com token is rejected by the backend; the FE only shows the rejected state, never a half-authenticated app.
+- Token lifecycle. An expired or invalid ID token returns to login rather than spinning; the session re-auths silently where possible.
+- Routing. Provisioned-version state decides onboarding vs Mission control, so a user with no version never lands on an empty dashboard.
+- Failure point. A blocked Firebase popup or network error surfaces a retry, not a blank panel.
+ Done when. a @zennify.com user signs in and lands in the app with identity and preferences loaded; everyone else is refused before any product surface.
+ Depends on: F1, F2
+
+ ONB
+
+### First-run onboarding (upload -> map -> carry-forward)
+   Phase 1
+ Purpose. Turn raw workbooks into queryable, versioned, relational data with delivery evidence attached. This is Phase 1’s reason to exist: no downstream surface has data until a version is provisioned and stories are carried forward.
+ Components (each explained)
+
+- Four-step stepper. Upload -> Schema mapping -> Carry-forward -> done; the canonical onboarding spine, with each step gated on the previous completing.
+- Upload / Drive picker. Drag-drop pillar workbooks or point at a Drive folder; files land in an IAM-restricted bucket. Hands off to F4.
+- Automap review panel. Renders the F4 automap proposals - per source column the chosen canonical field, the confidence, the four signal scores and three sample values - so the admin sees why each mapping was proposed and can confirm or override.
+- Relations editor. Defines the relations for this version (subcap belongs_to capability, delivered_by story, uses_platform, ...) that provisioning turns into FKs; pre-filled from detected layout, editable.
+- Provision progress + report. Polls ingest_run.status during the transactional build and renders the ProvisionReport {tables, relations, rows}.
+- Carry-forward summary. Shows {mapped, confirmed, review, unmapped} from the F5 run so the admin sees how many v5 mappings reached the active version and how many need a one-click confirm.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | ingest_run | CP | Job status the stepper polls
+ | catalogue_sheet, source_field_mapping, relation_def | CP | Mapping the apply step writes
+ | cat_<version>.* (provisioned) | DP | Output of apply
+ | story, story_subcap_carry | CP | Carry-forward output
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | The admin uploads pillar workbooks (or points at Drive) into an IAM-restricted bucket; the canonical Jira corpus seed is loaded by F5.
+ | Enrich / interpret | F4 detects the layout and proposes a field mapping via the automap intelligence layer; the admin confirms; apply provisions the version transactionally; F5 then seeds v5 native links and carries them to the active version.
+ | Persist (and map) | The mapping configuration, the provisioned data-plane schema, the ingest_run record and the carry-forward bridge persist durably for every user; stories are mapped to subcaps as part of carry-forward.
+
+ Build steps
+
+- Compose the stepper over the F4 mapping endpoints and the F5 carry-forward run; poll ingest_run.status for progress.
+- Render the automap review panel from the F4 proposals (chosen field + confidence + signals + samples).
+- Render the ProvisionReport and the carry-forward summary; on completion route to Mission control.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. The stepper advances only on real ingest_run.status ({status, stats}), never optimistically.
+- Linkage. The automap review panel renders the F4 proposal {field, confidence, four signals, three samples}; a missing signal shows n/a rather than breaking the grid.
+- Long job. The provision poll backs off and shows progress; a failed run shows the error and a retry, never a stuck 100%.
+- Idempotency. Re-uploading the same file upserts; the FE warns on a duplicate rather than creating a second version.
+- Carry-forward. The {mapped, confirmed, review, unmapped} summary reconciles with control.story counts; review links to the queue.
+- Atomic. Provisioning is transactional, so a partial failure leaves the version unprovisioned and the FE shows it as not-ready (no half-lit pages).
+- Role. The whole flow is admin-only; a non-admin is 403d and the route is hidden.
+ Done when. an admin completes upload -> map -> carry-forward on the real v7 workbooks and the read side of the app lights up against the provisioned data.
+ Depends on: F1, F2, F3, F4, F5
+
+ SCHEMA
+
+### Schema mapping studio (admin)
+   Phase 1
+ Purpose. Give an admin full, code-free control over how any version’s workbook maps to the canonical model and which relations exist - the thing that makes the product resilient to a future catalogue structure. It is the standing UI over the F4 automap intelligence layer.
+ Components (each explained)
+
+- Field-map grid. One row per source column: source header, proposed canonical field, confidence, status (confirmed / review / custom) and an expandable signal breakdown (lexical, value-fingerprint, embedding, memory). Bulk-confirm high-confidence rows; resolve flagged ones.
+- Override picker. Re-assign any column to a different canonical field; the choice feeds the F4 learning loop so the next version maps it automatically.
+- Custom-field control. Promote an unmapped column to a custom column on the version schema, so nothing in the source is discarded.
+- Relation editor (CRUD). Create/edit/delete relation_def rows with from/to entity, cardinality, via-sheet and cascade kind; these become FKs and the cascade engine reads them.
+- Cascade control. Propagate a relation to other versions where the fields exist and are type-compatible, so relations are not redefined per version.
+- Re-apply action. Re-runs provisioning idempotently to correct a mapping without a code release.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | source_field_mapping | CP | Field map (read/write)
+ | catalogue_sheet | CP | Which sheet feeds which entity
+ | relation_def | CP | Relation registry (read/write); becomes FKs
+ | ingest_run | CP | Provision status
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Re-uses the F4 engine; no new ingestion logic here.
+ | Enrich / interpret | It reads the persisted mapping and relations for the chosen version and writes edits back; the signal breakdown is read from the automap proposal; apply re-runs F4 provisioning.
+ | Persist (and map) | Every confirm, override, custom field and relation persists to the control plane and feeds the automap learning loop; it is the audit record of how that version was brought online.
+
+ Build steps
+
+- Bind the grid and relation editor to the F4 endpoints (/automap result, /confirm, /relations CRUD, /apply).
+- Surface the four signal scores per column and the learning-loop write on confirm/override.
+- Gate the whole surface behind is_admin; re-apply re-provisions cleanly.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. The field-map grid binds to the /automap result; the four signal scores and the status (confirmed / review / custom) render per row.
+- Linkage. An override calls /confirm and feeds the F4 learning loop; the next automap reflects the decision.
+- Relations. relation_def CRUD round-trips (cardinality, via_sheet, cascade_kind); an invalid relation is rejected server-side with a readable error.
+- Re-apply. Re-provisioning is idempotent; the FE disables re-apply while a run is in flight.
+- Failure point. An unknown column maps to a custom field (never dropped); the promotion is explicit in the UI.
+- Role. Admin-only; 403 hidden.
+ Done when. an admin can see why a column was mapped, edit a field map and a relation, cascade it where compatible, and re-apply with no code change - and the next version maps a renamed column automatically.
+ Depends on: F2, F3, F4, F13, F15
+
+ SET
+
+### Settings
+   Phase 1
+ Purpose. Per-user preferences for everyone; catalogue upload and the ingestion source registry for admins.
+ Components (each explained)
+
+- Preferences form. Theme, default lens and persona, persisted to users.preferences and merged into the header context on load.
+- Source registry (admin). Lists every ingestion source (catalogue uploads, Jira monitor, news, vendor, benchmark) with health - last poll, errors, items ingested - summarised from ingest_run .
+- Upload entry (admin). Launches a new catalogue ingest, routing into onboarding (F4).
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | control.users.preferences | CP | Read/write user prefs
+ | ingest_run (source health) | CP | Admin source registry health
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | No corpus ingestion here; admins launch ingestion from here, handing off to F4 / F7 jobs.
+ | Enrich / interpret | Preferences are read on load and merged into the header context; admin source health is summarised from ingest_run.
+ | Persist (and map) | Preference edits persist via PATCH /api/me/preferences; nothing is mapped here.
+
+ Build steps
+
+- Build the preferences form bound to /api/me/preferences (F2).
+- For admins, render the source registry from ingest_run health and an upload entry that routes into onboarding.
+- Hide all admin controls for non-admins.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. PATCH /api/me/preferences persists theme, lens and persona; the header context updates without a reload.
+- Source registry. Admin health is summarised from ingest_run ; a stale or erroring source is flagged, not hidden.
+- Role. Preferences are for everyone; upload and the source registry are admin-only and hidden for non-admins.
+- Failure point. A failed preference write rolls the UI back to the persisted value, with no silent divergence.
+ Done when. a user changes theme and lens and it persists across sessions and devices; an admin sees source health and can start an ingest.
+ Depends on: F2, F4, F7
+
+ Section 4
+
+## Group A: Explore
+ The primary read group: the at-a-glance health view, the merged capability workbench, and the value-chain lens.
+ A1
+
+### Mission control
+   Phase 1
+ Purpose. Show health and where attention is needed across the catalogue at a glance, led by a story-concentration heatmap tied to offering coverage.
+ Components (each explained)
+
+- Degraded-mode banner. Appears only when the F11 degraded flag is set (a provider is down or throttled); tells the user some AI features are running on a fallback. Hidden in normal operation.
+- Four pillar health tiles. One per pillar showing subcap count, completeness (% of subcaps with full descriptors/use-cases/maturity) and a decay indicator (how stale the evidence is); counts are version-qualified and read from a denormalised view for speed.
+- Story-concentration heatmap. Subcap (rows) x quarter (columns) grid coloured by delivery-story count, computed by bucketing story_catalogue_link for the active version; the single best signal of where the practice actually delivers.
+- Offering-coverage gauge. Share of high-delivery subcaps that map to a productized offering (via offering_subcap ); real because offerings are ingested as data (F1/F4 + R10).
+- KPI tiles. Pending suggestions, high-severity change flags, source-health count and total subcaps; each links to its surface.
+- Recent-reasoning list. The latest reasoning chains, each opening the reasoning modal - a fast audit entry point.
+- Quick links. Jump-offs to the workbench, story library and digest.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | cat_<v>.subcap (+ denormalised counts) | DP/derived | Pillar counts, completeness
+ | subcap_platform, offering_subcap | DP | Offering coverage; relations delivered_by, maps_to_offering
+ | control.story (quarter buckets) | CP | Story-concentration heatmap
+ | suggestion, change_flag, ingest_run | CP | KPI tiles, source health
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads only; all data arrives via F4 (catalogue), F5 (stories) and F7 (suggestions/flags). No ingestion on this page.
+ | Enrich / interpret | A denormalised summary endpoint computes per-pillar counts and completeness, buckets the story link by quarter, and computes offering coverage; counts are version-qualified.
+ | Persist (and map) | Nothing is written or mapped; the page is a pure dashboard.
+
+ Build steps
+
+- Build GET /catalogue/{v}/summary backed by denormalised count views (F11) to hold the read SLO.
+- Add /suggestions?status=pending&count , /change-flags?severity=high&count , /ingest/health .
+- Render the heatmap from the quarter-bucketed link; wire the degraded banner to the F11 flag; key all queries by version.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /catalogue/{v}/summary returns {pillars[{count, completeness, decay}], kpis, coverage}; a missing field renders n/a.
+- Version. The page is keyed by version; switching v7 and v5 refetches and counts are version-qualified (v7 851 / v5 840).
+- Performance. Served from denormalised count views to hold p95 < 1s; the heatmap reads the quarter-bucketed story link, not a live scan.
+- Empty / degraded. With no provisioned version the page shows the onboarding CTA, not zeros; the degraded banner reflects the F11 flag only.
+- Linkage. Each KPI tile deep-links to its surface with the right filter pre-applied.
+- Failure point. A slow summary query shows a skeleton and never blocks the shell.
+ Done when. Mission control renders within the read SLO for the active version, the heatmap reflects real delivery counts, and switching version refetches.
+ Depends on: F4, F5, F7, F9, F10, F11
+
+ A2
+
+### Capability workbench (merged explorer + deep dive)
+   Phase 1
+ Purpose. One master-detail surface to navigate the taxonomy and see everything known about a single subcap. Replaces the former separate explorer and deep-dive pages (R8) and folds in the old maturity heatmap as a tab.
+ Components (each explained)
+
+- Search + pillar pills. Free-text search over subcap name/description and quick pillar filters; both narrow the tree and are URL-serialized for deep links.
+- Collapsible tree navigator. category -> capability cluster -> subcap, lazy-expanded; the spine of navigation. Each node shows a lifecycle dot and a "new in v7" marker.
+- Hero card + completeness ring. Subcap identity (name, id, tier, solution type, lifecycle) with a ring summarising completeness (descriptors + use-cases + maturity + delivery present out of the maximum), read from the subcap_completeness view.
+- Tab - Overview. Description, personas (deterministic split of the persona cell), the offering it supports, and the L3 platforms addressing it with per-platform subcap counts; relations has_persona, uses_platform, maps_to_offering.
+- Tab - Maturity. An M1-M5 stepper with one descriptor expanded at a time, from maturity_descriptor ; this is where the old standalone heatmap now lives.
+- Tab - Use cases. The subcap’s use cases with archetype and maturity-relevance, from use_case (relation has_usecase).
+- Tab - Delivery. Quarter bars over delivery stories plus expandable story rows with quality sub-scores, from story_catalogue_link for the active version (relation delivered_by); the per-subcap view of the Mission-control heatmap.
+- Tab - Connections. Sibling subcaps (KG Layer A) and recent external signals (news/vendor/benchmark) touching the subcap; the bridge into the trace and KG.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | subcap, category, capability | DP | Tree + identity; relation belongs_to
+ | persona, l3_platform, use_case, maturity_descriptor | DP | Tabs; relations has_persona, uses_platform, has_usecase, addresses
+ | offering, offering_subcap | DP | Overview offering; relation maps_to_offering
+ | story (via link), evidence, reasoning_chain | CP | Delivery + Connections; relation delivered_by
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads only; consumes the F4 catalogue and the F5 story bridge. No ingestion here.
+ | Enrich / interpret | The tree is one query; each tab is loaded lazily by id so the surface is never over-fetched. The completeness ring is computed from the view; the Connections tab pulls KG siblings (F6) and recent signals.
+ | Persist (and map) | No writes from the read tabs; staging a change is done through the consultant-loop / commit modals (section 13).
+
+ Build steps
+
+- Build /catalogue/{v}/subcaps (tree {id,name,pillar,catId,catName,cluster,life,isNew}).
+- Build /subcaps/{id} and per-tab sub-resources ( /stories , /evidence ); load detail per tab.
+- Support the /subcap/{id} deep link that opens the workbench focused (R8); render the five tabs and ring.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. The tree shape {id, name, pillar, catId, catName, cluster, life, isNew} and /subcaps/{id} tabs match the FE shapes (personas[], platforms[{id,name}], uc[], stories[], mat[5]).
+- Deep link. /subcap/{id} opens the workbench focused and restores the tab from the URL; an unknown id shows not-found.
+- Lazy tabs. Each tab loads by id; switching tabs does not refetch the tree; the completeness ring matches the subcap_completeness view.
+- Version. The Delivery tab stories are version-correct ( story_subcap_carry for the active version); switching version refetches.
+- Trust. Any AI-derived value in Connections shows claim label, tier and a reasoning link.
+- Large. A cluster with many subcaps virtualises or paginates; the tree lazy-expands.
+- Failure point. A subcap missing maturity or use-cases renders the empty tab gracefully, not a crash.
+ Done when. the tree navigates pillar to subcap, a deep link opens a focused subcap, each tab lazy-loads its data, and the Delivery tab shows version-correct stories.
+ Depends on: F4, F5, F6, F9, F10
+
+ A3
+
+### Value chain atlas
+   Phase 1
+ Purpose. Show the eight universal value-chain clusters and where the catalogue sits within them, by subvertical.
+ Components (each explained)
+
+- Eight MECE cluster cards. One per value-chain cluster (VCC-01..08) with its subcap count for the active version; the entry grid.
+- Pillar / radial toggle. Switches the cards between a pillar-coloured grid and a radial value-chain view; presentation only.
+- Per-subvertical stage pipeline. Expands a cluster into its stages (e.g. Lead & capture -> Identity & KYC -> Account open) with the subcaps mapped to each stage, from subcap_vcc (sheet 21); the subvertical comes from the header context.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | value_chain_cluster | DP | The 8 clusters
+ | subcap_vcc (sheet 21) | DP | subcap x cluster x stage x subvertical; relation custom -> value_chain_cluster (m:m)
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads only; the value-chain mapping loads with the catalogue at provision time (F4, sheet 21). No ingestion here.
+ | Enrich / interpret | A version + subvertical query returns cluster counts and the stage-to-subcap pipeline; the subvertical comes from the header.
+ | Persist (and map) | Nothing is written or mapped.
+
+ Build steps
+
+- Build /catalogue/{v}/value-chain?sv={code} returning clusters with counts and per-subvertical stages.
+- Render the eight cards and the expandable stage pipeline; drive the subvertical from the header.
+- Key the query by version and subvertical.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /catalogue/{v}/value-chain?sv= returns 8 clusters with counts and per-sv stages; counts are version and sv qualified.
+- Linkage. The subvertical comes from the header; changing sv refetches the pipeline.
+- Empty. A cluster with no mapped subcaps for the sv renders empty, not broken.
+- Failure point. FC (absent in v5) renders correctly under v7 and shows the v5 caveat.
+ Done when. the eight clusters show real subcap counts for the active version and the per-subvertical stage pipeline expands correctly.
+ Depends on: F4, F9, F10
+
+ Section 5
+
+## Group B: Catalogue tools
+ Entity-first browsers over the provisioned catalogue, plus the admin knowledge graph.
+ B1
+
+### Platform catalog
+   Phase 1
+ Purpose. Browse the L3 technology platforms, grouped by vendor, and see which subcaps each one addresses.
+ Components (each explained)
+
+- Vendor x pillar heatmap. Vendors (rows) x pillars (columns) coloured by how many subcaps each vendor’s platforms address; the at-a-glance coverage map. Vendor is derived from the l3_id prefix (L3-SF -> Salesforce).
+- Vendor filter. Narrows to one vendor’s platforms; URL-serialized.
+- Expandable platform rows. Each platform expands to the subcap chips it addresses (relation uses_platform), with its pillar spread and total delivery-story count.
+- Focus route. /platforms/{l3_id} pre-expands a single platform for deep links from elsewhere.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | l3_platform | DP | Platforms with clean names; vendor from id prefix
+ | subcap_platform | DP | Platform -> subcap; relation uses_platform (m:m)
+ | vendor | DP | Vendor dimension for grouping
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads only; platforms load at provision time with the R1 cell parser (F4), so names are already clean and vendor-tagged. No ingestion here.
+ | Enrich / interpret | A version query returns platforms with their subcap lists, pillar spread and story totals; vendor is derived from the l3_id prefix.
+ | Persist (and map) | Nothing is written; chips open the quick-look drawer.
+
+ Build steps
+
+- Build /catalogue/{v}/platforms and /platforms/{l3_id} .
+- Render the vendor x pillar heatmap and expandable rows to subcap chips.
+- Rely on the F4 R1 parser for clean names; do no parsing on the client.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /catalogue/{v}/platforms returns clean names, subcap lists and pillar spread; vendor is derived from the l3_id prefix on the server (no client parsing).
+- Focus route. /platforms/{l3_id} pre-expands; an unknown id shows not-found.
+- Linkage. Expanding a platform shows subcap chips (uses_platform); a chip opens the quick-look drawer.
+- Failure point. Malformed L3 cells were normalised at provision (R1), so the FE never sees raw bracket text.
+- Version. Keyed by version.
+ Done when. platforms list with clean names and correct vendors, expand to their subcaps, and the focus route pre-expands a named platform.
+ Depends on: F4, F9, F10
+
+ B2
+
+### Use case explorer
+   Phase 1
+ Purpose. Browse the actual use cases across the catalogue by archetype, maturity and area, and drill to the owning subcap.
+ Components (each explained)
+
+- Pillar pills. Filter by pillar; URL-serialized.
+- Capability-area dropdown. Narrows to one category/cluster so use cases can be browsed by area.
+- Use-case-type (archetype) dropdown. Filters by archetype (e.g. AI_AUTHOR); the typology view of the catalogue’s use cases.
+- Text search. Free-text over use-case text; combined with the filters server-side.
+- Paginated use-case cards. Each card shows the use case, its archetype, maturity-relevance and a "new" marker, with the owning subcap; opens the quick-look drawer. Server-paginated over the full set.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | use_case | DP | {uc, archetype, maturity_relevance, is_new, text}; relation has_usecase (1:m)
+ | subcap, category | DP | Owning subcap + area for filtering
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads only; use cases load with the catalogue (F4). No ingestion here.
+ | Enrich / interpret | A filtered, server-paginated query joins use_case to its subcap and category; filters are URL-serialized.
+ | Persist (and map) | Nothing is written; the owning-subcap peek opens the quick-look drawer (section 13).
+
+ Build steps
+
+- Build /catalogue/{v}/use-cases?pillar=&category=&type=&q=&page= , server-paginated and filtered.
+- Render cards with archetype and maturity-relevance; open the owning subcap in the quick-look drawer.
+- Serialize filters to the URL.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /catalogue/{v}/use-cases?...&page= paginates and filters on the server; the card shape is {uc, archetype, maturity_relevance, is_new, subcap}.
+- Large. The full set never ships whole; pagination and filters combine server-side and serialise to the URL.
+- Linkage. The owning-subcap peek opens the quick-look drawer.
+- Failure point. An empty filter combination shows no-matches, not a spinner.
+ Done when. use cases page and filter on the server, show archetype and maturity, and each card opens its owning subcap.
+ Depends on: F4, F9, F10
+
+ B3
+
+### Knowledge graph (admin)
+   Phase 3
+ Purpose. Reveal structural relationships between catalogue entities, with deterministic edges always trustworthy and AI-proposed edges gated before they are ever committed. Admin-only (D18).
+ Components (each explained)
+
+- Subcap picker. Chooses the focus node the graph centres on.
+- Interactive node-link SVG. Renders Layer A edges solid (always trustworthy) and Layer B proposals dashed; pan/zoom/expand. The visual core.
+- Layer toggle. Show/hide Layer A (deterministic) vs Layer B (AI-proposed) so an admin can separate fact from proposal.
+- Pending-edge panel. Lists Layer B proposals (SEMANTICALLY_SIMILAR cosine >= 0.85, SHARES_FEATURE) with their reasoning chain and an approve/reject that routes through Change Flags + gates; nothing commits live.
+- Centrality / community stats. Graph metrics (degree, communities) to spot hub subcaps and clusters; read-only analysis.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | kg_node | CP | Node projection of provisioned entities
+ | kg_edge (Layer A) | CP | Deterministic edges from FKs/link tables
+ | pending_edge (Layer B) | CP | AI-proposed edges awaiting gate + approval
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Layer A is a projection of the provisioned data-plane FKs and link tables (F4); Layer B proposals come from F6 embeddings. No external ingestion.
+ | Enrich / interpret | Layer A edges are derived deterministically from the relations (belongs_to, addressed_by, delivered_by, maps_to_offering, uses_platform, tagged_theme, has_persona, has_usecase, evidenced_by). Layer B is limited to semantic-similarity and shared-feature; cross-pillar dependency edges are out of scope (D16).
+ | Persist (and map) | No AI edge is written live: a proposer emits a pending_edge with a reasoning chain; it commits only after passing G1-G8 and human approval in Change Flags.
+
+ Build steps
+
+- Build the Layer A projection from the provisioned FKs/link tables; expose /kg?subcap= .
+- Generate Layer B proposals from F6 and write them as pending_edge with a reasoning chain; never commit live.
+- Gate the whole surface behind is_admin; route approvals through F8 / Change Flags.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /kg?subcap= returns Layer A solid edges plus Layer B dashed ( pending_edge ) with reasoning chains.
+- Trust. A Layer-B edge is never rendered as fact; it is dashed and requires approval; approve routes through F8 / Change Flags.
+- Role. Admin-only; 403 hidden.
+- Failure point. A large neighbourhood is capped or lazy-expanded so the SVG stays responsive.
+- Linkage. Approve / reject updates pending_edge and reflects in Change Flags.
+ Done when. an admin sees deterministic edges as solid and gated proposals as dashed, and no proposed edge is committed without passing the gates and a human approval.
+ Depends on: F4, F6, F8, F9, F10, F15
+
+ Section 6
+
+## Group C: Project validation
+ Grounding the catalogue in real delivery: SOW scope, the canonical story corpus, and a per-subcap timeline.
+ C1
+
+### SOW library
+   Phase 2
+ Purpose. Turn raw statements of work into confirmed subcap evidence. This surface owns the SOW pipeline (R9), which follows the same ingest -> enrich -> persist -> map pattern as the story pipeline: the prototype shows the target end-state (matched, confirmable, committable); production builds the pipeline to reach it.
+ Components (each explained)
+
+- SOW list (filterable). All SOW documents with status (ingesting / unmatched / matched) and subvertical; the master pane. Reads sow_document .
+- Master-detail view. Selecting a SOW shows its scope items and their match state; the working surface.
+- DLP / redaction banner. Confirms the document was redacted before any model saw it; the visible proof of the F7 DLP step.
+- Extracted-scope clauses. The normalised scope items (clean task name, description, qty, assumptions) - the enriched, canonical form of the raw SOW row, each stored as an evidence(sow_chunk) .
+- Matched-subcaps table. For each scope item, the proposed subcap matches with cosine confidence, claim label and a reasoning link, each with Confirm or Route-to-review; only matches that passed the gates appear here.
+- Commit matches. Promotes confirmed matches into committed SOW evidence on the subcap (via the commit modal + F8), feeding the trace and Lifecycle manager.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | sow_document, sow_scope_item | CP | 132 files / 1,075 scope items
+ | evidence_item (kind=sow_chunk) | CP | Each scope item, with account/opportunity/qty/assumptions
+ | sow_subcap_match | CP | Gated scope-item -> subcap matches
+ | reasoning_chain | CP | Match rationale
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | DLP redaction into an IAM-restricted bucket BEFORE any model sees a file; normalise to one row per scope item (the ingest stage).
+ | Enrich / interpret | Enrich each scope item into the canonical evidence shape (clean task/description, qty, assumptions, account/opportunity) and embed it into the F6 space; this is the analogue of story enrichment for SOWs.
+ | Persist (and map) | Persist each scope item as sow_scope_item + an evidence(sow_chunk) ; map it to subcaps via F6, gate (G1, G5, G7), and write matches to sow_subcap_match - hidden until gated, confirmed/committed by an admin.
+
+ Build steps
+
+- Build the ingest + DLP + normalise + enrich job (script below) into sow_document / sow_scope_item / evidence(sow_chunk).
+- Build the matcher (F6) writing sow_subcap_match with confidence + claim label + reasoning chain; run G1/G5/G7 before any match is shown.
+- Build /evidence?kind=sow_chunk + the matched-subcaps table with Confirm/Route and Commit; never surface an ungated link.
+ ingestion/sow_enrich.py python
+ # ingestion/sow_enrich.py - raw SOW scope item -> canonical evidence -> subcap mapping.
+# Same shape as the story pipeline: ingest -> enrich -> persist -> map. Nothing surfaced until gated.
+
+def ingest_sow(file, version):
+ safe = dlp_redact(file) # DLP BEFORE any model sees the document
+ for row in normalise_scope_items(safe): # one clean row per scope item
+ item = enrich_scope_item(row) # canonical scope-item record
+ ev = persist_evidence(item, kind="sow_chunk") # carries account, opportunity, qty, assumptions
+ for m in match_scope_to_subcaps(item, version): # F6 shared embedding space
+ if gate_pass(m, gates=["G1","G5","G7"]):
+ persist_match(ev, m, status=("confirmed" if m.sim >= CFG.auto else "review"))
+ # < CFG.review -> unmapped + nearest-neighbour proposal; queued, never dropped, never shown ungated
+
+def enrich_scope_item(row):
+ return ScopeItem(
+ scope_name = clean(row["Scope Item/Task Name"]),
+ description = clean(row["Scope Description"]),
+ qty = row.get("QTY"),
+ assumptions = row.get("Assumptions"),
+ account_name = row.get("Account Name"),
+ opportunity = row.get("Opportunity ID"))
+
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /evidence?kind=sow_chunk and sow_subcap_match match the FE; only GATED matches appear (ungated never leak).
+- DLP. The redaction banner reflects a real DLP pass; raw PII never reaches the client.
+- Linkage. Confirm and Commit route through the commit modal and F8; a commit re-gates server-side.
+- Trust. Each match shows cosine confidence, claim label and a reasoning link.
+- Failure point. A scope item with no match at or above 0.70 shows as unmapped with a nearest-neighbour proposal, never dropped.
+- Large. The 1,075 scope items paginate.
+ Done when. the 1,075 scope items are ingested, enriched and persisted as evidence, matches appear only after passing the gates, and an admin can confirm and commit a SOW-to-subcap link.
+ Depends on: F4, F6, F7, F8, F9, F10
+
+ C2
+
+### Story library
+   Phase 1
+ Purpose. Browse and filter the canonical 14,406-story Jira corpus that backs all delivery evidence; synthetic stories are excluded by default. This is the read view over the F5 two-fold corpus - seed stories and continuously-enriched new stories, in one consistent shape.
+ Components (each explained)
+
+- Search + pillar pills. Free-text over summary and quick pillar filters, applied server-side; URL-serialized.
+- Confidence + min-composite filters. Narrow by the enriched quality signals (HIGH/MEDIUM/LOW confidence, minimum composite score) that every story - seed or newly enriched - carries identically.
+- Quality-distribution mini-chart. A small histogram of composite scores across the filtered set; the at-a-glance quality view.
+- Paginated table. Rows of {key, summary, subcap, subvertical, composite, confidence}, server-paginated over 14,406; never shipped whole.
+- Story drilldown drawer. Opens one story to its acceptance-criteria / solution-design / story sub-scores, target maturity, population, the matched subcap and the match reasoning chain - the enriched record in full.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | control.story | CP | The 14,406 canonical stories; relation delivered_by
+ | story_subcap_carry / story_catalogue_link | CP | The story-to-subcap link for the active version
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads only; the corpus is loaded and kept current by F5 (seed + continuous enrichment). No ingestion on this page.
+ | Enrich / interpret | A server-paginated, server-filtered query returns the row shape; the drilldown returns the enriched sub-scores and the matched subcap. Synthetic rows are filtered out unless trend-flagged.
+ | Persist (and map) | Nothing is written here; mapping happens in F5.
+
+ Build steps
+
+- Build /stories?pillar=&sv=&confidence=&min_composite=&q=&page= (server-side pagination over 14,406) and /stories/{key} .
+- Render the quality-distribution mini-chart and the drilldown drawer with sub-scores and match reasoning.
+- Exclude synthetic stories by default; surface only when trend-flagged.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /stories?...&page= paginates over 14,406; /stories/{key} returns enriched sub-scores and the matched subcap.
+- Large / perf. The corpus never ships whole; the quality histogram is computed server-side on the filtered set.
+- Filter. Synthetic stories are excluded by default; confidence and min-composite filters apply server-side.
+- Version. The story-to-subcap link is version-correct.
+- Failure point. An enriched story missing a sub-score renders n/a, not a crash.
+ Done when. the corpus pages and filters on the server within the read SLO and a story opens to its enriched sub-scores and matched subcap.
+ Depends on: F5, F9, F10
+
+ C3
+
+### Project-subcap trace
+   Phase 2
+ Purpose. Show everything that has touched one subcap, in time order, across all evidence types - the single timeline that ties delivery to public signal.
+ Components (each explained)
+
+- Subcap picker. Chooses the subcap whose timeline is shown.
+- KPI strip. Counts per source type (SOW, story, benchmark, news, vendor, suggestion) for the subcap; the at-a-glance density.
+- Swimlane timeline SVG. Six lanes (one per source) with events placed in time order; the core visual, built from a union query.
+- Event detail. Opens an event to a "what this means" plain-language note, the source excerpt and link, the claim label, and a reasoning backlink - the same trust rendering as everywhere.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | evidence_item, story, suggestion | CP | Timeline events
+ | news_subcap_impact, vendor_subcap_impact, benchmark | CP | News / vendor / benchmark events
+ | sow_subcap_match | CP | SOW events
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads only; consumes the corpora ingested by F5 (stories) and F7 (evidence) plus gated matches. No ingestion here.
+ | Enrich / interpret | A union query gathers SOW, story, benchmark, news, vendor and suggestion events for one subcap and orders them by time; each event carries an excerpt, confidence, claim label, reasoning-chain id and source link.
+ | Persist (and map) | Nothing is written; events are already mapped to the subcap by their owning pipeline.
+
+ Build steps
+
+- Build /subcaps/{id}/timeline as a time-ordered union across the six source types.
+- Render the swimlane and event detail with claim label, source link and a reasoning backlink.
+- Key by version where the event is version-specific (SOW match, story link).
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /subcaps/{id}/timeline returns a time-ordered union across six source types; each event carries an excerpt, claim label, reasoning id and source link.
+- Linkage. An event opens to its owning record; version-specific events (SOW match, story link) are version-correct.
+- Empty. A subcap with no events shows an empty timeline, not an error.
+- Trust. Every AI-derived event shows its claim label.
+ Done when. selecting a subcap shows a single time-ordered swimlane across all six source types, each event opening to its source and reasoning.
+ Depends on: F5, F7, F8, F9, F10
+
+ Section 7
+
+## Group D: Public intelligence
+ External signal turned into subcap-scored, trust-labelled evidence (ingest -> enrich -> persist -> map), and the suggestion queue it feeds.
+ D1
+
+### News watch
+   Phase 2
+ Purpose. Turn public news into subcap-scored signal with full source attribution and an expected-catalogue-impact classification.
+ Components (each explained)
+
+- Impact + tier filters. Narrow by expected catalogue impact and source tier; the triage controls.
+- Item card with trust chips. Each item shows magnitude, source tier and claim-label chips - the trust rendering up front.
+- De-duplication & source coverage. Syndicated near-duplicates are merged (embedding similarity); the source registry spans regulator, analyst, vendor, news, peer and benchmark tiers across all nine subverticals, with grounded search covering the long tail (section 18.7).
+- Expected-catalogue-impact card. The enriched classification (descriptor revision / new use-case / net-new subcap / retire candidate / watchlist) that drives which kind of suggestion the item can raise (R5).
+- Clickable source. The surfaceable source sub-object - name, type, tier, url, reliability/ERS, last-checked - so the analyst can judge and open the origin (R6).
+- Affected-subcap chips. The subcaps the item maps to, each with an impact score, from news_subcap_impact .
+- Reasoning + consultant loop. Opens the reasoning chain, and lets the analyst run the consultant loop to raise a gated suggestion from the item.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | evidence_item (kind=news) | CP | News items + source sub-object {name,type,tier,url,ers,fetched_at}
+ | catalogue_impact (enum on evidence) | CP | Expected-impact class (R5)
+ | news_subcap_impact | CP | Affected subcap + impact score
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | A weekly F7 job (Monday, via config/schedules.yaml ) fetches news into a raw landing using Gemini grounded search, in Batch mode (the ingest stage).
+ | Enrich / interpret | Near-duplicate articles are first collapsed by embedding similarity so syndication does not inflate a signal; Gemini Flash then classifies and types each item, computes ERS (tier, recency, specificity, corroboration) and the expected-catalogue-impact class, and writes the canonical evidence(news) row with its source attributes (the enrich stage; section 18.2).
+ | Persist (and map) | Persist the evidence + the affected-subcap impact rows (the map stage, via F6); the page itself writes nothing except via the consultant loop, which proposes a gated suggestion (F8).
+
+ Build steps
+
+- Build the weekly F7 news ingest + dedupe + classification + impact job (Batch mode) writing evidence(news) with source attributes, ERS and catalogue_impact; cadence comes from config, not code (sections 18.2, 18.7).
+- Build /evidence?kind=news&impact=&tier= ; render the source sub-object and impact card.
+- Wire affected-subcap chips and the consultant-loop entry; the classification drives the suggestion kind.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /evidence?kind=news&impact=&tier= returns the source sub-object {name, type, tier, url, ers, fetched_at}, affected-subcap chips and the catalogue_impact class.
+- Cadence. The page reflects the WEEKLY scan; a last-scanned / next-scan indicator reads the schedule and the FE never implies real-time.
+- Trust. Magnitude, tier and claim-label chips render; the consultant loop produces a GATED suggestion only.
+- Linkage. An affected-subcap chip opens the workbench; the impact class drives the suggestion kind (R5).
+- Failure point (Gemini). An item whose mapping failed the gate is queued, not shown as mapped; a safety-blocked source is skipped with a logged reason (section 17).
+ Done when. news items show their source attributes, an expected-impact class and affected subcaps with scores, and a consultant loop can raise a gated suggestion from one.
+ Depends on: F6, F7, F8, F9, F10
+
+ D2
+
+### Trends monitor
+   Phase 2
+ Purpose. Watch detected trends staged for the monthly cycle, and let a trend be the one signal that surfaces an otherwise-excluded synthetic story.
+ Components (each explained)
+
+- Trend cards. Each shows the trend status, the evidence count behind it and the observation window; the entry list.
+- Trend-detection method. Each trend exposes its signal breakdown (burst velocity, tier-weighted source diversity, novelty/emergence, persistence) so an analyst sees why it was surfaced, not just that it was (section 18.1).
+- Self-learning. Promote/dismiss and mapping confirm/reject feed the learning loops that recalibrate thresholds and fine-tune the embeddings (section 18.3).
+- Subcap chips. The subcaps a trend touches (relation via trend_subcap ), with the emergent flag highlighted.
+- Evidence-cluster drilldown. Expands a trend into the evidence items clustered into it, each with its source and reasoning.
+- Consultant loop. Raises a gated suggestion from a trend (e.g. promote a watchlist subcap).
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | trend | CP | Detected trends with status + window
+ | trend_subcap | CP | Trend -> subcap; the emergent flag
+ | evidence_item | CP | The evidence cluster behind a trend
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | A weekly F7 job (Monday, after the news scan lands) clusters evidence into trends (ingest + enrich). No manual ingestion here.
+ | Enrich / interpret | Trend detection is multi-signal (section 18.1): embedding clustering of evidence, then a burst x source-diversity x novelty x persistence score, gated by G2/G3/G6 - never a keyword count. A high-novelty cluster is flagged emergent (candidate net-new subcap); trend_subcap.emergent is the only gate that lets a synthetic story appear (then labelled provisional).
+ | Persist (and map) | Persist trend + trend_subcap rows; the page writes nothing except via the consultant loop.
+
+ Build steps
+
+- Build the multi-signal detect_trends() job (section 18.1): embed + dedupe -> cluster -> burst/diversity/novelty/persistence score -> map to subcaps -> gate; write trend / trend_subcap with the signal breakdown and an emergent flag.
+- Wire the self-learning loop: log analyst verdicts as labels that recalibrate the config thresholds and feed the contrastive embedding fine-tune (section 18.3).
+- Build /trends ; render cards, subcap chips and the evidence-cluster drilldown.
+- Let an emergent flag surface a provisional synthetic story, clearly labelled.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /trends returns cards {status, evidence_count, window}, subcap chips (trend_subcap) and the emergent flag.
+- Cadence. Weekly; the window reflects the schedule.
+- Linkage. The emergent flag is the only path that surfaces a provisional synthetic story (clearly labelled).
+- Failure point. A trend with thin evidence is shown as low-confidence, not promoted.
+ Done when. trends render with their evidence clusters and an emergent trend is the only path by which a synthetic story becomes visible.
+ Depends on: F6, F7, F8, F9, F10
+
+ D3
+
+### AI suggestions
+   Phase 2
+ Purpose. The propose-gate-apply queue: every AI-proposed catalogue edit, with its evidence, gate result and cost, applied or rejected by a human.
+ Components (each explained)
+
+- KPI tiles. Counts of pending / applied / rejected suggestions; the queue health.
+- Suggestion card. Shows kind, target subcap, the synthesised before/after delta, the cited evidence, claim labels, the adversarial verdict, the G1-G8 gate result, a breaking-change flag and the cost; the decision unit.
+- Anti-generic guards (visible). The card surfaces that the proposal passed the extractive-copy, redundancy and grounding guards, so a reviewer can trust it is synthesis, not a restatement of the source (section 18.4).
+- Apply / Reject / Review. Apply re-runs the gates server-side and writes a snapshot; Reject requires a reason; Review defers. All via the commit modal.
+- Reasoning. Opens the chain that produced the suggestion.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | suggestion | CP | Proposed edits through the lifecycle
+ | validation_gate_run | CP | G1-G8 result per suggestion
+ | reasoning_chain | CP | Why the edit was proposed
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Suggestions are produced by other surfaces (news/trends/benchmarks consultant loops, SOW matches) and the monthly cycle; this surface does not ingest.
+ | Enrich / interpret | Each suggestion is produced by the consultant loop (section 18.4), not a single prompt: a structured thesis -> RAG retrieval from the store -> a synthesised before/after delta with cited claims -> anti-copy, redundancy, grounding and contradiction guards -> an adversarial critique -> the gates. The card shows kind, target subcap, the delta, cited evidence, the adversarial verdict, the gate result, a breaking flag and cost.
+ | Persist (and map) | Apply re-gates, writes a new versioned snapshot and an audit row (F8/F12); Reject persists a reason; nothing is auto-merged or mapped without a gate pass.
+
+ Build steps
+
+- Build the consultant_loop() producer (section 18.4) - thesis -> retrieve -> synthesise delta -> guards -> adversary -> gates - and /suggestions?status=pending , POST /{id}/apply , /reject on top of F8.
+- Render the gate result and breaking flag; require a reason on reject.
+- On apply, re-gate, write the snapshot and audit, and refresh the affected views.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /suggestions?status= and /{id}/apply|reject ; the card shows kind, target, the G1-G8 result, a breaking flag and cost.
+- Gate. Apply re-runs the gates server-side and writes a snapshot plus audit; nothing auto-applies on a gate failure.
+- Linkage. Reject requires a server-validated reason; affected views refresh after apply.
+- Trust. Claim labels and a reasoning link are present.
+- Failure point. A stale suggestion whose target changed re-gates and fails cleanly into Change Flags.
+ Done when. a suggestion shows its gate result and cost, Apply re-runs the gates and writes a snapshot, and Reject records a reason; nothing applies without a clean gate pass.
+ Depends on: F6, F7, F8, F9, F10, F12
+
+ D4
+
+### Benchmarks studio
+   Phase 2
+ Purpose. Ground claims in defensible external benchmarks with confidence bands and an adversarial verdict.
+ Components (each explained)
+
+- Distribution chart with CI band. Plots the benchmark observations with a bootstrap confidence interval; the quantitative core.
+- Methodology panel. Describes how the benchmark was sourced and computed - the defensibility record.
+- Adversary-verdict card. The Claude Opus adversarial review of the claim, with its reasoning; the trust check on the benchmark itself.
+- Coverage-gap banner. Flags where benchmark support is thin so a claim is not over-read.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | evidence_item (kind=benchmark) | CP | Benchmark observations
+ | reasoning_chain (adversarial) | CP | Opus adversary verdict
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | A scheduled F7 job ingests benchmark sources (ingest + enrich into canonical evidence). No manual ingestion here.
+ | Enrich / interpret | A bootstrap confidence band is computed over the observations and an Opus adversarial review produces the verdict.
+ | Persist (and map) | Persist benchmark evidence and the adversarial reasoning chain; the page writes nothing.
+
+ Build steps
+
+- Build the F7 benchmark ingest + Opus adversarial review writing evidence(benchmark) + a verdict chain.
+- Build /evidence?kind=benchmark ; compute and render the CI band and verdict.
+- Show a coverage-gap banner where benchmark support is thin.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /evidence?kind=benchmark returns observations, the CI band, the adversary verdict and reasoning.
+- Trust. The adversarial verdict and claim label render; a thin-coverage banner shows where support is weak.
+- Cadence. Monthly ingest.
+- Failure point. A benchmark with too few observations shows the coverage-gap banner, with no false precision.
+ Done when. a benchmark renders with a confidence band and an adversary verdict, and thin coverage is flagged rather than hidden.
+ Depends on: F7, F9, F10
+
+ Section 8
+
+## Group E: Synthesis
+ The periodic consolidation of a quarter of signal into prioritised, exportable strategy.
+ E1
+
+### Quarterly digest
+   Phase 2
+ Purpose. Consolidate a quarter of evidence and suggestions into an executive summary and per-subvertical priorities, exportable as a signed artefact.
+ Components (each explained)
+
+- Quarter selector. Chooses the quarter to synthesise/view.
+- Opus exec summary. A Claude Opus narrative over the quarter’s evidence and suggestions; the headline synthesis.
+- Cross-subvertical theme banner. The dominant theme spanning subverticals for the quarter.
+- Per-SV priority cards. Collapsible cards, one per subvertical, each with its prioritised moves and an adversarial verdict; the actionable core.
+- Signed export. Builds a HMAC-signed PPTX/JSON via F12 and records an export_manifest row; recipients can verify it.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | digest, digest_priority | CP | The synthesised digest + per-SV priorities
+ | evidence_item, suggestion | CP | Inputs synthesised by the digest job
+ | export_manifest | CP | HMAC-signed export record
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | A scheduled F7 job (Claude Opus) reads the quarter’s evidence and suggestions (ingest stage is internal: it consumes already-persisted records).
+ | Enrich / interpret | Opus synthesises the exec summary, the cross-SV theme and per-SV priorities, each with an adversarial verdict (the enrich/interpret stage).
+ | Persist (and map) | Persist the digest and its priorities; an export builds a signed artefact via F12 and records an export_manifest row.
+
+ Build steps
+
+- Build the F7 quarterly digest job over evidence + suggestions writing digest / digest_priority.
+- Build /digest?quarter= ; render the summary, theme and per-SV cards.
+- Wire export to F12 (signed PPTX/JSON + export_manifest).
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /digest?quarter= returns the exec summary, the cross-sv theme and per-sv priorities (collapsible).
+- Cadence. Quarterly job; the selector lists available quarters.
+- Export. The signed export verifies (HMAC) and records an export_manifest; a tampered file fails verification.
+- Trust. Each per-sv card carries an adversarial verdict.
+- Failure point. A quarter with no synthesised digest shows not-yet-generated, not an error.
+ Done when. a quarter renders an Opus summary with per-SV priorities and adversarial verdicts, and the export verifies against its signature.
+ Depends on: F7, F9, F10, F12
+
+ Section 9
+
+## Group F: Lifecycle & competition
+ Delivery-to-offering economics, vendor movement, and the client-resolved view.
+ F1
+
+### Lifecycle manager
+   Phase 2
+ Purpose. Trace subcaps through delivery, rank the most-delivered against offering coverage, find high-delivery gaps, and have AI bundle uncovered ones into a proposed, named offering. Depends on offerings being real data (R10).
+ Components (each explained)
+
+- KPI tiles. Most-delivered subcap count, covered vs uncovered, and proposed-offering count; the at-a-glance economics.
+- Delivery x coverage bars. Subcaps ranked by delivery count (stories + committed SOW) with an overlay of whether they map to an offering; the gap is visually obvious. Coverage is real because each Core Capability is matched to subcaps (R10).
+- AI-bundled offering proposal. Claude Opus bundles uncovered high-delivery subcaps into a proposed offering, with the co-delivery basis (which subcaps are delivered together) as its reasoning; persisted as offering_opportunity .
+- Promote / commit. Promotes a proposal into a gated suggestion (F8) - never a live write.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | offering, offering_subcap, offering_tier | DP | Offerings as data + Core-Capability matches; relation maps_to_offering
+ | story (via link), sow_subcap_match | CP | Delivery counts per subcap
+ | offering_opportunity | CP | AI-proposed bundle
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Offerings are ingested as data (R10) and delivery comes from F5 (stories) and C1 (SOW); this page consumes, it does not ingest a new corpus.
+ | Enrich / interpret | It ranks subcaps by delivery count and overlays offering coverage; an Opus pass bundles uncovered high-delivery subcaps into a proposed offering.
+ | Persist (and map) | The proposal persists as offering_opportunity; promoting it raises a gated suggestion (F8); coverage is real because the maps are real.
+
+ Build steps
+
+- Ingest the 13 offerings and match each Core Capability to subcaps (R10) so coverage is not illustrative.
+- Build /lifecycle/opportunities ranking delivery vs coverage and producing the bundle proposal.
+- Persist offering_opportunity; route promote/commit through F8.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /lifecycle/opportunities ranks delivery vs coverage; coverage is real (offering_subcap), not illustrative (R10).
+- Linkage. Promote routes an offering_opportunity to a gated suggestion (F8), never a live write.
+- Trust. The AI bundle shows its co-delivery basis as reasoning.
+- Failure point. A subcap with delivery but no offering shows as an uncovered gap, correctly.
+ Done when. most-delivered subcaps show real offering coverage, an AI bundle proposes a named offering for an uncovered cluster, and promoting it runs through the gates.
+ Depends on: F4, F5, F7, F8, F9, F10
+
+ F2
+
+### Vendor intelligence
+   Phase 2
+ Purpose. Track vendors and the developments that move the catalogue, classified and mapped to the subcaps they affect.
+ Components (each explained)
+
+- Vendor profiles. One per vendor (Salesforce, Databricks, nCino, ...) with the platforms it provides; the entity view, from vendor .
+- Developments feed. Vendor events typed into eight event types (launch, acquisition, deprecation, ...) by Gemini Flash; the signal stream, from vendor_event .
+- Vendor x subcap impact heatmap. Vendors x subcaps coloured by evidence-driven impact score, from vendor_subcap_impact ; shows where a vendor’s moves matter.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | vendor | DP | Vendor profiles (shared dimension)
+ | vendor_event | CP | Developments typed into 8 event types
+ | vendor_subcap_impact | CP | Affected subcap + impact score
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | A scheduled F7 job ingests vendor developments into a raw landing (ingest).
+ | Enrich / interpret | Gemini Flash types each development into one of eight event types and scores its impact; canonical vendor_event rows are written (enrich).
+ | Persist (and map) | Persist vendor_event + vendor_subcap_impact (map, via F6); the page writes nothing except via the consultant loop.
+
+ Build steps
+
+- Build the F7 vendor ingest + event-typing job writing vendor_event / vendor_subcap_impact.
+- Build the vendor routes and the impact heatmap.
+- Wire the consultant loop for raising a gated suggestion from a development.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. Vendor profiles, vendor_event (eight types) and the vendor_subcap_impact heatmap.
+- Cadence. Weekly vendor scan.
+- Linkage. The consultant loop raises a gated suggestion from a development.
+- Failure point (Gemini). An event Gemini could not type lands in review, not mis-typed silently.
+ Done when. vendor developments are typed into the eight event types and mapped to affected subcaps with impact scores.
+ Depends on: F7, F8, F9, F10
+
+ F3
+
+### Client journey atlas
+   Phase 3
+ Purpose. An entity-resolved view of a client across delivery, and the validated DMA handoff packet.
+ Components (each explained)
+
+- Client picker / entity resolution. Resolves a client across SOW account names and story project keys into one entity; the identity layer.
+- Journey view. The client’s delivery across subcaps over time, assembled from its stories and committed SOW matches.
+- Signed DMA packet export. Builds a validated DMA handoff as a HMAC-signed artefact via F12; the deliverable.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | sow_document (account_name) | CP | Client identity from SOW
+ | story, sow_subcap_match | CP | Delivery history per client
+ | export_manifest | CP | Signed DMA packet
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Consumes SOW (C1) and story (F5) data; no new corpus ingestion.
+ | Enrich / interpret | Entity resolution joins delivery to a client and assembles a journey and a DMA packet.
+ | Persist (and map) | The DMA packet exports as a HMAC-signed artefact via F12; otherwise read-only.
+
+ Build steps
+
+- Implement client entity resolution over SOW account names and story project keys.
+- Build the journey view and the DMA packet assembly.
+- Export the packet via F12 (signed + export_manifest).
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. Client entity resolution over SOW account names and story project keys; the journey assembles from stories and committed SOW.
+- Export. The DMA packet is HMAC-signed and verifiable.
+- Failure point. An ambiguous client (name collision) prompts disambiguation, not a wrong merge.
+- Phase. Phase 3.
+ Done when. a client resolves across its delivery history and exports a validated, signed DMA packet.
+ Depends on: F5, F7, F9, F12
+
+ Section 10
+
+## Group G: Versioning & QA
+ The version machinery the whole app keys off, plus the change-flag, gate and audit surfaces that keep it honest.
+ G1
+
+### Version timeline
+   Phase 1
+ Purpose. Show inspectable, reversible catalogue snapshots and let an admin revert a version safely.
+ Components (each explained)
+
+- Snapshot timeline. Versions in time order with their version-qualified counts and provision metadata; the spine.
+- Snapshot inspector. Opens a version to its ingest_run stats (files, rows, deviations).
+- Admin revert. Restores a version’s schema snapshot; admin-only and audited; never rewinds evidence-corpora timestamps.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | catalogue_version | CP | Version registry + status
+ | ingest_run | CP | Provision snapshots + stats
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads the version registry and ingest snapshots; revert restores a schema snapshot. No corpus ingestion here.
+ | Enrich / interpret | Lists versions with version-qualified counts and provision metadata; revert restores the data-plane snapshot but preserves the record of what was known when.
+ | Persist (and map) | Revert is an admin control-plane snapshot-restore that writes an audit row; otherwise read-only.
+
+ Build steps
+
+- Build /versions with per-version counts and provision stats.
+- Implement admin revert as a snapshot restore preserving evidence timestamps; write an audit row (F12).
+- Show the active version and let the header toggle switch it.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /versions returns per-version counts and provision stats; the active version reflects the header toggle.
+- Revert. Admin-only, audited; restores only the data-plane snapshot and preserves evidence timestamps and the crosswalk.
+- Failure point. A revert invalidates caches so no surface shows a stale mixed version.
+ Done when. versions list with version-qualified counts and an admin can revert to a snapshot without losing the record of what was known when.
+ Depends on: F3, F4, F9, F12
+
+ G2
+
+### Diff viewer
+   Phase 1
+ Purpose. Show exactly what changed between any two catalogue versions, computed from the crosswalk.
+ Components (each explained)
+
+- Version A / B selectors. Choose the two versions to compare (default v5 vs v7).
+- Added / removed / modified lists. The three change sets between A and B, computed from version_crosswalk ; the FC subcaps show up here as added in v7.
+- Lineage detail. For a modified subcap, its v5-to-v7 mapping and what changed.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | version_crosswalk | CP | Subcap lineage across versions
+ | cat_va.subcap, cat_vb.subcap | DP | The two versions being compared
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads two provisioned versions plus the crosswalk loaded at provision time (F4, _R1). No ingestion here.
+ | Enrich / interpret | Reads the crosswalk to compute added, removed and modified subcaps between A and B; every figure is version-qualified.
+ | Persist (and map) | Nothing is written.
+
+ Build steps
+
+- Build /diff/{a}/{b} computing added/removed/modified via version_crosswalk.
+- Render the three lists plus lineage detail; default A/B to v5 and v7.
+- Keep all counts version-qualified.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /diff/{a}/{b} returns added / removed / modified from version_crosswalk; counts are version-qualified and the FC subcaps appear as added in v7.
+- Linkage. A modified subcap drills to its v5-to-v7 lineage.
+- Failure point. Comparing a version to itself returns an empty diff, not an error.
+ Done when. comparing v5 and v7 lists the added (incl. the FC subcaps), removed and modified subcaps correctly from the crosswalk.
+ Depends on: F3, F4, F9, F10
+
+ G3
+
+### Change flags inbox
+   Phase 2
+ Purpose. The review queue where anything that fails a gate, contradicts evidence, or needs a pillar lead lands - and is resolved.
+ Components (each explained)
+
+- Flag inbox. Flags by severity, type and source, each naming the failing gate; the work queue, from change_flag .
+- Resolution workflow. Approve (applies via F8 + writes a snapshot), Reject (records a reason), or Defer (keeps it queued); the action set.
+- Gate + reasoning link. Each flag links to its validation_gate_run and reasoning chain so the decision is informed.
+- Pending-edge approvals. KG Layer B proposals are approved/rejected here, keeping all gated commits in one inbox.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | change_flag | CP | Flags + resolution state
+ | validation_gate_run | CP | The failing gate behind a flag
+ | pending_edge | CP | KG Layer B proposals awaiting approval
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Flags are written by F8 (gate failures), the contradiction gate, and the KG (pending edges). This surface does not ingest.
+ | Enrich / interpret | Lists flags by severity and type, each linked to its failing gate and reasoning chain; KG approvals flow here.
+ | Persist (and map) | Resolving persists the decision (approve applies via F8 and writes a snapshot; reject records a reason; defer keeps it queued); every action is audited.
+
+ Build steps
+
+- Build /change-flags with severity/type filters and resolution actions.
+- Link each flag to its gate run and reasoning chain; route approvals through F8.
+- Audit every resolution (F12).
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /change-flags with severity / type filters; each flag names the failing gate and links its gate run and reasoning.
+- Linkage. Approve applies via F8 (re-gate plus snapshot); Reject records a reason; KG pending edges are approved here.
+- Audit. Every resolution writes an audit row.
+- Failure point. An approve that fails the re-gate stays open with the new failing gate, not a partial apply.
+ Done when. a gate failure or pending edge appears named, and a pillar lead can approve (with a re-gate + snapshot), reject (with reason) or defer it.
+ Depends on: F8, F9, F10, F12
+
+ G4
+
+### Validation gates log
+   Phase 2
+ Purpose. Transparency on how the eight gates run over time - the trust surface for the gating itself.
+ Components (each explained)
+
+- Gate pass/warn/fail trend. A time series of gate outcomes across all evaluations; the headline trust trend.
+- Per-gate breakdown. Outcomes split by gate (G1-G8) so a weakening gate is visible.
+- Run drilldown. Opens one validation_gate_run to its inputs and its reasoning chain.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | validation_gate_run | CP | Every gate evaluation
+ | reasoning_chain | CP | The chain each run links to
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads the gate-run record produced by F8. No ingestion here.
+ | Enrich / interpret | Aggregates gate runs into pass/warn/fail trends per gate and lets an analyst drill to a single run and its reasoning.
+ | Persist (and map) | Nothing is written.
+
+ Build steps
+
+- Build /gates aggregating validation_gate_run into trends.
+- Render per-gate breakdowns and a drilldown to a single run + chain.
+- Make it read-only.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /gates aggregates validation_gate_run into pass / warn / fail trends per gate; a run drills to its reasoning.
+- Read-only. No writes.
+- Failure point. A spike in one gate failure rate is visible per-gate, not hidden in the aggregate.
+ Done when. gate pass/warn/fail trends render per gate and any run drills to its reasoning chain.
+ Depends on: F8, F9, F10
+
+ G5
+
+### QA & audit dashboard
+   Phase 2
+ Purpose. The accuracy, budget and auditability view: is the system trustworthy and within its envelope.
+ Components (each explained)
+
+- Gate pass-rate. The overall share of clean gate passes; the headline quality number.
+- Hallucination rate. From the F6 offline eval on the golden set; the grounding check.
+- Spend vs envelope (admin-only). Cost-by-feature against the monthly budget, from the F11 cost meter; gated by is_admin (R7).
+- Retrieval MRR. The F6 retrieval quality metric; a drop triggers a fine-tune.
+- Audit access. A window into the immutable audit_log .
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | validation_gate_run | CP | Pass-rate
+ | audit_log | CP | Immutable audit access
+ | cost meter (F11) | derived | Spend vs envelope (admin)
+ | eval harness (F6) | derived | Hallucination rate + MRR
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | Reads gate runs, the audit log, the F11 cost meter and the F6 eval harness. No ingestion here.
+ | Enrich / interpret | Reports gate pass-rate, the offline hallucination rate and MRR, and spend vs envelope; spend is admin-only.
+ | Persist (and map) | Nothing is written; it reads the immutable audit and metrics.
+
+ Build steps
+
+- Build /qa/metrics joining gate pass-rate, eval results and the cost meter.
+- Gate the spend panel behind is_admin; expose audit-log access.
+- Run the fixed catalogue-grounded chat eval set as a release check (F6).
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /qa/metrics joins gate pass-rate, the eval (hallucination, MRR) and the cost meter.
+- Role. Spend vs envelope is admin-only (R7) and hidden for non-admins.
+- Linkage. Audit-log access; an MRR drop is flagged and triggers an F6 fine-tune.
+- Failure point. Missing eval data shows n/a, not a fabricated metric.
+ Done when. pass-rate, hallucination rate and MRR render, spend is visible only to admins, and the audit is reachable.
+ Depends on: F6, F8, F9, F10, F11, F12
+
+ Section 11
+
+## Group H: Reasoning & RAG
+ Catalogue-grounded conversation, and the always-available window into how any AI output was reached.
+ H1
+
+### AI chat
+   Phase 2
+ Purpose. Answer questions grounded strictly in the stored catalogue and evidence, with inline citations and a reasoning backlink - never from model memory.
+ Components (each explained)
+
+- Streamed answer pane. Tokens stream as they are generated; the conversational core.
+- Inline subcap citations. Every claim links to the subcap(s) it is grounded in; click-through to the workbench.
+- Source tier + claim label. Each answer carries its source tier and a FACT/INFERENCE label; the trust rendering.
+- Reasoning backlink. Opens the reasoning chain for the turn.
+- Context chips. Show the active version, pillar and subvertical the answer is scoped to, read from the header context.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | F6 hybrid retrieval | derived | Grounding context
+ | cat_<v>.subcap + evidence_item | DP/CP | The retrieved corpus
+ | reasoning_chain | CP | The per-turn chain
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | No ingestion; chat retrieves from the F6 hybrid index over the active version’s catalogue and the evidence corpus.
+ | Enrich / interpret | Each turn retrieves grounding context, composes a grounded answer with inline subcap citations and a claim label, and records a reasoning chain; G5 grounding applies.
+ | Persist (and map) | The reasoning chain persists; the conversation is otherwise ephemeral client state; nothing is mapped or committed.
+
+ Build steps
+
+- Build POST /chat (streamed) on top of F6 retrieval; inject the active version and header filters as context.
+- Return inline subcap citations, source tier, a FACT label and a chain id; stream tokens.
+- Refuse to answer outside retrieved context (G5).
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. POST /chat streams; the answer carries inline subcap citations, source tier, claim label and a chain id.
+- Grounding. G5 refuses to answer outside retrieved context; no answer comes from model memory.
+- Stream. An interrupted SSE stream recovers or shows partial-with-retry, never a frozen pane.
+- Version. Answers are scoped to the active version and header filters (context chips).
+- Failure point (Gemini). A 429 or timeout falls back to a cheaper model with a degraded note; a safety-blocked turn returns a safe message, not a crash (section 17).
+ Done when. a question returns a streamed, catalogue-grounded answer with inline citations, a claim label and a reasoning backlink, and nothing comes from model memory.
+ Depends on: F6, F7, F8, F9, F10
+
+ H2
+
+### Reasoning chain viewer (modal)
+   Phase 2
+ Purpose. The cross-cutting window that makes any AI output auditable in plain language; opens from every "Show reasoning" across the app.
+ Components (each explained)
+
+- Step-by-step chain. Retrieve -> weigh evidence -> conclude -> adversarial self-review, in plain language; the audit core, from reasoning_step .
+- Evidence list. The evidence the chain used, with readable source descriptions and tiers.
+- Gate results. The pass/needs-review outcome of each gate for this output, from validation_gate_run .
+- Cost. The model cost of producing the chain; admin-relevant transparency.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | reasoning_chain, reasoning_step | CP | The full trail
+ | validation_gate_run | CP | The gate results shown
+ | citation | CP | Citations resolved to stored chunks
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | No ingestion; it reads an existing chain produced by any AI operation (F7/F8).
+ | Enrich / interpret | Renders the chain steps, the evidence in plain language, the gate results and the cost; the same component everywhere.
+ | Persist (and map) | Nothing is written.
+
+ Build steps
+
+- Build /reasoning/{chain_id} returning steps, evidence, gate results and cost.
+- Build the modal once (section 13) and open it from every "Show reasoning" affordance.
+- Render in plain language with no opaque codes.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /reasoning/{chain_id} returns steps, evidence, gate results and cost; one component reused everywhere.
+- Linkage. Opens from every "Show reasoning" with the correct chain id.
+- Failure point. A missing or malformed chain shows unavailable, not a blank modal.
+ Done when. any AI output opens the same plain-language reasoning chain with its evidence, gate results and cost.
+ Depends on: F7, F8, F9, F10
+
+ Section 12
+
+## Group I: Sandbox
+ A safe place to test a catalogue change before proposing it.
+ I1
+
+### What-if simulator
+   Phase 3
+ Purpose. Let an expert test a hypothetical catalogue change (toggle a subcap, add a relation) and preview the cascade, entirely read-only, before it ever becomes a suggestion.
+ Components (each explained)
+
+- Scenario builder. Compose a hypothetical change (deactivate a subcap, add a relation) without touching live data; the input surface.
+- Cascade preview. Runs the same deterministic cascade engine as the live toggle, read-only, and shows what would be affected.
+- Impact summary. Counts and lists the downstream rows the change would touch; the decision aid.
+- Promote-to-suggestion. Turns the scenario into a gated suggestion (F8); the only path to a real change, never a live write.
+ Sources and relations
+ | Source (table / relation) | Plane | Used for
+
+ | what_if_result | CP | Saved sandbox scenarios + outcomes
+ | relation_def (read) | CP | Relations the cascade engine reads
+ | cat_<v>.* (read-only) | DP | The catalogue the scenario is run against
+
+ Data lifecycle: ingest, enrich/interpret, persist (and map)
+ | Stage | What happens
+
+ | Ingest | No ingestion; the sandbox reads the active version and the relation registry.
+ | Enrich / interpret | A scenario runs the deterministic cascade engine against a read-only copy and summarises the impact; nothing in the live catalogue changes.
+ | Persist (and map) | The scenario and outcome persist as what_if_result; promoting it raises a gated suggestion (F8); the live catalogue is never mutated by the sandbox.
+
+ Build steps
+
+- Build /whatif running the cascade engine read-only over the active version.
+- Render the scenario builder, cascade preview and impact summary.
+- Persist what_if_result; promote routes through F8, never a live write.
+ QA & linkage checks (frontend ↔ backend)
+
+- Contract. /whatif runs the cascade engine read-only over the active version; the live catalogue is never mutated.
+- Linkage. Promote routes to a gated suggestion (F8); the sandbox cannot write live.
+- Failure point. A scenario referencing a stale subcap is validated before running, not applied blindly.
+- Persist. what_if_result is saved and re-openable.
+ Done when. a hypothetical change previews its cascade without touching the live catalogue, and promoting it creates a gated suggestion.
+ Depends on: F4, F8, F9, F10
+
+ Section 13
+
+## Cross-cutting modals
+ Four modals are shared by many surfaces. Build each once and open it from everywhere, so behaviour and trust rendering are identical across the app and no surface re-implements them.
+ | Modal | Purpose | Wiring (build once, reuse)
+
+ | Reasoning-chain modal | Audit any AI output (steps, evidence, gates, cost) in plain language. | Opens from every "Show reasoning"; reads /reasoning/{chain_id}. Built once (H2).
+ | Subcap quick-look drawer | Peek a subcap without leaving the current surface. | Opened by use-case cards, story rows, platform chips; reads /subcaps/{id} summary.
+ | Consultant reasoning loop | Capture a thesis, run the AI adversarial challenge, pass the gates, then stage or commit. | Opens from News/Trends/Vendor/Benchmarks; writes a gated suggestion via F8; never commits live.
+ | Versioned commit modal | Confirm an apply under version control with its breaking-change friction. | Wraps any apply (suggestions, change flags, lifecycle, what-if); re-gates and writes a snapshot + audit (F8/F12).
+
+ Why modals are foundations, not page features
+ These four are the trust and mutation choke-points. Centralising them guarantees that every "Show reasoning" looks the same, every commit goes through the gates, and every peek uses one summary endpoint - which is exactly how the build stays free of overlap.
+
+ Section 14
+
+## Build sequence
+ Build foundations, then pages, phase by phase. A page is only ready when its foundations are merged - the Depends-on line on each page is the gate.
+ | Phase | Scope | FRs
+
+ | 1 · Foundation | F1-F6, F9-F11, F13-F15; access (Login, Onboarding, Schema studio, Settings); A1 Mission control, A2 Capability workbench, A3 Value chain atlas; B1 Platform catalog, B2 Use case explorer; C2 Story library; G1 Version timeline, G2 Diff viewer. | FR-1..6, FR-22
+ | 2 · Evidence & reasoning | F7, F8, F12; C1 SOW library, C3 trace; D1 News, D2 Trends, D3 Suggestions, D4 Benchmarks; E1 Digest; F1 Lifecycle, F2 Vendor; G3 Change flags, G4 Gates log, G5 QA; H1 Chat, H2 Reasoning viewer; the four modals. | FR-7..17
+ | 3 · Live & automation | Continuous Jira ingest + enrichment (the second half of F5); B3 Knowledge graph (Layer B + gates); F3 Client journey + DMA packet; I1 What-if simulator. | FR-18..21
+
+### 14.1 Where the intelligence lands by phase
+
+- Phase 1 stands up L1 (automap intelligence, F4), the seed half of the story pipeline and carry-forward (F5), L3 retrieval (F6), and the L2/L3/L5 plumbing of F13, plus the explicit relationship model (F15), so the read side is correct and version-aware.
+- Phase 2 turns on L2 enrichment for SOWs, news, vendors and benchmarks (F7), L4 reasoning + adversarial review, and L5 gating (F8) - the evidence and reasoning surfaces - and the trend detector and consultant loop over them (section 18).
+- Phase 3 completes the continuous half of the story pipeline (monitor Jira -> enrich -> map), the gated KG Layer B, the sandbox, and the maturing self-learning loops (section 18.3).
+
+### 14.2 Recommended first two sprints
+
+- Stand up the Cloud Run skeleton (F1), Firebase domain-restricted auth (F2) and control-plane migrations (F3); wire the prototype Login + shell to real auth and /api/me.
+- Build the schema-mapping engine with the automap intelligence layer and provisioning end to end against the real v7 workbooks (F4), then seed + carry-forward (F5). The moment a version provisions, point the catalogue read endpoints at it and the entire read side of the prototype lights up (A1, A2, A3, B1, B2, C2, G1, G2).
+ Critical path
+ No downstream surface has data until a version is provisioned (F4) and stories are carried forward (F5). Treat onboarding (ONB) as the production entry experience for an admin’s first session on a fresh version, exactly as the prototype does.
+
+ Section 15
+
+## Failure modes & self-healing (every stage)
+ Everything that can go wrong, mapped to how the system detects it and heals itself. Each row composes the F14 patterns; the goal is that a failure self-corrects or quarantines safely rather than corrupting state or silently dropping data.
+ | Stage / area | What can go wrong | How it is detected | Self-heal / safeguard
+
+ | Deploy / new revision | An arm/Mac image, a hardcoded port or a startup crash means the container never listens; a bad revision serves errors. | Cloud Run reports "container failed to start"; the startup probe never passes; canary error-rate spikes. | Build linux/amd64 and verify locally; listen on 0.0.0.0:$PORT ; the startup probe gates traffic; deploy --no-traffic then canary - a failed revision never receives traffic, which is the rollback (F1, §16).
+ | Instance startup | Slow init (model load, pool warm) makes Cloud Run route traffic before ready, inflating p95. | container/startup_latency metric; early-request latency spike. | Startup probe with failureThreshold × periodSeconds > worst-case init; min-instances 2 + CPU boost to remove the rolling-deploy gap (F1).
+ | Shutdown / scale-in | SIGTERM mid-request drops connections or leaks DB sessions; SIGKILL (exit 137) if cleanup overruns 10s. | exit 143 vs 137 in logs; connection-reset errors during deploys. | SIGTERM handler drains in-flight, closes the pool and exits before 10s; long jobs checkpoint so they resume, not restart (F1, F14).
+ | DB migrations | Autoscaled instances race the same migration; a pooler releases the advisory lock and hangs; a half-applied migration corrupts schema. | Migration job hangs on lock; alembic_version mismatch; deploy stalls. | Migrate as a one-shot Job before traffic; advisory lock on a direct connection + lock_timeout + version-check skip; transactional DDL rolls a failure back; state in alembic_version makes rebuilds/re-applies no-ops (F3, §16).
+ | Cloud SQL connections | Each instance opens a pool; instances × pool exhausts the connection limit under scale-up. | "too many connections"; connection-acquire timeouts. | Small per-instance pool with pool_pre_ping ; cap max-instances under the DB limit (downstream protection, not peak traffic); recycle on SIGTERM; connect via the Cloud SQL connector (F1, F11).
+ | Upload / ingest | A malformed or partial workbook, a Drive timeout, or a duplicate upload. | Parse error; ingest_run stuck; duplicate ingest_run for one file. | Validate before commit; retry transient fetches with backoff; idempotency on file hash so a re-upload upserts; failures land in the DLQ, not a half-loaded version (F7, F14).
+ | Automap (L1) | A renamed or brand-new column maps wrongly or not at all. | Low automap confidence; admin overrides cluster on one field. | Four-signal scoring with value fingerprinting recognises the field despite the name; unknown -> custom column (never dropped); the learning loop folds the override in so the next version is correct (F4).
+ | Provisioning | A transactional schema build fails partway, or a re-run double-creates. | ingest_run = failed; partial cat_<v> schema. | One idempotent transaction - all-or-nothing; a re-run upserts; on failure the version stays unprovisioned and is retried (F4).
+ | Carry-forward | A v5 mapping has no v7 target, or a carried_to_subcap points at a missing subcap. | carry_status = unmapped; integrity check finds a dangling reference. | Crosswalk + embedding confirm with config bands; unmatched -> review (never dropped); the integrity self-check quarantines a dangling ref to review rather than serving it (F5, F14).
+ | Story / SOW enrichment (L2) | A model call fails or returns off-shape data; a poison record fails every time. | Schema-validation failure on the enriched record; repeated job failure. | Validate the enriched record against the canonical schema before persist; retry with backoff; after N tries the record goes to the DLQ for review - the pipeline keeps moving (F5, F7, F14).
+ | Matching / embeddings (L3) | Provider outage, or embedding drift degrades match quality. | Retrieval MRR drop on the golden set; circuit breaker trips. | Circuit-break to the fallback model with a degraded banner; the eval harness flags an MRR drop and triggers a contrastive re-fine-tune; nothing commits below the config threshold (F6, F11).
+ | Gemini invocation | 429/quota, MAX_TOKENS emptying structured output, a safety block, or a deprecated model. | API error code; finish_reason ; empty parsed body; deprecation notice. | The gemini.py wrapper retries 429/5xx with backoff, raises the cap on MAX_TOKENS, routes a safety block to review, and uses pinned versions behind one abstraction so a deprecation is a one-line change (section 17).
+ | Validation gates (L5) | A gate is mis-tuned, or evidence contradicts a proposal. | Gate-failure rate moves; contradictions on G6. | Gates are deterministic code with persisted runs; any failure routes to Change Flags named by gate; nothing auto-applies without a clean pass; pass-rate is monitored (F8, G4).
+ | Retrieval / chat | The model is asked something outside the retrieved corpus. | G5 grounding fails; empty or low-similarity retrieval. | Refuse to answer outside retrieved context (G5); always attach citations + a reasoning chain; degrade to a fallback model rather than failing the turn (F6, F8).
+ | Jobs / scheduler | A scheduled cycle silently stops, or a job hangs. | No ingest_run in the expected window; a run past its lease. | The watchdog reaps stuck runs and re-enqueues them; missed cycles alert; idempotency makes the retry safe (F7, F14).
+ | Exports | An export is tampered with or cannot be verified. | Signature mismatch on verification. | HMAC-sign every artefact and record an export_manifest; expose a verify endpoint; the audit log is append-only (F12).
+ | Cost / budget | A runaway loop or expensive batch overruns the envelope. | Spend vs envelope crosses 80% / 90% (admin QA). | G8 budget gate + the cost meter alert at 80%, throttle non-essential work at 90%, and auto-route to a fallback with a degraded banner rather than failing (F8, F11).
+ | Version revert | A revert risks rewinding evidence timestamps or losing lineage. | Audit shows a revert; lineage gap. | Revert restores only the data-plane snapshot and preserves what-was-known-when and the crosswalk; the action is audited (G1, F12).
+ | Knowledge graph (Layer B) | An AI-proposed edge is wrong and would mislead if shown as fact. | A pending_edge below threshold or contested. | Layer B edges are written as pending_edge with a reasoning chain and never committed live; they require G1-G8 + human approval in Change Flags (B3, F8).
+
+ The self-healing contract
+ Three invariants hold at every stage: nothing is dropped (failures queue to a review list or DLQ, never vanish), everything is idempotent (a retry or duplicate upserts), and everything is bounded (timeouts, lock timeouts, max-retries and budget caps). Together they turn a transient failure into an automatic recovery and a permanent failure into a visible, replayable item rather than corruption.
+
+ Section 16
+
+## Deployment & migration safeguards (Cloud Run)
+ Cloud Run do’s, don’ts and common errors to avoid, and a migration flow that stays correct across image rebuilds and repeated terraform apply . Grounded in current Google Cloud guidance and 2026 production write-ups.
+
+### 16.1 Cloud Run do’s
+ | Do | Why / how
+
+ | Listen on 0.0.0.0:$PORT | Read the PORT env (default 8080) and bind all interfaces - binding 127.0.0.1 or a hardcoded port is the #1 "container failed to start".
+ | Build linux/amd64 | Use docker buildx --platform linux/amd64 ; an arm/Mac image fails to start on Cloud Run. Verify the image runs locally first.
+ | Gate traffic with a startup probe | Cloud Run only routes when the probe passes; size failureThreshold × periodSeconds above worst-case cold init. Add a liveness probe to restart hung instances.
+ | Handle SIGTERM | Drain in-flight, close the DB pool, exit within 10s before SIGKILL (exit 143 = clean, 137 = killed). Checkpoint long work so it resumes.
+ | min-instances 2 + CPU boost on the hot path | Removes the cold-start gap during rolling deploys and speeds init; measure container/startup_latency before tuning.
+ | max-instances = downstream protection | Size it to what Cloud SQL / upstreams can take, not to peak traffic; it is the main guard against connection exhaustion.
+ | Secrets via Secret Manager | Mount secrets; never bake them into the image or plain env. Run as a least-privilege service account.
+ | Roll out gradually | Deploy --no-traffic --tag candidate , send a small %, watch SLOs, then promote; keep the last healthy revision for instant rollback.
+
+### 16.2 Cloud Run don’ts and common errors
+ | Don’t | Why
+
+ | Don’t migrate on app startup | Autoscaled instances race the migration. Run migrations as a one-shot Job to completion before the new revision gets traffic.
+ | Don’t hold the advisory lock through a transaction pooler | PgBouncer txn mode releases the session-scoped lock and the migration hangs. Migrate on a direct connection.
+ | Don’t enable "CPU always allocated" for request-response | Bill continuously for nothing unless there is real between-request work. Use the default request-time CPU.
+ | Don’t treat max-instances as a pure cost knob | Under-setting it throttles you; its real job is protecting the database and upstreams.
+ | Don’t over-warm | min-instances 10 for a 5-request peak just wastes money; tune from real latency metrics.
+ | Don’t put long work in the request path | Offload ingest/enrich/match/synthesis to Cloud Run Jobs; keep requests within the read SLO.
+ | Don’t autogenerate-and-apply migrations in prod | Review every revision; test the downgrade; apply only the reviewed script.
+ | Don’t embed migrations in terraform apply | Terraform triggers the migration Job; it never runs the migration itself. Applying twice must be safe.
+
+### 16.3 Safe rollout order
+ Build once, migrate to completion as a Job, then shift traffic gradually. A failed deploy never takes traffic, and a failed migration never reaches the revision:
+ Build
+ amd64 image, pushed
+ verify locally first
+
+ →
+ Migrate (Job)
+ one-shot, to completion
+ advisory lock, version-check skip
+
+ →
+ Canary
+ new revision, no traffic -> 10%
+ watch error-rate + p95
+
+ →
+ Promote
+ shift to latest
+ or stay on last healthy = rollback
+
+ deploy.sh python
+ # deploy.sh - safe Cloud Run rollout: build -> migrate (job) -> canary -> promote.
+# 1) Build for the Cloud Run runtime. A Mac/arm image will fail to start ("container failed to start").
+docker buildx build --platform linux/amd64 -t "$IMG" . && docker push "$IMG"
+
+# 2) Run migrations as a ONE-SHOT JOB from the SAME image, to completion, BEFORE any new traffic.
+gcloud run jobs deploy cia-migrate --image "$IMG" --command python --args=-m,app.migrate \
+ --set-cloudsql-instances "$CSQL" --max-retries 3 --task-timeout 900s --region "$REGION"
+gcloud run jobs execute cia-migrate --wait --region "$REGION" # MUST succeed before step 3
+
+# 3) Deploy the new revision WITHOUT taking traffic, then canary, watch SLOs, then promote.
+gcloud run deploy cia --image "$IMG" --region "$REGION" \
+ --min-instances 2 --max-instances 40 --cpu-boost --concurrency 80 \
+ --set-secrets HMAC_KEY=hmac-key:latest --service-account cia-run@$PROJECT.iam.gserviceaccount.com \
+ --no-traffic --tag candidate
+gcloud run services update-traffic cia --region "$REGION" --to-tags candidate=10 # 10% canary
+# if error rate / p95 stay green:
+gcloud run services update-traffic cia --region "$REGION" --to-latest
+# if not: traffic never moved off the last healthy revision - that IS the rollback.
+
+ service.yaml (probes) python
+ # service.yaml - the startup probe gates traffic; the liveness probe restarts a hung instance.
+spec:
+ template:
+ spec:
+ containers:
+ - image: REGION-docker.pkg.dev/PROJECT/repo/cia:TAG
+ ports: [{ containerPort: 8080 }] # app MUST listen on 0.0.0.0:$PORT (never 127.0.0.1)
+ startupProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 3, failureThreshold: 20 }
+ livenessProbe: { httpGet: { path: /livez, port: 8080 }, periodSeconds: 15, failureThreshold: 3 }
+ # /healthz: cheap readiness (process up, config loaded). /livez: deeper (DB pool reachable).
+ # failureThreshold x periodSeconds must exceed worst-case cold init (model load, pool warm).
+
+### 16.4 Migration resilience across rebuilds and Terraform
+
+- State lives in the database. alembic_version - not the image, not Terraform state - is the source of truth, so rebuilding the image or re-running terraform apply changes nothing if the DB is already at head.
+- Idempotent by construction. upgrade head at head is a no-op; the version-check-first skip means most runs never even take the lock; Job retries are safe.
+- Serialized and bounded. One advisory lock on a direct connection with a 30s lock_timeout serializes any concurrent runners and prevents the pooler hang; a stuck holder cannot block deploys indefinitely.
+- Atomic. Postgres transactional DDL rolls a half-applied migration back, so a failed step never leaves a corrupt schema.
+- Zero-downtime shape. Expand/contract (add nullable -> backfill -> later drop) keeps the old and new revisions both working during the canary; CREATE INDEX CONCURRENTLY runs outside a transaction.
+- Terraform’s role. Terraform provisions infra and triggers the migration Job and the service deploy; it never embeds migrations, so an apply is safe to repeat.
+- Existing databases. Stamp/baseline an already-provisioned database to its current revision instead of re-creating, then migrate forward.
+
+### 16.5 Cloud SQL connection handling
+ Connect via the Cloud SQL connector; keep a small per-instance pool with pool_pre_ping ; because total connections are instances × pool_size , cap max-instances beneath the database connection limit and recycle the pool on SIGTERM. The migration runner uses a separate direct connection so the advisory lock holds.
+ One-line summary
+ Build amd64, gate traffic with a startup probe, handle SIGTERM in 10s, migrate as a one-shot Job (advisory lock on a direct connection, idempotent, transactional) before any traffic, canary then promote with auto-rollback, and let Terraform trigger - never embed - the migration. Rebuilds and re-applies become no-ops.
+
+ Section 17
+
+## Model strategy & Gemini usage
+ How the current Gemini models are used, kept cheap, grounded, tuned and made resilient, and how they map external signal back to subcaps. Grounded in the June-2026 Gemini lineup and pricing; treat the figures as directional and confirm on the pricing page.
+
+### 17.1 Model tiers (cheapest model that meets the bar)
+ | Task | Pinned model | Why | Rough $ / 1M (in / out)
+
+ | Classify / extract | gemini-3.1-flash-lite | High-volume, low-cost: news / vendor typing, story-field extraction. | ~$0.25 / $1.50
+ | Structured enrichment | gemini-3-flash | Canonicalise a raw story or SOW row into the schema shape. | ~$0.50 / $3
+ | Match + reason | gemini-3.5-flash | Story / SOW / news -> subcap reasoning, with native Google Search grounding (GA). | ~$1.50 / $9 ($0.15 cached)
+ | Synthesis + adversarial | gemini-3.1-pro-preview (or Claude Opus) | Quarterly digest, benchmark adversarial verdict. | ~$2 / $12 (≤200K), $4 / $18 above
+ | Embeddings | gemini-embedding-2 | The one shared embedding space behind retrieval and all matching (F6). | embedding rate
+
+ The router (F13, gemini.py below) sends each job to the cheapest tier that clears it and escalates only when a gate or the eval says so. Embeddings are computed once and reused.
+
+### 17.2 Cost management
+
+- Batch API. A flat 50% discount for async jobs (under 24h). Every weekly ingest and enrichment runs in Batch - they are not latency-critical.
+- Weekly cadence. News, trends and vendor scans run weekly (config; F7), which is the single biggest reducer of external-intelligence call volume and grounded-search spend.
+- Context caching. Up to ~90% off repeated context (the taxonomy, long system prompts); mind the hourly storage fee - short TTL for batch runs, delete after; longer TTL only for always-on context.
+- Bounded reasoning + output. thinking_level minimal/low for classification, higher only for synthesis; cap max_output_tokens ; prune context to stay under the 200K Pro pricing cliff.
+- Grounding budget. Google Search grounding has a free monthly allocation, then ~$14 per 1,000 queries, and one prompt can fire several queries - meter it under G8.
+- Spend caps + meter. Mandatory billing spend caps (enforced April 2026) plus the F11 cost meter: alert at 80%, throttle non-essential work at 90%, auto-route to a fallback with a degraded banner.
+
+### 17.3 Grounding and deep search
+ Fresh facts come from Google Search grounding (news, benchmarks), URL Context for a specific source page, and File Search (multimodal, gemini-embedding-2 ) over stored evidence; grounding metadata carries citations (media_id, page numbers). Every grounded output still passes G5 (grounding) and G7 (citation verification) before it can touch the catalogue.
+
+### 17.4 Tuning
+
+- Few-shot exemplars drawn from confirmed mappings (the F4 / F13 learning loop), injected via cached context so they are nearly free.
+- Structured output ( response_schema ) on every extraction and mapping, so JSON is reliable rather than parsed from prose.
+- Supervised fine-tune of the matcher when retrieval MRR drops on the golden set (F6); catalogue-tuned embeddings keep one shared space.
+
+### 17.5 Mapping news back to subcaps (why the model is intelligent enough)
+ The mapping is by meaning, not keywords:
+ Grounded fetch
+ weekly, Batch
+ Google Search grounding
+
+ →
+ Structured extract
+ schema: entity, claim, magnitude, source
+ gemini-3-flash
+
+ →
+ Embed + retrieve
+ top-k candidate subcaps in the shared space
+ gemini-embedding-2 / F6
+
+ →
+ Reason + score
+ pick subcap(s), impact, claim label, chain
+ gemini-3.5-flash
+
+ →
+ Gate + persist
+ G1/G5/G6/G7 -> news_subcap_impact + catalogue_impact
+ consultant loop = gated suggestion
+
+ Because candidates come from semantic retrieval over the subcap embedding space and the model reasons over the item plus those candidates, a news item about real-time payment-fraud screening maps to the right P3 subcap even with no shared keywords - and nothing is committed without a gate pass.
+
+### 17.6 Gemini invocation failure points
+ | Symptom | Cause | Handling
+
+ | 429 RESOURCE_EXHAUSTED | RPM / TPM / RPD / IPM limit (project-level, shared across apps). | Exponential backoff + jitter (1->16s cap); run async work in Batch mode; meter against the spend cap; request a quota increase if sustained.
+ | 500 / 502 / 503 / 504 | Google-side error, overload or timeout. | Retryable: retry with backoff, then queue to the DLQ; never treat as a data error.
+ | 400 INVALID_ARGUMENT | Malformed request or schema. | Validate params and the response_schema before sending; not retryable - fix the request.
+ | 401 / 403 | Bad key or missing IAM role. | Not retryable: alert on-call; never loop.
+ | finish_reason = MAX_TOKENS | Output exceeded the cap; with structured output the parsed body comes back EMPTY. | Detect finish_reason, raise max_output_tokens (or chunk / continue); never assume r.text is present.
+ | finish_reason = SAFETY / empty | Safety filter or an empty candidate. | Route the item to review with its safety_ratings; never crash reading r.text; lower the claim label.
+ | Empty / weak grounding | Search returned nothing useful. | Fall back, lower the claim label and queue; never fabricate an answer (G5).
+ | Model deprecation / drift | Gemini retires models often (2.0 Flash retired 1 Jun 2026; 3 Pro Preview 9 Mar 2026). | Pin explicit versions (never -latest in prod); monitor the deprecations page; keep the gemini.py abstraction so a swap is one config change.
+ | Cost runaway | A loop or oversized batch. | G8 budget gate + per-call max_output + the cost meter throttle at 90% with a fallback.
+ | Region / availability | A model not served in the chosen location, or Vertex-only. | Pin the region; verify availability for each pinned model.
+
+ intelligence/gemini.py python
+ # intelligence/gemini.py - one resilient entry point for every Gemini call.
+# Models are PINNED (never -latest in prod, because Gemini retires models often) and chosen by task.
+from google import genai
+client = genai.Client()
+
+MODELS = { # pinned June-2026 lineup (see section 17)
+ "classify": "gemini-3.1-flash-lite", # high-volume, cheap: news/vendor typing, field extract
+ "extract": "gemini-3-flash", # structured enrichment (story/SOW canonicalisation)
+ "match": "gemini-3.5-flash", # story/SOW/news -> subcap reasoning, native grounding
+ "synthesize":"gemini-3.1-pro-preview", # quarterly digest, adversarial review
+ "embed": "gemini-embedding-2"} # one shared embedding space (F6)
+
+RETRYABLE = {429, 500, 502, 503, 504} # 4xx except 429 are NOT retryable - fix the request
+
+def gemini_call(task, prompt, *, schema=None, ground=False, cache=None, max_out=4096, attempt=1):
+ cfg = {"max_output_tokens": max_out, "thinking_level": "low"} # cap output + bound reasoning cost
+ if schema: cfg |= {"response_mime_type": "application/json", "response_schema": schema} # reliable JSON
+ if ground: cfg |= {"tools": [{"google_search": {}}]} # deep-search grounding (budget: ~$14/1k)
+ if cache: cfg |= {"cached_content": cache} # ~90% off repeated context
+ try:
+ r = client.models.generate_content(model=MODELS[task], contents=prompt, config=cfg)
+ except APIError as e:
+ if e.code in RETRYABLE and attempt <= 5:
+ sleep(backoff_jitter(attempt)) # 1,2,4,8,16s capped
+ return gemini_call(task, prompt, schema=schema, ground=ground, cache=cache,
+ max_out=max_out, attempt=attempt + 1)
+ if e.code in (401, 403): alert_oncall(e) # creds / IAM - never retry, page a human
+ raise
+ fr = r.candidates[0].finish_reason
+ if fr == "MAX_TOKENS": # structured output returns EMPTY here
+ return gemini_call(task, prompt, schema=schema, ground=ground, cache=cache,
+ max_out=max_out * 2, attempt=attempt) # raise the cap (or chunk) and retry
+ if fr == "SAFETY" or not has_parts(r): # blocked / empty: never touch r.text blindly
+ return Empty(reason=fr, safety=r.candidates[0].safety_ratings) # caller routes to review, no crash
+ return parse(r, schema) # validated against the schema
+
+ Model-strategy invariants
+ Pin every model version (never -latest in prod) and keep one gemini.py wrapper so a deprecation is a one-line change; run async work in Batch; cache repeated context; ground for freshness then verify with G5/G7; map by embedding retrieval + reasoning, not keywords; and let G8 plus the cost meter keep spend inside the envelope.
+
+ Section 18
+
+## Intelligence design: trends, news & suggestions
+ How the trend and news monitor, and the AI suggestions, are made genuinely intelligent: the techniques that detect trends, the loops that make them self-learning, the consultant workflow and guards that keep suggestions grounded and synthesised rather than generic, how the AI reads the store, how the models are tuned and kept cheap, and how source coverage is made comprehensive.
+
+### 18.1 What counts as a trend (techniques, not keyword counts)
+ A trend is an acceleration of corroborated, novel signal , detected by combining several signals over rolling weekly windows - never raw keyword frequency:
+
+- Embedding clustering. Every enriched evidence item is embedded into the shared space and clustered (density-based, e.g. HDBSCAN), so topics are coherent meanings, not keyword buckets.
+- Burst / velocity. Per cluster, week-over-week acceleration (a z-score or Kleinberg-style burst), so a trend is a change in rate, not steady background.
+- Novelty / emergence. Distance of the cluster centroid from every mapped subcap embedding; far = emergent (a candidate net-new subcap), near = a descriptor revision or new use case.
+- Corroboration + source diversity. Tier-weighted count of independent sources, so five independent T1/T2 sources outrank one blog repeated five times; near-duplicates are collapsed first (ERS-linked).
+- Persistence / decay. Tracked across weeks with time decay, so a one-week spike fades and a sustained signal strengthens.
+- Statistical floors + gates. Minimum cluster size and source diversity, a significance threshold (config), then G2 (sufficiency), G3 (tier floor) and G6 (contradiction) - noise never surfaces.
+ Embed + dedupe
+ evidence -> shared space, drop syndication
+ weekly window
+
+ →
+ Cluster
+ coherent topics (HDBSCAN)
+ not keywords
+
+ →
+ Score
+ burst x diversity x novelty x persistence
+ threshold in config
+
+ →
+ Map + gate
+ -> subcaps, catalogue_impact, G2/G3/G6
+ emergent -> candidate net-new
+
+ intelligence/detect_trends.py python
+ # intelligence/detect_trends.py - a trend is an ACCELERATION of corroborated, NOVEL signal, not a keyword count.
+# Runs weekly over the evidence corpus; every output is gated and feeds a self-learning loop.
+
+def detect_trends(window_weeks=8):
+ items = evidence_since(window_weeks) # news, vendor events, benchmarks (already enriched)
+ items = dedupe(items, by="embedding", thresh=0.95) # collapse syndicated near-duplicates first
+ clusters = cluster_embeddings(items) # HDBSCAN in the shared space -> coherent topics (not keywords)
+ out = []
+ for c in clusters:
+ if len(c) < CFG.min_cluster or sources_distinct(c) < CFG.min_sources:
+ continue # statistical floor: ignore thin / single-source noise
+ velocity = burst_score(c.weekly_counts) # week-over-week acceleration (z-score / Kleinberg)
+ diversity = tier_weighted_source_diversity(c) # 5 independent T1/T2 > one blog repeated 5x (ERS-linked)
+ novelty = 1 - max_cosine(c.centroid, subcap_embeddings()) # far from everything mapped = emergent
+ persistence= weeks_present(c) / window_weeks # sustained, not a one-week spike (time-decayed)
+ score = 0.35*velocity + 0.30*diversity + 0.20*novelty + 0.15*persistence
+ if score < CFG.trend_threshold: # threshold in CONFIG, recalibrated from feedback
+ continue
+ subcaps = retrieve_subcaps(c.centroid, k=5) # express the trend in CATALOGUE terms (shared space)
+ impact = "net_new_subcap" if novelty > CFG.emergent_cut else "descriptor_revision"
+ t = persist_trend(c, score, subcaps, impact, emergent=novelty > CFG.emergent_cut)
+ if not gate_pass(t, gates=["G2", "G3", "G6"]): # evidence sufficiency, tier floor, contradiction
+ t.status = "review"
+ out.append(t)
+ return out
+
+# Self-learning: analyst promote/dismiss + mapping confirm/reject are logged as labels that
+# (1) recalibrate CFG thresholds (burst, novelty, min_sources) against tracked precision/recall,
+# (2) become contrastive pairs that fine-tune the embeddings + subcap retrieval (F6),
+# (3) train a trend-quality ranker that orders clusters by likelihood-of-being-acted-on.
+def on_trend_feedback(trend, verdict):
+ record_label(trend, verdict); schedule_recalibration()
+
+### 18.2 News intelligence and de-duplication
+ The weekly news job fetches via connectors and grounded search, collapses near-duplicate articles by embedding similarity (so syndication does not inflate a signal), classifies each item (Flash) into a magnitude and a catalogue-impact class, scores ERS from tier, recency, specificity and corroboration, and maps it to subcaps by retrieval - all before anything is surfaced, and only ever as a gated suggestion.
+
+### 18.3 How the intelligence improves itself (self-learning)
+ Analyst decisions are the training signal. Promoting or dismissing a trend, confirming or rejecting a subcap mapping, and accepting or rejecting the resulting suggestion are all logged as labels that drive three loops:
+
+- Threshold recalibration. The burst, novelty and min-source thresholds (config, not code) are re-tuned against tracked precision and recall, so the detector adapts without a code change.
+- Contrastive fine-tuning. Confirmed and rejected mappings become positive/negative pairs that periodically fine-tune the embeddings and subcap retrieval (F6), so clustering and linkage get sharper.
+- Trend-quality ranker. A lightweight model learns which clusters tend to be acted on and orders them, so analysts see high-value trends first.
+ A weekly offline eval on a labelled set tracks trend precision (did surfaced trends get acted on?) and emergent recall (did we catch the net-new ones?); a drop triggers a retune. This is the same learning-loop discipline as F4 automap and F13.
+
+### 18.4 The consultant loop (why suggestions are not generic)
+ A suggestion is produced by a structured, multi-step workflow - not a single prompt - and must pass guards that force synthesis over reproduction:
+ Frame thesis
+ subcap + change type + expected lift (schema)
+ no vague claims
+
+ →
+ Retrieve (RAG)
+ subcap text + evidence + peers + stories
+ store only (G5)
+
+ →
+ Synthesise delta
+ before/after + cited claims
+ not a summary
+
+ →
+ Guards + adversary
+ copy / redundancy / grounding / contradiction / critic
+ all must pass
+
+ →
+ Gate + present
+ G1-G8 -> human confirm / edit / reject
+ with reasoning chain
+
+ | Safeguard | What it enforces
+
+ | Structured thesis | The proposal must name the subcap, the change type (descriptor revision / new use case / net-new subcap / retire), the before/after text and the expected maturity lift - a response_schema, not free prose. A vague “this is important” output is structurally impossible.
+ | Grounding gate (G5) | Every claim must cite a retrieved evidence id; unsupported claims are stripped or the proposal is rejected. The model reasons only over retrieved context, never model memory.
+ | Extractive-copy guard | If the proposed text is a near-duplicate of a source (high overlap / embedding similarity), it is rejected as reproduction rather than synthesis.
+ | Redundancy guard | If the proposed text is too close to the existing descriptor, it is rejected as a no-op - a suggestion must be a meaningful change.
+ | Contradiction gate (G6) | A proposal that contradicts delivery reality (the subcap’s stories) or other high-tier evidence is rejected.
+ | Evidence sufficiency + tier floor (G2, G3) | Needs a minimum number of independent sources at or above a source tier; one blog repeated many times does not qualify.
+ | Adversarial review | A second model (Opus) argues the opposite, surfaces missing evidence and overreach; the thesis must survive, and the critique is recorded in the reasoning chain.
+ | Claim labels | The AI labels each conclusion FACT / INFERENCE / HYPOTHESIS / CEILING_ESTIMATE; a HYPOTHESIS cannot auto-promote - a human decides.
+
+ intelligence/consultant_loop.py python
+ # intelligence/consultant_loop.py - turns a signal into a GROUNDED, SYNTHESISED proposal, never a restatement.
+# Structure forces specificity; guards reject copying or no-op changes; an adversary must be survived; gates decide.
+
+def consultant_loop(seed): # seed = a trend, a news item, or analyst input
+ # 1) Frame a thesis tied to a SPECIFIC subcap + change type (no vague "this matters").
+ thesis = frame_thesis(seed, schema=ThesisSchema) # {subcap_id, change_type, rationale, expected_maturity_lift}
+
+ # 2) Retrieve grounding from the STORE (RAG). The model may reason ONLY over this (G5).
+ ctx = retrieve_for_reasoning(thesis.subcap_id, thesis.query) # subcap text + evidence + peer subcaps + stories
+
+ # 3) Synthesise a DELTA (what should change vs the current text), citing evidence ids - not a summary.
+ proposal = synthesize_delta(thesis, ctx, schema=DeltaSchema) # {before, after, claims:[{text, evidence_id}], label}
+
+ # ---- anti-generic safeguards: ALL must pass ----
+ if extractive_overlap(proposal.after, ctx.sources) > CFG.copy_max: # near-copy of a source?
+ return reject("extractive: reproduces source text rather than synthesising")
+ if similarity(proposal.after, ctx.subcap.descriptor) > CFG.redundant_max: # no real change?
+ return reject("redundant: not a meaningful change to the existing descriptor")
+ if any(claim.evidence_id is None for claim in proposal.claims): # an ungrounded claim? (G5)
+ return reject("ungrounded claim present")
+ if contradicts_delivery(proposal, ctx.stories): # contradicts what we deliver? (G6)
+ return reject("contradicts delivery evidence")
+
+ # 4) Adversarial challenge - a second model argues the OPPOSITE; the thesis must survive.
+ critique = adversary_review(proposal, ctx) # Opus: missing evidence, overreach, weak sourcing
+ if not critique.survives:
+ return to_review(proposal, critique)
+
+ # 5) Gate G1-G8 (esp. G2 sufficiency, G3 tier floor, G7 citations) and present with its reasoning chain.
+ if gate_pass(proposal, gates=ALL_GATES):
+ return as_suggestion(proposal, critique, chain=reasoning(thesis, ctx, proposal, critique))
+ return to_review(proposal, critique)
+
+### 18.5 How the AI accesses stored information and uses search
+ Reasoning reads the store ; search only feeds the store. The AI retrieves from Postgres with hybrid retrieval (lexical tsvector + dense pgvector + structured SQL filters) over the active version, pulling the subcap record, the supporting evidence chunks with their source metadata, peer subcaps and delivery stories. Freshness comes from Gemini grounded Google Search and File Search, but those results are ingested as evidence, scored and gated before they can influence the catalogue - so the AI never reasons straight from the open web, and every claim cites a stored, retrievable evidence id (G5, G7).
+ intelligence/retrieve.py python
+ # intelligence/retrieve.py - how the AI accesses stored knowledge and blends it with fresh search.
+# Reasoning reads the STORE; grounded search only FEEDS the store (and is gated before it can influence anything).
+
+def retrieve_for_reasoning(subcap_id, query, version=active_version()):
+ # Hybrid retrieval in one engine over the ACTIVE version (F6): lexical + dense + structured filters.
+ lexical = fulltext_search(query, version) # tsvector + GIN
+ dense = vector_search(embed(query), version, k=20) # pgvector + HNSW (shared space)
+ cands = blend(lexical, dense, filters={"pillar": ..., "min_tier": CFG.tier_floor})
+ return Context(
+ subcap = load_subcap(subcap_id, version), # current descriptors, use cases, platforms
+ evidence = [e for e in cands if e.kind in EVIDENCE], # each with source {name,type,url,tier,ers,fetched_at}
+ peers = nearest_subcaps(subcap_id, k=5, version=version),
+ stories = delivery_stories(subcap_id, version), # does delivery support the claim?
+ sources = [e.source for e in cands],
+ citations= [e.id for e in cands]) # every reasoning claim must cite one of these
+
+# Freshness: ground_search() (Gemini + Google Search) is NOT read straight into a conclusion. Its results are
+# ingested as evidence_item, scored (ERS), mapped to subcaps and GATED - so search ENRICHES the store, and the
+# store is what the AI reasons over. This keeps every answer grounded, cited and auditable, never "from the web".
+
+### 18.6 Fine-tuning over time and cost
+
+- What is tuned, in order of leverage. (1) the shared embedding space (contrastive fine-tune on confirmed subcap-evidence and subcap-story pairs) - highest leverage; (2) optionally a supervised-tuned Flash model for classification/mapping on confirmed labels; (3) few-shot exemplars from confirmed mappings injected via cached context - the cheapest, immediate gain; (4) thresholds recalibrated from feedback (config, no training).
+- When. The weekly eval drives it: an MRR or precision drop triggers a retune; otherwise nothing is touched.
+- Cost. Prefer few-shot + caching (no training cost) until the eval justifies a tune; tune the smallest model that clears the bar; run tuning and all ingestion inference in Batch (50% off); cache the taxonomy and exemplars (~90% off); the weekly cadence keeps volume low; G8 and the cost meter keep spend inside the envelope.
+
+### 18.7 Making the sources all-encompassing
+ A source registry maps every source to the source_type tiers and is organised so all nine subverticals and four pillars are covered, with grounded search filling the long tail beyond fixed feeds:
+ | Class (tier) | source_type | Examples / coverage
+
+ | Regulator (T1) | regulator | SEC, FINRA, OCC, CFPB, NCUA, FCA, Basel, state DOIs - rules, enforcement and guidance per subvertical.
+ | Analyst (T2) | analyst | Gartner, Forrester, Celent, Aite-Novarica (where licensed) - market structure and maturity benchmarks.
+ | Vendor (T3) | vendor | Salesforce, nCino, Databricks, FIS, Fiserv, Temenos newsrooms - launches, deprecations, acquisitions.
+ | News / trade (T3-T4) | news | American Banker, trade press and mainstream finance - timely signal, lower tier, corroboration-weighted.
+ | Peer (T3) | peer | Public filings, press releases and disclosures of comparable institutions.
+ | Benchmark (T2) | benchmark | Curated benchmark datasets, normalised with confidence bands.
+ | Internal (T1-T2) | internal | Delivery stories and SOWs - what the practice actually does.
+
+ Coverage is measured, not assumed : a dashboard tracks source diversity per subcap, per subvertical and per pillar, and flags thin coverage so gaps are visible; near-duplicates are collapsed and tiers weighted so syndication and low-tier noise do not over-count. Licensed or paywalled analyst sources are ingested only where a licence exists (otherwise out of v1 scope).
+ The through-line
+ Trends are earned (clustering + burst + novelty + diversity + persistence + gates), suggestions are synthesised deltas that survive guards and an adversary, the AI reasons only over retrieved stored evidence with citations, the models improve from analyst feedback on a weekly eval, and source coverage is tracked per subcap - so the intelligence is grounded, self-learning, comprehensive and auditable.
+
+ Section 19
+
+## Global acceptance
+ These are the cross-cutting invariants every surface must satisfy, on top of its own per-page "Done when". They are the release checklist; each is enforced by a foundation, so meeting them is a property of the build, not a per-page effort.
+
+- Version-correct. Every catalogue read is scoped to the active version, every count/diff/lineage names its version, and switching the version refetches cleanly.
+- Intelligently mapped. A workbook with renamed columns still auto-maps from value fingerprints and learned memory; an admin override measurably improves the next automap (F4/F13).
+- One consistent corpus. Every story - seed or newly ingested from Jira - and every SOW scope item is enriched into the canonical shape before use; a story added today carries the same scored fields as a seed story.
+- Trust-visible. Every surface that shows an AI-derived value also shows the claim label, source tier, ERS and a working reasoning backlink.
+- Gated mutation. No catalogue edit, KG edge, SOW link or offering bundle is committed without passing G1-G8; an apply re-gates server-side and writes a versioned snapshot + an audit row.
+- Server-bounded. Heavy lists (14,406 stories, use cases, SOW scope items) paginate and filter on the server; read surfaces hold p95 < 1s and grounded chat p95 < 3s.
+- Provenance-complete. Nothing is silently dropped: unmatched stories, ungated SOW matches and gate failures are queued and visible, never discarded.
+- Admin-bounded. Upload, schema mapping, ingestion, knowledge graph, version revert, the source registry and the cost meter are gated by is_admin; login is the only pre-auth route.
+- Grounded. Chat and matches come only from retrieved catalogue + evidence (G5), never model memory; the fixed catalogue-grounded eval set passes before release.
+- Verifiable. Audit-grade exports are HMAC-signed and verify; the audit log is append-only.
+- Linkage-tested. Every page carries explicit frontend-to-backend QA checks - contract shape, version-keying, empty/large/error states, role gating and the trust envelope - and they pass.
+- Schema-explicit. Every relationship traces to a relation_def, a link table, the crosswalk, the story bridge or the KG; a discovered relationship is a gated proposal, never a silent edge (F15).
+- Model-resilient and bounded. Every Gemini call goes through the pinned, retrying gemini.py wrapper (429/5xx backoff, MAX_TOKENS raises the cap, safety blocks route to review); news and trends run weekly; and spend stays inside G8 plus the cost meter (section 17).
+- Trends are earned, not counted. A surfaced trend has cleared clustering, burst, novelty, source-diversity and persistence thresholds and the gates; the thresholds recalibrate from analyst feedback (section 18).
+- Suggestions synthesise, not restate. Every suggestion is a grounded before/after delta that passes the extractive-copy, redundancy, grounding and contradiction guards and an adversarial review before a human sees it (section 18).
+- Reasoning reads the store. The AI answers only from hybrid-retrieved catalogue + evidence (G5) with citations; grounded search feeds the store and is gated, never read straight into a conclusion (section 18).
+- Sources are measured. Source diversity per subcap, per subvertical and per pillar is tracked and thin coverage is flagged, not assumed; syndication is de-duplicated and tiers are weighted (section 18).
+ Out of scope for v1
+ Client-facing access; role-based access beyond the single admin flag; licensed-source ingestion; a cross-pillar capability surface (D16). The knowledge graph may still propose semantic-similarity edges, but nothing in the product is organised around cross-pillar relationships.
+
+ Capability Intelligence Agent - Implementation Steps - Confidential

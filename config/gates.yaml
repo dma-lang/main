@@ -1,0 +1,76 @@
+# Validation gates G1-G8 thresholds. The gates are DETERMINISTIC CODE (backend/app/intelligence/gates.py);
+# this file only parameterises them. Thresholds are recalibrated from analyst feedback (config, not code).
+# Every AI-derived mutation must pass all gates; an apply re-gates server-side and writes a snapshot + audit row.
+
+gates:
+  G1_identity_schema:
+    description: Referenced entity exists in the active version and the payload matches the canonical schema.
+    enabled: true
+
+  G2_evidence_sufficiency:
+    description: Minimum count of independent supporting evidence items.
+    min_independent_evidence: 2
+
+  G3_source_tier_floor:
+    description: Evidence at or above a configured source-tier minimum (one low-tier source repeated fails).
+    min_source_tier: T3          # T1 (regulator) .. T5 (vendor self-promotion); lower index = higher trust
+    distinct_sources_required: 2
+
+  G4_claim_label_consistency:
+    description: Claim labels (FACT/INFERENCE/HYPOTHESIS/CEILING_ESTIMATE) are internally consistent.
+    enabled: true
+
+  G5_similarity_grounding:
+    description: Every claim cites a retrieved evidence id; answers outside retrieved context are refused.
+    min_match_similarity: 0.70   # below this a SOW/story match is 'unmapped' (nearest-neighbour proposal kept)
+    require_citation: true
+
+  G6_contradiction:
+    description: Reject proposals that contradict delivery reality (stories) or other high-tier evidence.
+    enabled: true
+
+  G7_citation_verification:
+    description: Cited evidence ids resolve to stored, retrievable chunks.
+    enabled: true
+
+  G8_budget_rate:
+    description: Enforce cost/token + grounding-query budget; block proposals that exceed the envelope.
+    enabled: true                # numeric caps come from config/models.yaml: cost.*
+
+# Evidence-mapping relevance thresholds (News watch D1 / vendor F2 ingest). Calibrated against
+# lexical ts_rank over the provisioned catalogue: probed real public-source items rank >= 0.029
+# on their target subcaps while off-catalogue noise tops out <= 0.017. Recalibrate (analyst
+# feedback / weekly eval) when F6 dense retrieval layers on — cosine ranks live on another scale.
+evidence:
+  relevance_floor: 0.025         # matches below this are noise — never mapped; zero above the floor -> G5 fail -> Change Flags
+  strong_grounding: 0.04         # top match below this = weak grounding -> claim label downgraded one notch, scores scaled down
+
+# Benchmarks studio (D4). "Too few observations -> coverage-gap banner (no false precision)" —
+# the spec names no number, so the floor lives here (recalibrated like every threshold). The
+# bootstrap parameters document the CI method (seeded resample of the median).
+benchmarks:
+  min_observations: 8            # below this the benchmark is thin -> coverage-gap banner, CI band suppressed
+  bootstrap_resamples: 1000
+  ci_level: 0.95
+
+# Carry-forward + matching confidence bands (story_subcap_carry, sow_subcap_match).
+matching:
+  auto_confirm_at: 0.86          # >= confirm
+  review_band_low: 0.70          # [0.70, 0.86) -> route to review
+  # < 0.70 -> unmapped, keep nearest-neighbour proposal, never drop
+
+# Knowledge-graph Layer B proposal thresholds (pending_edge; gated + human-approved before commit).
+knowledge_graph:
+  semantically_similar_min_cosine: 0.85
+
+# Trend detection signal weights + emergence cutoff (trends are earned, not counted).
+trends:
+  weight_velocity: 0.35
+  weight_diversity: 0.30
+  weight_novelty: 0.20
+  weight_persistence: 0.15
+  emergent_cut: 0.80             # novelty above this flags an emergent subcap (only path a synthetic story surfaces)
+  trend_threshold: 0.45          # composite-score floor a cluster must clear to surface (recalibrated from precision/recall)
+  dedupe_cosine: 0.95
+  min_cluster: 4
+  min_sources: 3

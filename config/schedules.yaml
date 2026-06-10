@@ -1,0 +1,52 @@
+# Ingest / intelligence cadences. Cadence lives HERE (config), never in code.
+# Cloud Scheduler triggers the corresponding Cloud Run Job; all async ingest runs in Batch mode.
+# Times are UTC. Each job is idempotent and routes failures to the DLQ / Change Flags (never silently drops).
+
+schedules:
+  jira_ingest:
+    description: Continuous canonical Jira story ingest + enrichment (Phase 3).
+    cron: "0 * * * *"            # hourly
+    job: ingest_jira
+    batch: false                  # near-real-time; webhook-triggered in addition to this poll
+
+  news_scan:
+    description: Weekly grounded-search news fetch -> classify -> map -> gate.
+    cron: "0 6 * * MON"           # Monday 06:00 UTC
+    job: weekly_news
+    batch: true
+
+  trend_detect:
+    description: Weekly multi-signal trend detection over the last 8 weeks of evidence.
+    cron: "30 6 * * MON"          # Monday 06:30 UTC (after news)
+    job: weekly_trends
+    batch: true
+
+  vendor_scan:
+    description: Weekly vendor-development ingest -> 8-type classification -> subcap impact.
+    cron: "0 7 * * MON"           # Monday 07:00 UTC
+    job: weekly_vendor
+    batch: true
+
+  benchmark_scan:
+    description: Monthly benchmark ingest -> bootstrap CI -> adversarial verdict.
+    cron: "0 8 1 * *"             # 1st of month 08:00 UTC
+    job: monthly_benchmarks
+    batch: true
+
+  monthly_cycle:
+    description: Monthly consultant cycle — gather signal, run G1-G8, stage suggestions.
+    cron: "0 9 1 * *"             # 1st of month 09:00 UTC
+    job: monthly_cycle
+    batch: true
+
+  quarterly_digest:
+    description: Quarterly strategic digest (synthesis + adversarial verdicts + signed export).
+    cron: "0 10 1 1,4,7,10 *"     # 1st of Jan/Apr/Jul/Oct 10:00 UTC
+    job: quarterly_digest
+    batch: true
+
+  reconciliation:
+    description: Data-integrity self-checks + repair (re-derive counts, re-embed, re-gate drifted rows).
+    cron: "0 3 * * *"             # daily 03:00 UTC
+    job: reconciliation
+    batch: false

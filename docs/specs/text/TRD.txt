@@ -1,0 +1,335 @@
+Technical requirements
+
+# Capability Intelligence Agent
+ Engineering specification for the workbench: a single Cloud Run service over a per-version relational catalogue, an admin-controlled schema-mapping engine, the canonical Jira story pipeline with carry-forward, and a grounded, gated AI subsystem.
+ Document
+ TRD
+
+ Audience
+ Delivery engineering & pillar leads
+
+ System of record
+ Cloud SQL (PostgreSQL), per version
+
+ Status
+ Confidential draft
+
+ Capability Intelligence Agent · TRD 1 Overview 2 Architecture 3 Stack 4 Data & persistence 5 Schema-mapping engine 6 Stories & carry-forward 7 AI / ML 8 Validation gates 9 Knowledge graph 10 API 11 Security 12 Observability & SLOs 13 Environments 14 Engineering plan 15 Open questions ☾ Dark
+
+ Section 1
+
+## Overview and scope
+ This TRD translates the revised PRD into engineering specifications: the architecture, the technology stack, the relational persistence model, the catalogue schema-mapping engine, the canonical story pipeline and carry-forward correlation, the AI subsystem and its validation gates, the API and security model, and the service-level objectives. It is the canonical answer to "why is the architecture this way", and it is not a client-facing artefact.
+
+### 1.1 Relationship to the other documents
+ The PRD is authoritative for product decisions; this TRD implements them and cannot override them. Functional requirements are referenced as FR-n and decisions as D-n against the revised PRD. The companion App Flow document owns navigation and state contracts; the Backend Schema document owns the table-level data model and ships the DDL.
+
+### 1.2 What the system is, technically
+ A single-tenant internal web application for roughly 10 to 30 expert users. It ingests two corpora (the four-pillar capability catalogue across versions, and the canonical Jira story corpus), reconciles catalogue versions into one canonical model, provisions a persistent relational database per version through an admin-controlled mapping step, and serves trust-first read and reasoning surfaces over that data. Every AI output carries a claim label, a source tier, an evidence reliability score and a reasoning trail.
+ Design centre: resilience
+ The two hardest forms of change are handled as first-class engineering concerns, not edge cases: a new catalogue structure (absorbed by the schema-mapping engine, section 5) and a new catalogue version the stories must follow (absorbed by the carry-forward correlation, section 6). Neither requires a code release.
+
+ Section 2
+
+## Architecture
+ The system is a single Cloud Run service that hosts the FastAPI backend and the built React SPA behind one container, with asynchronous work split into Cloud Run Jobs. The system of record is a relational database; object storage holds raw uploads, snapshots and signed exports.
+
+### 2.1 Component stack
+ Client
+ React SPA (Vite) react-router v6 Zustand TanStack Query URL-serialized state
+
+ Edge / service
+ one Cloud Run service FastAPI + static SPA Firebase Auth middleware
+
+ Application
+ catalogue API mapping studio API evidence & reasoning suggestions & gates RAG / chat
+
+ Async jobs
+ Cloud Run Jobs ingest (Jira/news/vendor/SOW) carry-forward monthly cycle quarterly digest
+
+ System of record
+ Cloud SQL for PostgreSQL schema per catalogue version pgvector (dense) tsvector (lexical)
+
+ Object store
+ Cloud Storage uploads (IAM-restricted) snapshots signed exports
+
+ AI providers
+ Gemini Flash / Pro Claude Sonnet / Opus catalogue-tuned embeddings
+
+ Platform
+ Secret Manager Cloud Scheduler Cloud Logging / Monitoring Cloud Tasks (DLQ)
+
+### 2.2 The critical path: bringing data online
+ The defining flow is how raw workbooks become queryable, versioned, relational data that delivery evidence is then attached to.
+ upload
+ Catalogue upload
+ Admin drops pillar workbooks or points at Drive
+
+ →
+ map
+ Schema mapping
+ Auto-map, confirm, relations, cascade
+
+ →
+ provision
+ Provision DB
+ Per-version relational schema + FKs
+
+ →
+ stories
+ Carry-forward
+ Canonical Jira mappings moved to this version
+
+ →
+ serve
+ Serve surfaces
+ Read, reason, suggest, export
+
+### 2.3 Why relational
+ The PRD requires a persistent relational database that becomes functional after each mapping is applied (D9, D10). PostgreSQL is the system of record because the catalogue is inherently relational (subcaps to platforms, stories to subcaps, offerings to subcaps), the mapping studio defines those relations as foreign keys, and the same engine serves hybrid retrieval through pgvector (dense) and tsvector (lexical) alongside ordinary SQL filters. This keeps one store responsible for structure, search and provenance rather than three.
+
+ Section 3
+
+## Technology stack
+ The stack favours a small number of managed GCP services and one relational engine. Every choice below is in service of a small expert audience doing high-stakes governance, not high-volume consumer traffic.
+ | Layer | Choice | Rationale
+
+ | Frontend | React + Vite, react-router v6, Zustand (client state), TanStack Query (server cache) | Recognition-first UI; URL-serialized filter state for deep links.
+ | Backend | Python, FastAPI, Pydantic v2 | Typed request/response models; one service, many routers.
+ | System of record | Cloud SQL for PostgreSQL 16, schema-per-version | Relational catalogue, stories, evidence, governance; provisioned per version.
+ | Vector / lexical | pgvector (HNSW) + Postgres full-text (GIN) | Hybrid retrieval in the same engine as the structured data.
+ | Async | Cloud Run Jobs, Cloud Scheduler, Cloud Tasks | Ingestion, carry-forward, monthly cycle, quarterly digest, with a dead-letter queue.
+ | Object storage | Cloud Storage buckets | Raw uploads (IAM-restricted), catalogue snapshots, HMAC-signed exports.
+ | Reasoning models | Gemini Flash / Pro; Claude Sonnet / Opus | Classification and narration on cheap models; synthesis and adversarial review on strong models.
+ | Embeddings | Catalogue-tuned text embeddings | Baseline managed model; contrastive fine-tune when retrieval MRR drops below target.
+ | Auth | Firebase Auth (Google sign-in) | Domain-restricted to @zennify.com, fails closed; single is_admin flag.
+ | Secrets | Secret Manager | API keys, service-account credentials, HMAC signing key.
+ | Observability | Cloud Logging / Monitoring | SLO alerts, cost-by-feature attribution, immutable audit log.
+
+ Section 4
+
+## Data architecture and persistence
+ The database is organised as a shared control plane and a per-version data plane .
+
+### 4.1 Control plane (shared)
+ One set of shared tables governs identity, catalogue versions, ingest runs, the schema-mapping configuration, evidence, reasoning, suggestions and audit. These do not change shape when a new catalogue version arrives.
+ users
+ uid PK text
+ email text
+ is_admin bool
+ preferences jsonb
+
+ catalogue_version
+ version_id PK text
+ label text
+ status text
+ schema_name text
+ created_at timestamptz
+
+ ingest_run
+ run_id PK uuid
+ version_id FK text
+ source text
+ status text
+ stats jsonb
+
+### 4.2 Data plane (per version)
+ Each catalogue version owns a Postgres schema namespace (for example cat_v5 , cat_v7 ) holding the canonical entities for that version: subcaps, categories, capabilities, L4 features, personas, use cases, maturity descriptors, and the deduplicated entities (offerings, data products, L3 platforms, themes, agents) with their link tables. The mapping studio generates this schema; the application reads the active version by name.
+ Why schema-per-version rather than a version column
+ Per-version schemas keep each catalogue physically isolated, so re-provisioning or reverting a version never risks another version’s rows, and the admin-defined relations for one version cannot accidentally constrain another. Cross-version questions (lineage, diff, carry-forward) are answered by the control plane, which holds the crosswalk and the carry-forward results.
+
+### 4.3 Durability and multi-user
+ The first successful provision of a version is durable for every authenticated user with no re-upload (D10). Snapshots are archived to Cloud Storage; re-ingesting a newer version provisions a new schema rather than overwriting history. The full table-level model and DDL are in the Backend Schema document.
+
+ Section 5
+
+## Catalogue schema-mapping engine
+ The schema-mapping engine (FR-2) is what makes the system resilient to however a future catalogue version structures its workbook. It runs on upload and is admin-controlled end to end.
+ | Step | What happens | Engineering note
+
+ | Detect | Identify the source layout and select the parsing adapter. | Deterministic; flags an unknown layout for manual mapping instead of failing.
+ | Auto-map | Propose a canonical field for each source field with a confidence score. | Embedding + heuristic match on header names and sampled values.
+ | Confirm / override | Admin accepts high-confidence matches and resolves flagged ones. | Every field ends explicitly mapped, custom, or ignored.
+ | Custom fields | Add columns that have no canonical home. | Nothing in the source is silently discarded.
+ | Relations | Define foreign-key relations for this version from the UI. | e.g. subcap addresses platform; subcap delivered-by story.
+ | Cascade | Propagate compatible relations to other versions. | Applied only where the participating fields exist and are type-compatible.
+ | Apply / provision | Write the schema, create tables and FKs, load rows. | Transactional and idempotent; re-runnable to correct a mapping.
+
+### 5.1 Provisioning, in code
+ Applying a mapping is a single transactional operation that produces the version’s relational database and registers it as available.
+ ingestion/provision.py (core) python
+ def bring_version_online(version_id, workbooks):
+ # 1) detect the source layout and propose a field mapping per canonical entity
+ layout = detect_layout(workbooks) # e.g. "v5" or "v7"
+ proposal = automap_fields(layout, CANONICAL_MODEL) # [(src, canon, confidence, status)]
+
+ # 2) admin reviews in the schema-mapping studio: confirm / override / add custom
+ mapping = await admin_confirm(version_id, proposal) # FR-2
+ mapping += admin_custom_fields(version_id) # columns with no canonical home
+ relations = admin_relations(version_id) # FK relations for THIS version
+ relations += cascade_compatible(relations, other_versions) # where fields are type-compatible
+
+ # 3) apply: write schema, provision the persistent relational DB for this version
+ with txn():
+ create_schema(f"cat_{version_id}") # one namespace per version
+ for entity in CANONICAL_MODEL:
+ create_table(entity, mapping[entity] + custom_cols(entity))
+ for r in relations:
+ add_foreign_key(r)
+ load_rows(workbooks, mapping) # nothing in source discarded
+ register_ingest(version_id, status="provisioned") # durable for all users
+ return ProvisionReport(version_id, tables=..., relations=..., rows=...)
+
+ Idempotency and safety
+ Provisioning is keyed on version_id . A re-run drops and rebuilds the version schema inside a transaction, so a corrected mapping re-provisions cleanly and a half-applied mapping never leaves a partial database. The mapping configuration itself is persisted in the control plane and is the audit record of how each version was brought online.
+
+ Section 6
+
+## Story pipeline and carry-forward
+ The canonical story source is the Jira Full Story Catalog (FR-3, D11). It is the analysis set; synthetic stories are excluded by default (D12). Because the catalog was mapped against v5, a carry-forward correlation maintains those mappings on the active version (FR-4, D13).
+ | Concern | Behaviour | Engineering note
+
+ | Canonical | Ingest the Jira Full Story Catalog as the authoritative corpus (14,406 real stories, 87 mapped subcaps). | Supersedes the workbook story tabs; persisted in the control plane.
+ | Synthetic policy | Load synthetic / use-case-derived rows but exclude them from analysis. | Surfaced only when a trend flags the subcap as emergent, then labelled provisional.
+ | Carry-forward | Move v5 story-subcap mappings to the active version, similarity-confirmed. | Crosswalk first, embeddings to confirm; thresholds 0.86 / 0.70.
+ | Continuous Jira | Phase 3 extends the canonical corpus with new completed stories. | Schedule or webhook; high-confidence auto-linked, low-confidence to review.
+
+### 6.1 The carry-forward correlation
+ The correlation is deterministic first and semantic second: normalise the id (stripping any subvertical suffix such as P3C1.8.CL2 ), bridge with the target version’s crosswalk, then confirm the two subcaps are similar with the catalogue-tuned embeddings. At or above 0.86 the link is carried automatically; between 0.70 and 0.86 it routes to a one-click admin confirm; below 0.70 it is treated as unmapped with a nearest-neighbour proposal. The routine is idempotent and re-runnable for every future version. The full script ships with the PRD as carry_forward_subcap_mappings.py and writes its results to the control plane.
+ One embedding space
+ Story matching, SOW matching and carry-forward share one catalogue-tuned embedding space, so a subcap means the same thing whether it is being matched, retrieved, or carried between versions. This is also why the eval harness tracks a single retrieval MRR (section 12).
+
+ Section 7
+
+## AI and ML subsystem
+ The AI subsystem is grounded and tiered. Answers and matches are retrieved from stored catalogue and evidence, never from model memory, and model strength is matched to leverage.
+ | Job | Model tier | Use
+
+ | Classification / extraction | Gemini Flash | News tagging, event typing, story field extraction; high volume, low cost.
+ | Matching / reasoning loop | Gemini Pro / Claude Sonnet | SOW-to-subcap and story-to-subcap matching, impact scoring, reasoning steps.
+ | Synthesis / adversarial review | Claude Opus | Quarterly digest, benchmark adversary verdict; bounded volume.
+ | Embeddings | Catalogue-tuned text embeddings | Retrieval, matching, carry-forward; one shared space.
+
+### 7.1 Retrieval
+ Retrieval is hybrid in one engine: lexical match over Postgres full-text ( tsvector + GIN), dense match over pgvector (HNSW), and structured filters in SQL (pillar, subvertical, claim label, source tier). The catalogue ontology itself, subcaps, L4 features, maturity descriptors, offerings, data products, agents and themes, is part of the retrieval corpus so chat is catalogue-grounded (FR-15).
+
+### 7.2 Trust metadata on every output
+ Each AI output records a claim label (FACT, INFERENCE, HYPOTHESIS, CEILING_ESTIMATE), the source tier (T1 to T5) of its evidence, an evidence reliability score (ERS), and a reasoning chain . These are persisted and rendered as the chips and the reasoning viewer described in the UI/UX brief; they are not presentational, they gate commits (section 8).
+
+### 7.3 Cost control and degraded mode
+ Every model call is attributed with (operation, pillar, subvertical, subcap, batch) so cost-by-feature is exact. At 80% of the monthly envelope the system alerts; at 90% non-essential operations throttle. If a provider is unavailable or over its weekly budget, the service auto-routes to the fallback model and shows a degraded-mode banner rather than failing.
+
+ Section 8
+
+## Validation gates
+ Eight deterministic validation gates (G1 to G8) sit between any AI proposal and any commit. They are code, not prompts, so their verdicts are reproducible and auditable. A proposal that fails any gate is routed to the Change Flags inbox with the failing gate named, never auto-applied.
+ | Gate | Name | Check
+
+ | G1 | Identity & schema | The target subcap resolves in the active version and the payload validates against the canonical model.
+ | G2 | Evidence sufficiency | The claim has at least the minimum evidence its claim label requires; bare assertions are rejected.
+ | G3 | Source-tier floor | Every cited source meets the minimum tier for the action; a committed change requires stronger sourcing than a note.
+ | G4 | Claim-label consistency | The asserted label matches evidence strength; no FACT on a single weak source.
+ | G5 | Similarity / grounding | Matches and carry-forward meet the configured cosine floor; chat answers overlap their retrieved context.
+ | G6 | Contradiction check | A proposal that conflicts with committed evidence is flagged as contradicted_evidence rather than silently applied.
+ | G7 | Citation verification | Every citation resolves to a stored, retrievable source chunk; fabricated citations fail.
+ | G8 | Budget & rate | The operation is within the cost envelope and rate limits; degraded-mode routing is applied when required.
+
+ Where the gates run
+ The suggestion lifecycle (propose, gate, apply, reject, expire, stage) runs every proposal through G1 to G8; AI-proposed knowledge-graph edges (section 9) run through the same gates before they can be committed. Each run is persisted as a validation_gate_run linked to the reasoning chain.
+
+ Section 9
+
+## Knowledge graph (admin)
+ The knowledge graph is an admin-only surface (D18). It is built in two layers.
+
+### 9.1 Layer A: deterministic
+ Derived directly from the provisioned relational data: the foreign keys and link tables become edges. Layer A is always trustworthy because it is a projection of committed structure.
+ BELONGS_TO  ·  ADDRESSED_BY  ·  DELIVERED_BY  ·  MAPS_TO_OFFERING  ·  USES_PLATFORM  ·  TAGGED_THEME  ·  HAS_PERSONA  ·  HAS_USECASE  ·  EVIDENCED_BY
+
+### 9.2 Layer B: AI-proposed, gated
+ Layer B proposes edges the structure does not state outright. These are computed and then must pass G1 to G8 and human approval in Change Flags before they are committed. Cross-pillar dependency edges are not part of the product (D16); Layer B is limited to semantic similarity and shared-feature relationships.
+ SEMANTICALLY_SIMILAR (cosine >= 0.85)  ·  SHARES_FEATURE
+ Never auto-merge
+ No AI-proposed edge is ever written live. The proposer emits a pending_edge with a reasoning chain; a pillar lead approves, rejects, or defers it from the Change Flags inbox.
+
+ Section 10
+
+## API surface
+ The API is a versioned REST surface served by FastAPI. Every route is authenticated; admin routes additionally check the is_admin flag. Responses carry the trust metadata (claim label, source tier, ERS, reasoning chain id) wherever AI output is returned.
+ | Group | Method | Representative routes | Notes
+
+ | Catalogue | GET | /api/catalogue/{version}/subcaps, /subcaps/{id}, /lenses, /value-chain | Read the active or a named version.
+ | Schema mapping | POST | /api/admin/mapping/{version}/automap, /confirm, /relations, /apply | Admin-only; drives the studio and provisioning.
+ | Stories | GET | /api/stories, /stories/{key}, /subcaps/{id}/stories | Canonical corpus, synthetic excluded by default.
+ | Carry-forward | POST | /api/admin/carry-forward/{from}/{to}, GET /review | Run and review correlation results.
+ | Suggestions | GET / POST | /api/suggestions, /suggestions/{id}/apply, /reject | Lifecycle actions; every apply runs the gates.
+ | Evidence & reasoning | GET | /api/subcaps/{id}/evidence, /reasoning/{chain_id} | Evidence with ERS; full reasoning trail.
+ | Synthesis | GET / POST | /api/digest, /whatif, /lifecycle/opportunities | Digest, sandbox, offering opportunities.
+ | Admin / system | GET / POST | /api/admin/ingest, /versions, /exports/{id} | Ingestion, versions, signed exports.
+
+ Routes are illustrative of the surface area, not exhaustive. Request and response bodies are defined as Pydantic models and mirror the canonical schema in the Backend Schema document.
+
+ Section 11
+
+## Security
+ Security is shaped by the audience: a closed group of internal staff doing high-stakes work. The model is therefore strict on the perimeter and rich on provenance.
+ | Area | Control | Effect
+
+ | Authentication | Firebase Auth with Google sign-in restricted to @zennify.com; the domain check fails closed. | Non-staff never reach a product surface; login is the only pre-auth route.
+ | Authorization | Single is_admin flag gates admin surfaces (upload, schema mapping, ingestion, knowledge graph). | No client-facing access and no RBAC beyond the admin flag in v1 (D-scope).
+ | Secrets | API keys, service-account credentials and the HMAC key live in Secret Manager. | No secrets in code or images.
+ | Uploads | Raw workbooks and SOWs go to IAM-restricted buckets; SOWs are redacted before indexing. | Least-privilege access; sensitive source separated from derived data.
+ | Exports | Audit-grade exports (digest, DMA packet) are HMAC-signed and archived. | Recipients can verify authenticity; exports are immutable.
+ | Provenance | Every AI-derived row carries claim label, source tier, ERS and a reasoning-chain id. | Auditability is a property of the data, not an add-on.
+
+ Section 12
+
+## Observability and SLOs
+ SLOs are enforced through alert rules, not just documented. The targets reflect an internal tool used deliberately, where correctness and traceability outrank raw latency.
+ | Objective | Target | How it is met
+
+ | Page render (read surfaces) | p95 | Server-side pagination; denormalised counts for heavy pages.
+ | Catalogue-grounded chat / search | p95 | Hybrid retrieval in-engine; streamed responses.
+ | Provision a catalogue version | | Transactional schema build plus bulk load.
+ | Carry-forward correlation | | Crosswalk is O(1) per row; embeddings cached per subcap.
+ | Availability | 99.5% monthly | Single-region Cloud Run with health checks; jobs retried via DLQ.
+ | Cost envelope | Alert at 80%, throttle at 90% | Per-feature attribution; degraded-mode auto-routing.
+
+### 12.1 Evaluation harness
+ A golden dataset of labelled subcap-to-evidence and subcap-to-story pairs backs an offline eval harness. Retrieval quality is tracked as mean reciprocal rank (MRR); a drop below target triggers a contrastive fine-tune of the embedding model. A fixed set of catalogue-grounded chat queries must pass before any release. Every model call and gate run is logged to an immutable audit table.
+
+ Section 13
+
+## Environments and deployment
+ Three environments: dev (hermetic LLM mode, so the full stack runs without provider credentials), staging (real providers, synthetic admin), and production . The same container image is promoted across environments; configuration and secrets differ by environment only.
+
+### 13.1 Migrations and rollback
+ Control-plane schema changes are versioned migrations. Catalogue data-plane schemas are generated by the mapping studio and are therefore data, not migrations: a version can be re-provisioned or reverted without a code deploy. A catalogue revert restores a snapshot of the catalogue schema but does not rewind the evidence corpora timestamps, so the record of what was known when remains intact.
+ Hermetic dev mode
+ In dev, the entire model stack is stubbed deterministically so engineers can run ingestion, mapping, carry-forward and the UI end to end with no external calls. Provider availability is a configuration switch, not an architectural dependency.
+
+ Section 14
+
+## Phased engineering plan
+ Engineering work follows the PRD’s three phases, each shippable on its own. Within a phase, backend, frontend and ML tracks run in parallel.
+ | Phase | Engineering scope | PRD
+
+ | Phase 1 foundation | Cloud Run service + auth; schema-mapping engine and per-version provisioning; canonical Jira ingest + carry-forward; relational read surfaces; versioning and diff. | FR-1 to FR-6, FR-22
+ | Phase 2 evidence & reasoning | SOW / news / vendor / benchmark ingestion; ERS and reasoning chains; 8 gates; suggestion lifecycle; monthly cycle and quarterly digest; Lifecycle manager; QA dashboard; reasoning viewer; chat. | FR-7 to FR-17
+ | Phase 3 live & automation | Continuous Jira ingestion; client journey and DMA packet; admin knowledge graph (Layer B + gates); what-if sandbox. | FR-18 to FR-21
+
+ Phase 1 is the foundation everything else reads from: until a version is provisioned and stories are carried forward, no downstream surface has data.
+
+ Section 15
+
+## Open technical questions
+ Open technical questions are tracked here and escalated to the engineering and pillar leads; none blocks the Phase 1 foundation.
+ | Question / risk | Current posture
+
+ | Provider credentials pending | Ship with hermetic dev mode and degraded-mode auto-routing; features that need a model degrade, not break.
+ | Carry-forward thresholds uncalibrated | Defaults 0.86 / 0.70 are conservative; calibrate on the real v5-to-v7 run and adjust in config, not code.
+ | Schema-per-version sprawl | Old versions are read-rarely; archive provisioned schemas to snapshots and keep only the active and prior version hot.
+ | Embedding drift across versions | Monitor MRR on the golden set; re-tune and re-embed affected subcaps when a version changes meanings materially.
+ | Single-region availability | Acceptable for an internal tool at this audience size; revisit multi-region only if usage or criticality grows.
+
+ © 2026 Zennify · Confidential · Capability Intelligence Agent TRD

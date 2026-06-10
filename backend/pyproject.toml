@@ -1,0 +1,57 @@
+[project]
+name = "cia-backend"
+version = "0.0.0"
+description = "Capability Intelligence Agent — FastAPI backend"
+requires-python = ">=3.12"
+# F1 adds the web framework + settings. F3 adds sqlalchemy[asyncio], asyncpg, pgvector,
+# alembic; F6/F7 add google-genai. uv.lock is committed and CI installs with `--frozen`.
+dependencies = [
+  "alembic>=1.13",
+  "asyncpg>=0.29",
+  "fastapi>=0.115",
+  "google-auth>=2.30",
+  "psycopg[binary]>=3.2",
+  "pydantic-settings>=2.5",
+  "pyyaml>=6.0",
+  "sqlalchemy[asyncio]>=2.0",
+  "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+dev = [
+  "ruff>=0.6",
+  "black>=24.8",
+  "mypy>=1.11",
+  "pytest>=8.3",
+  "httpx>=0.27",
+  "types-PyYAML>=6.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency injectables are called in argument defaults by design.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Path"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["app", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]

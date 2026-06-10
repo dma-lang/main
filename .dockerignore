@@ -1,0 +1,17 @@
+# Keep the image context small and free of secrets, specs, and local artifacts.
+.git
+.github
+.claude
+docs
+terraform
+**/node_modules
+**/.venv
+**/dist
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.tsbuildinfo
+*.md
+.env
+.env.*

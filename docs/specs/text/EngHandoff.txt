@@ -1,0 +1,590 @@
+zennify
+
+ Engineering handoff · build package
+
+# Capability Intelligence Agent
+
+ Everything an engineering team (or coding agent) needs to build the production web app from the approved prototype — architecture, data model, backend↔frontend contracts, and the exact connections each surface needs.
+
+ Document
+ Build handoff v1.0
+
+ Source of truth
+ PRD · TRD · Backend Schema · App Flow · UI/UX
+
+ Audience
+ Delivery engineering & pillar leads
+
+ Status
+ Confidential
+
+## 00 How to use this package
+
+ This document is the bridge between the approved interactive prototype and a production build. It restates the binding specs from the five source documents, then adds the one thing those documents don't: a surface-by-surface map of what data the frontend loads from the backend and which connections are required to make each screen work.
+
+#### Read order
+
+- §1–§2 — what the system is and how it's shaped (skim if you've read the TRD).
+
+- §6 Data model and §12 API & data-flow contracts — the core of the build. §12 is the table you will live in.
+
+- §13 Frontend spec — what the prototype already implements and how to wire it to real data.
+
+- §17 Build sequence — the order to actually do the work.
+
+- §18 Document refinements — gaps/inconsistencies found across the source docs that need a decision before/while building.
+
+#### Section index
+
+ 1 · Product overview & users
+ 2 · System architecture
+ 3 · Technology stack
+ 4 · The critical path: data online
+ 5 · Data model (control + per-version)
+ 5.3 · v5 & v7 catalogue handling
+ 6 · Schema-mapping engine
+ 7 · Story pipeline & carry-forward
+ 7.5 · SOW enrichment & mapping
+ 7.6 · Productized offerings ingest
+ 8 · AI / ML subsystem
+ 9 · Eight validation gates
+ 10 · Knowledge graph
+ 11 · Security & auth
+ 12 · API & backend→frontend contracts
+ 13 · Frontend spec (the prototype)
+ 14 · State, caching & real-time
+ 15 · Observability & SLOs
+ 16 · Environments & hermetic dev
+ 17 · Build sequence (phased)
+ 18 · Required document refinements
+
+## 01 Product overview & users
+
+ An internal, single-tenant web application for ~10–30 expert users (Zennify pillar leads, consultants, data architects). It keeps the four-pillar capability catalogue provably current by ingesting two corpora — the four-pillar capability workbooks (across versions) and the canonical Jira story corpus — reconciling versions into one canonical model, provisioning a persistent relational database per version via an admin-controlled mapping step, and serving trust-first read & reasoning surfaces over that data.
+
+ Non-negotiable product principle — trust-first. Every AI output carries four pieces of metadata: a claim label (FACT · INFERENCE · HYPOTHESIS · CEILING_ESTIMATE), a source tier (T1–T5), an evidence reliability score (ERS) , and a reasoning chain the user can open. These are not decoration — they gate commits (§9).
+
+ | Catalogue scale (v7) | Value | Notes
+
+ | Subcapabilities | 851 | P1 205 · P2 292 · P3 164 · P4 190
+
+ | Pillars → categories → L1 clusters → subcaps | 4 → 16 → ~120 → 851 | The real taxonomy hierarchy used by the navigator
+
+ | Canonical Jira stories | 14,406 | Real client stories; 87 mapped subcaps; synthetic excluded by default
+
+ | L3 platforms | ~135 | Deduplicated entities, vendor-tagged
+
+ | Productized offerings | 13 | Shared across pillars
+
+## 02 System architecture
+
+ A single Cloud Run service hosts the FastAPI backend and the built React SPA behind one container. Asynchronous work is split into Cloud Run Jobs . The system of record is a relational database; object storage holds raw uploads, snapshots and signed exports.
+
+ React SPA Vite · router v6 · Zustand · TanStack Query
+
+ Cloud Run FastAPI + static SPA, one container
+
+ Cloud SQL PostgreSQL 16 · pgvector · full-text
+
+ Jobs / GCS ingest, carry-forward, digest · buckets
+
+ Why relational. The catalogue is inherently relational (subcaps↔platforms, stories↔subcaps, offerings↔subcaps). The mapping studio defines those relations as foreign keys; the same Postgres engine serves hybrid retrieval through pgvector (dense) and tsvector (lexical) alongside ordinary SQL filters — one store for structure, search and provenance.
+
+## 03 Technology stack
+
+ | Layer | Choice | Why
+
+ | Frontend | React + Vite · react-router v6 · Zustand (client state) · TanStack Query (server cache) | Recognition-first UI; URL-serialized filter state for deep links
+
+ | Backend | Python · FastAPI · Pydantic v2 | Typed request/response models; one service, many routers
+
+ | System of record | Cloud SQL for PostgreSQL 16, schema-per-version | Relational catalogue, stories, evidence, governance; provisioned per version
+
+ | Vector / lexical | pgvector (HNSW) + Postgres full-text (GIN) | Hybrid retrieval in the same engine as structured data
+
+ | Async | Cloud Run Jobs · Cloud Scheduler · Cloud Tasks (DLQ) | Ingestion, carry-forward, monthly cycle, quarterly digest
+
+ | Object storage | Cloud Storage buckets | Raw uploads (IAM-restricted), snapshots, HMAC-signed exports
+
+ | Reasoning models | Gemini Flash / Pro · Claude Sonnet / Opus | Cheap models classify/narrate; strong models synthesize & adversarially review
+
+ | Embeddings | Catalogue-tuned text embeddings (one shared space) | Retrieval, matching, carry-forward all mean the same "subcap"
+
+ | Auth | Firebase Auth (Google sign-in) | Domain-restricted to @zennify.com , fails closed; single is_admin flag
+
+ | Secrets / Observability | Secret Manager · Cloud Logging / Monitoring | No secrets in code; SLO alerts, cost-by-feature, immutable audit log
+
+## 04 The critical path: bringing data online
+
+ The defining flow — and Phase 1's entire reason to exist — is how raw workbooks become queryable, versioned, relational data that delivery evidence is attached to. No downstream surface has data until a version is provisioned and stories are carried forward.
+
+ Upload Admin drops pillar workbooks or points at Drive
+
+ Map Auto-map · confirm · relations · cascade
+
+ Provision Per-version schema + FKs + load rows
+
+ Carry-forward Jira mappings moved to this version
+
+ Serve Read · reason · suggest · export
+
+ This exact flow is the prototype's first-run onboarding (Login → Upload → Schema mapping → Carry-forward → Mission control) and must be the production entry experience for an admin's first session on a fresh version.
+
+## 05 Data model — control plane + per-version data plane
+
+ The database is organised as a shared control plane and a per-version data plane . The full DDL ships in schema.sql / the Backend Schema document; this is the orientation an engineer needs before reading it.
+
+### 5.1 Control plane (shared) — control.*
+
+ Governs identity, versions, ingest runs, the mapping configuration, the canonical story corpus + carry-forward, and all evidence, reasoning, suggestions, gates and audit. Does not change shape when a new catalogue version arrives.
+
+ | Table | Key columns | Purpose
+
+ | users | uid PK · email · is_admin · preferences jsonb | Identity + the single authz flag + per-user prefs (theme, lens, persona)
+
+ | catalogue_version | version_id PK · label · status · schema_name · created_at | Registry of versions; schema_name points at the data-plane namespace
+
+ | ingest_run | run_id PK · version_id FK · source · status · stats jsonb | Every ingestion attempt and its outcome
+
+ | catalogue_sheet | version_id · sheet_name · sheet_role · maps_to_entity | Which workbook sheet populates which canonical entity
+
+ | relation_def | from_entity · from_field · rel_type · to_entity · to_field · card · via_sheet · is_cascade · cascade_kind | The relation registry — provisioning turns these into FKs (one/many-to-one) and link tables (many-to-many); the cascade engine reads them
+
+ | story | story_key PK · subcap_id · scores · confidence · is_synthetic · … | Canonical Jira corpus (14,406), control-plane so it survives version changes
+
+ | carry_forward | story_key · from_version · to_version · status · similarity | Results of moving v5 story→subcap mappings to the active version
+
+ | evidence | id PK · kind · tier · ers · url · chunk · … | SOW chunks, news, vendor events, benchmarks, regulatory, catalogue
+
+ | reasoning_chain | chain_id PK · steps jsonb · verdict · cost | Full reasoning trail rendered by the reasoning viewer
+
+ | suggestion | id PK · kind · target · status · gate results · chain_id | AI-proposed edits through the propose→gate→apply/reject lifecycle
+
+ | validation_gate_run | id PK · suggestion_id · g1..g8 · verdict | One row per gate evaluation, linked to its reasoning chain
+
+ | kg_node / pending_edge | node_id · kind · ref_id · label / edge proposal | Knowledge-graph projection + gated AI-proposed edges
+
+ | audit_log / export_manifest | insert-only · HMAC-signed | Immutable audit; signed, verifiable exports
+
+ Enums to honour exactly (from schema.sql ): mapping_status = confirmed · review · custom · ignored · unmapped; carry_status = confirmed · review · unmapped; relation_type = belongs_to · addresses · delivered_by · maps_to_offering · uses_platform · tagged_theme · has_persona · has_usecase · custom; evidence_kind = sow_chunk · news · vendor_event · benchmark · regulatory · catalogue; claim labels = FACT · INFERENCE · HYPOTHESIS · CEILING_ESTIMATE.
+
+### 5.2 Data plane (per version) — cat_v5.* , cat_v7.*
+
+ Each version owns a Postgres schema namespace holding the canonical entities for that version: subcap , category , capability , l4_feature , persona , use_case , maturity_descriptor , and the deduplicated entities ( offering , data_product , l3_platform , theme , agent ) with their link tables ( subcap_platform , subcap_persona , offering_subcap , …). The mapping studio generates this schema; the app reads the active version by name .
+
+#### Why schema-per-version (not a version column)
+
+ Physical isolation: re-provisioning or reverting a version never risks another version's rows, and one version's admin-defined relations can't constrain another. Cross-version questions (lineage, diff, carry-forward) are answered by the control plane , which holds the crosswalk ( _R1_Source_Reference ) and the carry-forward results.
+
+ The real v7 relations the prototype's mapping studio shows (and that provisioning realises) — these are the authoritative relation_def rows:
+
+ -- from_entity rel_type to_entity card via_sheet cascade
+subcap belongs_to capability many_to_one 2_Capability_Map no
+subcap has_persona persona many_to_many 2_Capability_Map yes
+subcap uses_platform l3_platform many_to_many 2_Capability_Map yes
+subcap has_usecase use_case one_to_many 2_Capability_Map yes
+subcap addresses l4_feature one_to_many 5_L4_Detailed_Features yes
+subcap addresses maturity_descriptor one_to_many 6_Maturity_Descriptors yes
+subcap delivered_by story many_to_many 3_User_Stories_Catalogue yes
+subcap maps_to_offering offering many_to_many 10_Productized_Offerings no
+subcap custom value_chain_cluster many_to_many 21_VC_Mapping_PerSubcap no
+
+### 5.3 Handling both catalogue versions (v5 & v7)
+
+ The app must serve both the legacy v5 and the current v7 catalogue from the same code, switching by the header version toggle. They are physically separate data-plane schemas ( cat_v5 , cat_v7 ); the control plane reconciles them.
+
+ | Dimension | v5 (legacy) | v7 (active)
+
+ | Workbook shape | 10 sheets/pillar, inconsistent naming | 25 canonical tabs/pillar
+
+ | Subcaps | ~840 (P1 199 · P2 292 · P3 162 · P4 187) | 851 (P1 205 · P2 292 · P3 164 · P4 190)
+
+ | FC subvertical | absent | +11 net-new finance-company subcaps
+
+ | Stories | workbook gap-counts only | superseded by canonical Jira export
+
+ | Field map (studio) | Sub-Cap ID , Sub-Capability , Primary Products , Key Features (lower auto-map confidence) | Sub_Cap_ID , Sub_Cap_Name , L3_Platforms_Addressing_SubCap , L4_Features_Available (high confidence)
+
+ | Relations realised | 4 (belongs_to, uses_platform, addresses l4, maps_to_offering) | 9 (adds has_persona, has_usecase, addresses maturity, delivered_by, value-chain)
+
+ Engineering rules: (1) each subcap keeps one identity across versions via the _R1_Source_Reference crosswalk in the control plane; (2) every count, diff and lineage payload is version-qualified (R3); (3) the Diff viewer reads the crosswalk to compute added/removed/modified between any two versions; (4) carry-forward (§7) is what moves the v5-mapped Jira corpus onto v7; (5) reverting a version restores its schema snapshot but never rewinds the evidence-corpora timestamps (the record of "what was known when" is preserved).
+
+## 06 Schema-mapping engine (FR-2)
+
+ What makes the system resilient to however a future catalogue version structures its workbook. Runs on upload, admin-controlled end to end. A new catalogue structure must never require a code release.
+
+ | Step | What happens | Engineering note
+
+ | Detect | Identify source layout, pick parsing adapter | Deterministic; unknown layout → manual mapping, not a failure
+
+ | Auto-map | Propose a canonical field per source field + confidence | Embedding + heuristic match on header names & sampled values
+
+ | Confirm / override | Admin accepts high-confidence, resolves flagged | Every field ends confirmed , custom , or ignored
+
+ | Custom fields | Add columns with no canonical home | Nothing in source silently discarded
+
+ | Relations | Define FK relations for this version from the UI | Writes relation_def rows (see §5.2)
+
+ | Cascade | Propagate compatible relations to other versions | Only where fields exist and are type-compatible
+
+ | Apply / provision | Write schema, create tables + FKs, load rows | Transactional & idempotent ; re-runnable to correct a mapping
+
+ # ingestion/provision.py — provisioning is ONE transactional, idempotent op keyed on version_id
+ def bring_version_online(version_id, workbooks):
+ layout = detect_layout(workbooks) # "v5" | "v7" | unknown→manual
+ proposal = automap_fields(layout, CANONICAL_MODEL) # [(src, canon, confidence, status)]
+ mapping = await admin_confirm(version_id, proposal)
+ mapping += admin_custom_fields(version_id)
+ relations = admin_relations(version_id) + cascade_compatible(...)
+ with txn():
+ create_schema( f"cat_{version_id}" )
+ for e in CANONICAL_MODEL: create_table(e, mapping[e] + custom_cols(e))
+ for r in relations: add_foreign_key(r)
+ load_rows(workbooks, mapping)
+ register_ingest(version_id, status= "provisioned" ) # durable for ALL users (D10)
+
+## 07 Story pipeline & carry-forward (FR-3, FR-4)
+
+ The canonical story source is the Jira Full Story Catalog (14,406 real stories, 87 mapped subcaps) — the analysis set. It supersedes the workbook story tabs and is persisted in the control plane . Synthetic / use-case-derived rows are loaded but excluded from analysis by default ; they surface only when a trend flags a subcap as emergent, then labelled provisional .
+
+#### Carry-forward correlation — deterministic first, semantic second
+
+ Because the catalog was mapped against v5, carry-forward maintains those mappings on the active version: (1) normalise the id, stripping any subvertical suffix (e.g. P3C1.8.CL2 → P3C1.8 ); (2) bridge with the target version's crosswalk; (3) confirm similarity with the catalogue-tuned embeddings.
+
+ Thresholds: ≥ 0.86 → carried automatically · 0.70–0.86 → one-click admin confirm · < 0.70 → unmapped with a nearest-neighbour proposal. Idempotent & re-runnable; results written to the control plane. Ships as carry_forward_subcap_mappings.py .
+
+ One embedding space backs story matching, SOW matching and carry-forward, so a subcap means the same thing whether matched, retrieved, or carried between versions.
+
+### 7.5 SOW enrichment & subcap mapping pipeline to build
+
+ The ingested SOW corpus is raw and not yet mapped to subcaps — this is the work to do. The current export is 132 SOW files → 1,075 extracted scope items with columns: SOW Filename · Opportunity ID · Account Name · Opportunity Name · Scope Item/Task Name · QTY · Scope Description · Assumptions . There is no subcap link yet.
+
+ Ingest + DLP Raw SOW → IAM bucket; redact before any model sees it
+
+ Normalise One row per scope item; clean task name + description
+
+ Embed Scope item → shared catalogue embedding space
+
+ Match Scope item → subcap(s) w/ cosine confidence
+
+ Gate + confirm G1–G8; ≥0.86 auto, 0.70–0.86 review, <0.70 unmapped
+
+ Persist SOW→subcap evidence rows w/ claim label + chain
+
+ | Stage | Detail
+
+ | Source of record | Each scope item becomes an evidence(kind=sow_chunk) row in the control plane, carrying account_name , opportunity_id , sow_filename , qty , assumptions .
+
+ | Matching model | Gemini Pro / Claude Sonnet over the one shared embedding space (§7) so "subcap" means the same as in story-matching & carry-forward. Output: [{subcap_id, confidence, claim_label, rationale}] .
+
+ | Thresholds | Reuse the carry-forward bands: ≥0.86 auto-confirm · 0.70–0.86 → one-click admin confirm in the SOW library · <0.70 → unmapped + nearest-neighbour proposal.
+
+ | Gating | Every proposed SOW→subcap link runs G1–G8 (esp. G5 similarity, G7 citation) before commit; failures route to Change Flags.
+
+ | Downstream use | Confirmed links power the SOW library (matched subcaps + Commit), the Project-subcap trace (SOW events), and the Lifecycle manager (co-delivery → offering opportunities).
+
+#### This is greenfield work, not a re-skin
+ The prototype's SOW library shows the target end-state (matched, confirmable, committable). Production must build the enrichment pipeline above to get there from the 1,075 raw scope items. Until it runs, SOW surfaces show "ingesting / unmatched".
+
+### 7.6 Productized offerings ingestion
+
+ The GTM document defines the productized offerings as structured marketing entities. Each offering has: Overview · Industry Challenge · Outcomes · Core Capabilities (and GTM positioning). Named offerings include Financial Services Customer Platform, Digital Account Opening & Onboarding, Digital Lending Platform, Contact Center Modernization, Salesforce Platform Optimization & Governance, Agentic Workforce , and others.
+
+ | Field in GTM doc | Maps to
+
+ | Offering name + Overview | offering entity (data plane): offering_id, name, blurb, tier
+
+ | Core Capabilities (bulleted) | Each capability → match to subcaps → write offering_subcap link (relation maps_to_offering , many-to-many)
+
+ | Outcomes / Challenge / GTM positioning | Offering metadata for the Lifecycle manager & digest narration
+
+ This populates offering coverage on Mission control, the Offerings facet in the workbench, and the Lifecycle manager gap analysis (high-delivery subcaps with no offering → AI-bundled proposal). The capability→subcap match reuses the same embedding+gate path as SOW mapping.
+
+## 08 AI / ML subsystem (FR-7…FR-17)
+
+ Grounded and tiered. Answers and matches are retrieved from stored catalogue and evidence, never from model memory . Model strength is matched to leverage.
+
+ | Job | Model tier | Use
+
+ | Classification / extraction | Gemini Flash | News tagging, event typing, story field extraction — high volume, low cost
+
+ | Matching / reasoning loop | Gemini Pro / Claude Sonnet | SOW→subcap & story→subcap matching, impact scoring, reasoning steps
+
+ | Synthesis / adversarial review | Claude Opus | Quarterly digest, benchmark adversary verdict — bounded volume
+
+ | Embeddings | Catalogue-tuned | Retrieval, matching, carry-forward — one shared space
+
+ Retrieval is hybrid in one engine: lexical ( tsvector +GIN) + dense ( pgvector HNSW) + structured SQL filters (pillar, subvertical, claim label, source tier). The catalogue ontology itself is part of the retrieval corpus so chat is catalogue-grounded (FR-15).
+
+ Cost control: every model call is tagged (operation, pillar, subvertical, subcap, batch) for exact cost-by-feature. Alert at 80% of the monthly envelope; throttle non-essential ops at 90%; auto-route to a fallback model with a degraded-mode banner rather than failing. Frontend note the cost meter and degraded banner exist in the prototype and are admin-only .
+
+## 09 Eight validation gates (G1–G8)
+
+ Deterministic gates that sit between any AI proposal and any commit . They are code, not prompts — reproducible and auditable. A proposal failing any gate routes to the Change Flags inbox with the failing gate named; it is never auto-applied. Each run persists a validation_gate_run linked to its reasoning chain.
+
+ | Gate | Name | Check
+
+ | G1 | Identity & schema | Target subcap resolves in the active version; payload validates against the canonical model
+
+ | G2 | Evidence sufficiency | Claim has the minimum evidence its label requires; bare assertions rejected
+
+ | G3 | Source-tier floor | Every cited source meets the minimum tier; a commit needs stronger sourcing than a note
+
+ | G4 | Claim-label consistency | Asserted label matches evidence strength; no FACT on a single weak source
+
+ | G5 | Similarity / grounding | Matches & carry-forward meet the cosine floor; chat answers overlap retrieved context
+
+ | G6 | Contradiction check | A proposal conflicting with committed evidence is flagged contradicted_evidence
+
+ | G7 | Citation verification | Every citation resolves to a stored, retrievable chunk; fabricated citations fail
+
+ | G8 | Budget & rate | Operation within cost envelope & rate limits; degraded-mode routing applied
+
+## 10 Knowledge graph (admin-only, D18)
+
+#### Layer A — deterministic
+ A projection of committed structure: foreign keys and link tables become edges. Always trustworthy.
+ BELONGS_TO ADDRESSED_BY DELIVERED_BY MAPS_TO_OFFERING USES_PLATFORM TAGGED_THEME HAS_PERSONA HAS_USECASE EVIDENCED_BY
+
+#### Layer B — AI-proposed, gated
+ Edges the structure doesn't state outright. Must pass G1–G8 and human approval in Change Flags before commit. Limited to SEMANTICALLY_SIMILAR (cosine ≥ 0.85) and SHARES_FEATURE . Cross-pillar dependency edges are out of scope (D16). No AI edge is ever written live — the proposer emits a pending_edge .
+
+## 11 Security & auth
+
+ | Area | Control
+
+ | Authentication | Firebase Auth · Google sign-in restricted to @zennify.com ; the domain check fails closed . Login is the only pre-auth route.
+
+ | Authorization | Single is_admin flag gates admin surfaces (upload, schema mapping, ingestion, knowledge graph, version revert, source registry). No RBAC beyond this in v1.
+
+ | Secrets | API keys, service-account creds, HMAC key in Secret Manager. None in code/images.
+
+ | Uploads | Raw workbooks & SOWs → IAM-restricted buckets; SOWs redacted before indexing .
+
+ | Exports | Audit-grade exports (digest, DMA packet) HMAC-signed & archived → recipients can verify; exports immutable.
+
+ | Provenance | Every AI-derived row carries claim label, source tier, ERS, reasoning-chain id.
+
+## 12 API & backend→frontend contracts
+
+ This is the section you'll build against: for each prototype surface, the endpoints it calls, what data flows from backend to frontend , and the connections required. The API is a versioned REST surface (FastAPI); every route is authenticated ; admin routes additionally check is_admin . Wherever AI output is returned, the response carries the trust metadata (claim label, source tier, ERS, reasoning-chain id).
+
+### 12.1 Endpoint groups
+
+ | Group | Method | Representative routes
+
+ | Catalogue | GET | /api/catalogue/{version}/subcaps · /subcaps/{id} · /lenses · /value-chain · /platforms · /use-cases
+
+ | Schema mapping | POST | /api/admin/mapping/{version}/automap · /confirm · /relations · /apply
+
+ | Stories | GET | /api/stories · /stories/{key} · /subcaps/{id}/stories
+
+ | Carry-forward | POST/GET | /api/admin/carry-forward/{from}/{to} · /review
+
+ | Suggestions | GET/POST | /api/suggestions · /suggestions/{id}/apply · /reject
+
+ | Evidence & reasoning | GET | /api/subcaps/{id}/evidence · /reasoning/{chain_id}
+
+ | Synthesis | GET/POST | /api/digest · /whatif · /lifecycle/opportunities
+
+ | Admin / system | GET/POST | /api/admin/ingest · /versions · /exports/{id} · /change-flags · /gates
+
+ Routes are illustrative of the surface, not exhaustive. Request/response bodies are Pydantic models mirroring the canonical schema.
+
+### 12.2 Surface-by-surface data contracts
+
+ Each prototype page below maps to the data it must load. "Active version" = the version named in catalogue_version.status='active' ; the frontend keeps it in a header context and passes it on catalogue calls.
+
+ | Prototype surface | Loads (GET) | Payload essentials → frontend
+
+ | Login | Firebase token exchange → /api/me | {uid,email,is_admin,preferences} . Non- @zennify.com rejected pre-product.
+
+ | First-run setup (upload→map→carry) | POST /mapping/{v}/automap → /confirm → /relations → /apply ; POST /carry-forward/{v5}/{v7} | automap returns [{src,canon,confidence,status}] ; relations returns/accepts relation_def rows; apply returns a ProvisionReport{tables,relations,rows} ; carry-forward returns {mapped,confirmed,review,unmapped} .
+
+ | Mission control | /catalogue/{v}/summary · /suggestions?status=pending&count · /change-flags?severity=high&count · /ingest/health | Per-pillar counts & completeness; story-concentration matrix (top subcaps × quarter delivery counts); offering coverage %; flag/suggestion counts; source health. Denormalise the heavy counts (SLO).
+
+ | Capability workbench (explorer + deep dive merged) | /catalogue/{v}/subcaps (tree) · /subcaps/{id} (detail) · /subcaps/{id}/stories · /subcaps/{id}/evidence | Tree: {id,name,pillar,catId,catName,cluster,life,isNew} . Detail (lazy per tab): identity+desc+personas+platforms; maturity M1–M5 descriptors; use cases [{uc,arch,mat,text}] ; delivery stories with quality scores; connections (KG siblings + signals). Load detail per-tab , not all at once.
+
+ | Value chain atlas | /catalogue/{v}/value-chain?sv={code} | 8 MECE clusters with subcap counts; per-subvertical stage→subcap mapping (sheet 21).
+
+ | Platform catalog | /catalogue/{v}/platforms · /platforms/{l3_id} | L3 platforms with clean names , vendor (from id prefix), subcap list, pillar spread, story totals. Focus route pre-expands one platform.
+
+ | Use case explorer | /catalogue/{v}/use-cases?pillar=&category=&type=&q=&page= | Actual use cases [{uc,arch,mat,text,subcap_id,subcap_name,pillar,category}] , server-paginated & filtered.
+
+ | Story library | /stories?pillar=&sv=&confidence=&min_composite=&q=&page= · /stories/{key} | Server-side pagination over 14,406. Row: key, summary, subcap, sv, composite, confidence. Detail: ac/sd/story sub-scores, target maturity, population, match reasoning chain.
+
+ | Project-subcap trace | /subcaps/{id}/timeline | Time-ordered events across SOW · story · benchmark · news · vendor · suggestion, each with excerpt, confidence, claim label, reasoning-chain id, source link.
+
+ | News watch | /evidence?kind=news&impact=&tier= | Per item: title, source (name, type, tier, url , ERS/reliability), claim label, magnitude, expected-catalogue-impact classification , affected subcaps w/ impact score, reasoning-chain id.
+
+ | Trends / Vendor intel / Benchmarks | /evidence?kind=vendor_event|benchmark · /trends | Vendor developments typed into 8 event types, mapped to subcaps; benchmark distributions w/ CI band + adversary verdict; trend evidence clusters.
+
+ | AI suggestions | /suggestions?status=pending ; POST /{id}/apply · /reject | Each: kind, target subcap, rationale, labels, gate result , breaking flag, cost, reasoning-chain id. apply re-runs G1–G8 server-side & writes a new snapshot.
+
+ | Quarterly digest | /digest?quarter= | Opus-authored exec summary, cross-SV theme, per-SV priority cards with adversarial verdict; export → HMAC-signed PPTX/JSON.
+
+ | Lifecycle manager | /lifecycle/opportunities | Most-delivered subcaps × offering coverage; AI-bundled offering proposal w/ co-delivery basis + reasoning.
+
+ | Versions / Diff | /versions · /diff/{a}/{b} | Snapshots w/ counts; added/removed/modified subcaps; lineage via crosswalk. Revert is admin + control-plane snapshot restore.
+
+ | Change flags · Gates · QA | /change-flags · /gates · /qa/metrics | Flag inbox w/ resolution workflows; gate pass/warn/fail trends; gate pass-rate, hallucination rate, spend vs envelope, eval MRR. Spend is admin-only.
+
+ | AI chat | POST /chat (stream) | Grounded answer w/ inline subcap citations, source tier, FACT label, reasoning-chain id. Streamed . Never answers from model memory.
+
+ | Schema mapping · Settings (admin) | /admin/mapping/{v} · /admin/sources · /me/preferences | Field map (editable), relation_def (editable CRUD), carry-forward stats; ingestion source registry w/ health; user prefs persisted to users.preferences .
+
+## 13 Page-by-page component & source specification
+
+ The delivered prototype is a faithful, fully-interactive React implementation of every surface. Treat it as the visual + interaction source of truth ; production keeps its components and swaps the in-memory dataset for the §12 contracts. Every page below is defined by its components, the exact data sources it reads (control-plane / per-version data-plane tables, version-aware), and the relations it consumes. Legend: CP control plane · DP data plane (active version) · admin gated by is_admin .
+
+#### Routing & shell — global components
+
+- Auth gate : Login → first-run onboarding → app shell. Onboarding always precedes Mission control on a fresh session.
+
+- App shell : brand cell, header (pillar segmented control, subvertical & lens dropdowns, version toggle, is_admin toggle, change-flag bell, admin-only cost meter, theme toggle), and a 9-group sidebar (A Explore · B Catalogue tools · C Project validation · D Public intelligence · E Synthesis · F Lifecycle & competition · G Versioning & QA · H Reasoning & RAG · I Sandbox).
+
+- Merged Capability workbench : explorer + deep dive are one master-detail surface — left tree navigator (pillar→category→cluster→subcap, searchable), right focused subcap with 5 tabs (Overview · Maturity · Use cases · Delivery · Connections) and a completeness ring. Progressive disclosure keeps it un-overwhelming.
+
+- Cross-cutting trust surfaces : a reasoning-chain modal (opens from every "Show reasoning"), a subcap "quick-look" peek drawer, a consultant-reasoning-loop modal (capture thesis → AI adversarial challenge → gates → stage/commit), and a versioned commit modal.
+
+#### Design system (binding)
+
+ Zennify DMA system: DM Sans only; calm teal/mint/lavender palette ( #185F60 dark teal, #27BBAF brand teal, #1C4A4D ink, #F2F4F9 lavender, #3D81F6 blue, #FE9732 orange); sentence case everywhere except ALL-CAPS eyebrows & maturity labels; no gradients on content, no shadows on slides/cards beyond a hairline, no emoji ; flat geometry; fades only (120–200ms). Light + dark themes both ship.
+
+### 13.1 Explore group
+
+ | Page | Components | Sources & relations
+
+ | Mission control | Degraded-mode banner · 4 pillar health tiles (count, completeness, decay) · story-concentration heatmap (subcap × quarter) · offering-coverage gauge · KPI tiles (flags, suggestions, sources, subcaps) · recent-reasoning list · quick links | DP subcap , subcap_platform/_story counts (denormalised view) · CP story (quarter buckets), suggestion , kg /change-flags, ingest_run . Relations: delivered_by , maps_to_offering .
+
+ | Capability workbench (explorer+deep dive) | Search · pillar pills · collapsible tree (category→cluster→subcap) · hero card + completeness ring · 5 tabs: Overview (desc, personas, offering, platform list w/ subcap counts), Maturity (M1–M5 stepper, one descriptor open), Use cases (uc list), Delivery (quarter bars + expandable story rows), Connections (sibling subcaps + signals) | DP subcap , category , capability , persona , use_case , maturity_descriptor , l3_platform , offering + link tables. CP story , evidence , reasoning_chain . Relations: all 9 ( belongs_to , has_persona , uses_platform , has_usecase , addresses l4/maturity, delivered_by , maps_to_offering , value-chain).
+
+ | Value chain atlas | 8 MECE cluster cards (subcap counts) · radial toggle · expanded per-subvertical stage→subcap pipeline | DP value_chain_cluster + subcap×vcc link (sheet 21). Relation: custom→value_chain_cluster (many-to-many). Subvertical filter from header.
+
+### 13.2 Catalogue tools group
+
+ | Page | Components | Sources & relations
+
+ | Platform catalog | Vendor×pillar coverage heatmap · vendor filter · expandable platform rows → subcap chips · focus route pre-expands one platform | DP l3_platform + subcap_platform . Vendor derived from l3_id prefix. Relation: uses_platform (m:m). Names cleaned per R1.
+
+ | Use case explorer | Pillar pills · capability-area dropdown · use-case-type dropdown · text search · paginated actual-use-case cards → owning subcap peek | DP use_case joined to subcap / category . Relation: has_usecase (1:m). Server-paginated & filtered.
+
+ | Knowledge graph admin | Subcap picker · interactive node-link SVG (Layer A solid, Layer B dashed) · layer toggle · pending-edge panel · centrality/community stats | CP kg_node , pending_edge projected from DP FKs/link tables. Relations: all Layer-A edge types; Layer-B SEMANTICALLY_SIMILAR / SHARES_FEATURE via embeddings, gated.
+
+### 13.3 Project validation group
+
+ | Page | Components | Sources & relations
+
+ | SOW library | Filterable SOW list (status, SV) · master-detail · DLP/redaction banner · extracted-scope clauses → subcap · matched-subcaps table w/ confidence + Confirm/Route · Commit matches | CP evidence(kind=sow_chunk) , SOW→subcap match rows (confidence, claim label, reasoning-chain). See §7.5 — SOW must be enriched & mapped first.
+
+ | Story library | Search · pillar pills · confidence + min-composite filters · quality-distribution mini-chart · paginated table · story drilldown drawer (sub-scores, matched subcap, match reasoning) | CP story (14,406) — server-paginated . Relation: delivered_by . Synthetic excluded unless trend-flagged.
+
+ | Project-subcap trace | Subcap picker · KPI strip · swimlane timeline SVG (6 sources) · event detail w/ "what this means" + open-source + reasoning | CP union of evidence , story , suggestion , benchmark, vendor events for one subcap, time-ordered. All relations feeding the subcap.
+
+### 13.4 Public intelligence group
+
+ | Page | Components | Sources & relations
+
+ | News watch | Impact + tier filters · per item: magnitude/tier/claim chips, title, expected-catalogue-impact classification card, clickable source w/ attributes (name, type, tier, url, reliability), affected-subcap chips, reasoning + consultant loop | CP evidence(kind=news) w/ source sub-object {name,type,tier,url,ers,fetched_at}, catalogue_impact (R5), affected subcap + impact score.
+
+ | Trends monitor | Trend cards (status, evidence count, window) · subcap chips · evidence-cluster drilldown · consultant loop | CP trend rows + trend_subcap.emergent (the only synthetic-story gate).
+
+ | AI suggestions | KPI tiles · suggestion cards (kind, gate result, breaking flag, cost, rationale, labels) · Apply/Reject/Review · reasoning | CP suggestion , validation_gate_run , reasoning_chain . Apply re-runs G1–G8 server-side, writes snapshot.
+
+ | Benchmarks studio | Distribution chart w/ CI band · methodology panel · adversary-verdict card · coverage-gap banner | CP evidence(kind=benchmark) + adversarial review (Opus).
+
+### 13.5 Synthesis · Lifecycle · Versioning · Reasoning · Sandbox
+
+ | Page | Components | Sources & relations
+
+ | Quarterly digest | Quarter selector · Opus exec summary · cross-SV theme banner · collapsible per-SV priority cards w/ adversarial verdict · signed export | CP digest synthesis over evidence+suggestions; export_manifest (HMAC-signed).
+
+ | Lifecycle manager | KPI tiles · most-delivered subcaps × offering coverage bars · AI-bundled offering proposal w/ co-delivery basis · promote/commit | DP offering + offering_subcap · CP delivery ( story /SOW). Relation: maps_to_offering . See §7.6 offerings ingest.
+
+ | Vendor intelligence | Vendor logo cards + sparklines · 3 filters (vendor/pillar/event-type) · dev cards (8 event types) → subcaps · vendor×subcap impact heatmap drill · loop/commit | CP evidence(kind=vendor_event) typed; mapped to DP subcap / l3_platform .
+
+ | Client journey atlas | Client list · vendor stack · engagement timeline · DMA-packet export (signed JSON) | CP entity-resolved client → subcaps touched; export_manifest .
+
+ | Version timeline / Diff | Version cards w/ per-pillar counts · revert admin · diff added/removed/modified · lineage note | CP catalogue_version , crosswalk _R1_Source_Reference . v5 ↔ v7 — see §5.3.
+
+ | Change flags · Gates · QA | Flag inbox + resolution workflows (edge approve, contradiction resolve) · gate pass/warn/fail table · QA KPIs (pass-rate, hallucination, spend admin , MRR) | CP pending_edge , validation_gate_run , suggestion , audit, eval metrics.
+
+ | Reasoning viewer · AI chat | Reasoning modal (steps, evidence rows, checks) · chat w/ inline citations, tier, FACT, reasoning link, streamed | CP reasoning_chain ; chat over hybrid retrieval (DP ontology + CP evidence).
+
+ | What-if simulator · Schema mapping admin · Settings | Action editor + cascade preview · field-map table (editable) + relation_def CRUD + carry-forward stats · prefs + ingestion + source registry | CP relation_def , catalogue_sheet , carry_forward , users.preferences , sources. Cascade engine reads relation_def .
+
+## 14 State, caching & real-time
+
+- Server cache : TanStack Query keyed by [version, resource, filters] . The active version is part of every catalogue key so a version switch refetches cleanly.
+
+- Client state : Zustand for ephemeral UI (open tab, drawer, selected node). Filter state is URL-serialized (pillar, sv, lens, page, search) for deep links — mirror the prototype's hash params.
+
+- Heavy lists (stories 14k, use cases) are server-paginated & server-filtered — never ship the full set to the client (SLO §15).
+
+- Long jobs (provision, carry-forward, monthly cycle, digest) are async Cloud Run Jobs — the UI polls ingest_run.status / job status and shows progress, exactly like the onboarding stepper.
+
+- Chat is streamed; digest/what-if may be long — show the reasoning/progress affordances the prototype already has.
+
+## 15 Observability & SLOs
+
+ | Objective | Target | How met
+
+ | Page render (read surfaces) | p95 < 1s | Server-side pagination; denormalised counts for heavy pages
+
+ | Grounded chat / search | p95 < 3s | Hybrid retrieval in-engine; streamed responses
+
+ | Provision a version | Bounded | Transactional schema build + bulk load
+
+ | Availability | 99.5% monthly | Single-region Cloud Run + health checks; jobs retried via DLQ
+
+ | Cost envelope | Alert 80% · throttle 90% | Per-feature attribution; degraded-mode auto-routing
+
+ Eval harness: a golden dataset of subcap→evidence and subcap→story pairs backs an offline harness; retrieval quality tracked as MRR (drop → contrastive embedding fine-tune). A fixed set of catalogue-grounded chat queries must pass before any release. Every model call & gate run logs to an immutable audit table.
+
+## 16 Environments & hermetic dev
+
+ Three environments — dev (hermetic LLM mode: the full stack runs with no provider credentials , model stack stubbed deterministically), staging (real providers, synthetic admin), production . The same container image is promoted; only config/secrets differ. Provider availability is a config switch, not an architectural dependency. Tip the delivered prototype is effectively the hermetic-dev frontend — deterministic data, no provider calls — so it doubles as the dev-mode UI.
+
+## 17 Build sequence (phased, FR-mapped)
+
+ | Phase | Scope | FRs
+
+ | 1 · Foundation | Cloud Run service + Firebase auth; schema-mapping engine + per-version provisioning ; canonical Jira ingest + carry-forward; relational read surfaces (mission control, workbench, value chain, platforms, use cases, story library); versioning & diff. | FR-1…6, FR-22
+
+ | 2 · Evidence & reasoning | SOW/news/vendor/benchmark ingestion; ERS + reasoning chains; 8 gates; suggestion lifecycle; monthly cycle & quarterly digest; lifecycle manager; QA dashboard; reasoning viewer; chat. | FR-7…17
+
+ | 3 · Live & automation | Continuous Jira ingestion; client journey & DMA packet; admin knowledge graph (Layer B + gates); what-if sandbox. | FR-18…21
+
+#### Recommended first two sprints
+
+- Stand up the Cloud Run skeleton (FastAPI + static SPA), Firebase domain-restricted auth, control-plane migrations, and /api/me . Wire the prototype's Login + shell to real auth.
+
+- Build the schema-mapping engine + provisioning end to end against the real v7 workbooks, then carry-forward. The moment a version provisions, point the catalogue read endpoints at it and the entire read-side of the prototype lights up.
+
+## 18 Required document refinements
+
+ Gaps / inconsistencies found while reconciling the five source documents against the build. None block Phase 1; each needs a decision recorded.
+
+ | # | Finding | Recommended resolution
+
+ | R1 | Platform-name parsing in the source workbooks. The L3 platform cell is newline-delimited [L3-ID] Name with trailing (count: N) ; a naive parser captures multi-line garbage (codes + counts) into names. The prototype's first dataset hit this. | Standardise the L3 cell parser: split on newline, strip the [L3-…] token and (count: N) suffix. Document the cell grammar in the Backend Schema doc so every ingester treats it identically.
+
+ | R2 | Relation vocabulary drift. The TRD/KG prose uses matures_through / mapped_to ; schema.sql 's relation_type enum uses addresses (maturity) and custom (value chain). The prototype follows the SQL enum. | Make schema.sql the single source for relation verbs; update TRD §9 prose to match the enum, or add the missing verbs to the enum explicitly.
+
+ | R3 | Subcap count reconciliation. PRD/headline says ~851 subcaps; v5 vs v7 per-pillar counts differ (v7 adds the FC subvertical: +11). Diff/lineage must state which version a count refers to. | Always qualify counts by version in copy and API. The control-plane crosswalk already supports this — surface it in the diff payload.
+
+ | R4 | Carry-forward thresholds are uncalibrated (TRD §15). 0.86 / 0.70 are placeholders. | Calibrate on the real v5→v7 run; keep them in config, not code so they tune without a deploy.
+
+ | R5 | News "expected catalogue impact" classification is implied by the PRD (descriptor revision / new use case / net-new subcap) but not enumerated. | Add an explicit catalogue_impact enum on the news/evidence model (the prototype demonstrates: Descriptor revision · New use-case candidate · Net-new subcap · Retire candidate · Watchlist/no-change) and let it drive the suggestion kind.
+
+ | R6 | Source attributes on evidence. The PRD shows source tier but the surfaceable attributes (canonical name, type, URL, reliability/ERS, last-checked) aren't fully specified for the News/Sources UI. | Define the evidence.source sub-object: {name,type,tier,url,ers,fetched_at} ; the prototype's News watch shows the intended rendering.
+
+ | R7 | Cost visibility scope. PRD treats cost as an admin/governance concern but the UI brief shows a persistent cost meter. | Confirmed in the prototype: cost meter & per-thread cost are admin-only . Reflect this in the UI/UX brief.
+
+ | R8 | Explorer vs deep-dive. The original UI/UX brief specified them as separate pages; usability testing on the prototype merged them into one workbench. | Adopt the merged "Capability workbench" in the UI/UX brief as canonical; retain a deep-link ( /subcap/{id} ) that opens the workbench focused.
+
+ | R9 | SOW corpus is unenriched. The SOW export is 132 files / 1,075 raw scope items with no subcap link, no claim labels and no confidence — only filename, account, opportunity, task, qty, assumptions. | Build the §7.5 enrichment pipeline (DLP → normalise → embed → match → gate → confirm). Add an evidence(kind=sow_chunk) shape carrying account/opportunity/qty + the proposed subcap matches; do not surface SOW→subcap links until gated.
+
+ | R10 | Offerings are a GTM document, not data. Offerings exist as narrative (Overview / Challenge / Outcomes / Core Capabilities) and aren't yet linked to subcaps. | Ingest per §7.6: create offering rows and match each Core Capability to subcaps via offering_subcap ( maps_to_offering ). This is what makes offering-coverage and the Lifecycle gap analysis real rather than illustrative.
+
+Capability Intelligence Agent · Engineering handoff v1.0 · © 2026 Zennify · Confidential. Companion artefacts: PRD (product decisions, authoritative) · TRD (engineering spec) · Backend Schema + schema.sql (table-level model & DDL) · App Flow (navigation & state contracts) · UI/UX brief (visual system) · the interactive prototype (visual & interaction source of truth).
