@@ -306,6 +306,79 @@ export interface BenchScanStats {
   flagged: number;
 }
 
+export interface VendorProfile {
+  vendor_id: string;
+  name: string;
+  platforms: number;
+  developments_90d: number;
+  subcaps_touched: number;
+  heat: number;
+}
+
+export interface VendorEventItem {
+  id: string;
+  vendor: string;
+  vendor_id: string;
+  event_type: string;
+  type_label: string;
+  title: string;
+  date: string;
+  mag: string;
+  tier: string;
+  label: string;
+  impact_note: string;
+  reliability: number;
+  source: NewsSource;
+  affects: [string, number, string, string][]; // [subcap_id, score, name, mag]
+  chain: string | null;
+}
+
+export interface VendorHeatCell {
+  vendor: string;
+  subcap_id: string;
+  name: string;
+  score: number;
+}
+
+export interface VendorIntelResp {
+  vendors: VendorProfile[];
+  items: VendorEventItem[];
+  heat: VendorHeatCell[];
+  types: { v: string; l: string }[];
+  scan: NewsScan;
+}
+
+export interface VendorScanStats {
+  version: string;
+  fetched: number;
+  created: number;
+  deduped: number;
+  mapped: number;
+  review: number;
+  flagged: number;
+  registry_flags: number;
+}
+
+export interface SourceRow {
+  key: string;
+  name: string;
+  type: string;
+  tier: string;
+  enabled: boolean;
+  mode: string; // recorded | live
+  origin_active: string;
+  origin_recorded: string;
+  origin_live: string;
+  cadence: string;
+  cron: string | null;
+  next_run: string | null;
+  last_run: string | null;
+  last_status: string | null;
+  last_stats: Record<string, number>;
+  status: string; // ok | stale | never_run | disabled
+  notes: string;
+}
+
 export interface ChatCitation {
   subcap_id: string;
   name: string;
@@ -685,6 +758,21 @@ export const api = {
     http<BenchScanStats>(`/api/admin/evidence/scan/benchmarks/${version}`, { method: 'POST' }),
   benchmarkLoop: (id: string): Promise<NewsLoopOut> =>
     http<NewsLoopOut>(`/api/evidence/benchmark/${id}/loop`, { method: 'POST' }),
+  vendorIntel: (eventType?: string): Promise<VendorIntelResp> => {
+    const qs = new URLSearchParams({ kind: 'vendor_event' });
+    if (eventType && eventType !== 'all') qs.set('event_type', eventType);
+    return http<VendorIntelResp>(`/api/evidence?${qs.toString()}`);
+  },
+  scanVendors: (version: string): Promise<VendorScanStats> =>
+    http<VendorScanStats>(`/api/admin/evidence/scan/vendor/${version}`, { method: 'POST' }),
+  vendorLoop: (id: string): Promise<NewsLoopOut> =>
+    http<NewsLoopOut>(`/api/evidence/vendor/${id}/loop`, { method: 'POST' }),
+  sources: (): Promise<SourceRow[]> => http<SourceRow[]>('/api/admin/sources'),
+  patchSource: (key: string, enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> =>
+    http<{ ok: boolean; enabled: boolean }>(`/api/admin/sources/${key}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
   gates: (): Promise<GatesLog> => http<GatesLog>('/api/gates'),
   qaMetrics: (): Promise<QaMetrics> => http<QaMetrics>('/api/qa/metrics'),
   auditLog: (): Promise<AuditRow[]> => http<AuditRow[]>('/api/audit-log'),

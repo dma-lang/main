@@ -13,7 +13,9 @@ import {
   type QaMetrics,
   type Me,
   type NewsResp,
+  type SourceRow,
   type TrendsResp,
+  type VendorIntelResp,
   type ReasoningChain,
   type PlatformDetail,
   type PlatformRow,
@@ -168,6 +170,41 @@ export function useBenchmarkActions() {
   const scan = useMutation({ mutationFn: api.scanBenchmarks, onSuccess: invalidate });
   const loop = useMutation({ mutationFn: api.benchmarkLoop, onSuccess: invalidate });
   return { scan, loop };
+}
+
+export const useVendorIntel = (eventType: string) =>
+  useQuery<VendorIntelResp>({
+    queryKey: ['vendor-intel', eventType],
+    queryFn: () => api.vendorIntel(eventType),
+    placeholderData: (prev) => prev,
+  });
+
+export function useVendorActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['vendor-intel'] });
+    void qc.invalidateQueries({ queryKey: ['suggestions'] });
+    void qc.invalidateQueries({ queryKey: ['change-flags'] });
+  };
+  const scan = useMutation({ mutationFn: api.scanVendors, onSuccess: invalidate });
+  const loop = useMutation({ mutationFn: api.vendorLoop, onSuccess: invalidate });
+  return { scan, loop };
+}
+
+export const useSources = (enabled: boolean) =>
+  useQuery<SourceRow[]>({
+    queryKey: ['admin-sources'],
+    queryFn: api.sources,
+    enabled,
+  });
+
+export function useSourceActions() {
+  const qc = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: (a: { key: string; enabled: boolean }) => api.patchSource(a.key, a.enabled),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin-sources'] }),
+  });
+  return { toggle };
 }
 
 export const useTrends = (status: string, version: string | null) =>

@@ -13,12 +13,14 @@ import { MissionControl } from './pages/MissionControl';
 import { News } from './pages/News';
 import { Platforms } from './pages/Platforms';
 import { QA } from './pages/QA';
+import { Settings } from './pages/Settings';
 import { StoryLibrary } from './pages/StoryLibrary';
 import { SubcapWorkbench } from './pages/SubcapWorkbench';
 import { Suggestions } from './pages/Suggestions';
 import { Surface } from './pages/Surface';
 import { Trends } from './pages/Trends';
 import { UseCases } from './pages/UseCases';
+import { Vendors } from './pages/Vendors';
 import { VersionTimeline } from './pages/VersionTimeline';
 import { NAV } from './shell/nav';
 import { Shell } from './shell/Shell';
@@ -41,6 +43,8 @@ const LIVE: Record<string, ReactElement> = {
   trends: <Trends />,
   benchmarks: <Benchmarks />,
   suggestions: <Suggestions />,
+  vendors: <Vendors />,
+  settings: <Settings />,
   gates: <Gates />,
   qa: <QA />,
 };
