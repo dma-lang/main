@@ -392,6 +392,17 @@ _TIMELINE_SQL = {
         "FROM control.trend_subcap ts JOIN control.trend t ON t.trend_id = ts.trend_id "
         "WHERE ts.version_id = :ver AND ts.subcap_id = :sid"
     ),
+    "sow": (
+        "SELECT 'sow' AS kind, d.signed_date::text AS date, "
+        "(d.account_key || ' · ' || d.title) AS title, "
+        "m.claim_label::text AS claim, m.source_tier::text AS tier, NULL AS mag, "
+        "si.clause AS excerpt, m.chain_id::text AS chain "
+        "FROM control.sow_subcap_match m "
+        "JOIN control.sow_scope_item si ON si.scope_id = m.scope_id "
+        "JOIN control.sow_document d ON d.sow_id = si.sow_id "
+        "WHERE m.version_id = :ver AND m.subcap_id = :sid "
+        "AND m.status IN ('confirmed', 'review')"
+    ),
 }
 
 

@@ -107,6 +107,74 @@ export interface KgResp {
   pending: KgEdge[];
 }
 
+export interface SowDoc {
+  sow_id: string;
+  account_key: string;
+  account_name: string;
+  title: string;
+  sv_code: string | null;
+  signed_date: string | null;
+  status: string;
+  redacted: boolean;
+  items: number;
+  confirmed: number;
+  review: number;
+  unmapped: number;
+}
+
+export interface SowItem {
+  scope_id: string;
+  ordinal: number;
+  clause: string;
+  match_id: string | null;
+  subcap_id: string | null;
+  subcap_name: string | null;
+  similarity: number | null;
+  status: string | null;
+  claim_label: string | null;
+  source_tier: string | null;
+  chain_id: string | null;
+  confirmed_by: string | null;
+}
+
+export interface SowDetail {
+  sow_id: string;
+  account_key: string;
+  account_name: string;
+  title: string;
+  sv_code: string | null;
+  signed_date: string | null;
+  status: string;
+  redacted: boolean;
+  items: SowItem[];
+}
+
+export interface ClientRow {
+  key: string;
+  sows: number;
+  scope_items: number;
+  stories: number;
+  subcaps_touched: number;
+  last_sow: string | null;
+}
+
+export interface ClientJourney {
+  key: string;
+  stories: number;
+  sows: { sow_id: string; title: string; sv_code: string | null; signed_date: string | null; status: string }[];
+  matches: {
+    subcap_id: string;
+    subcap_name: string | null;
+    similarity: number;
+    status: string;
+    claim_label: string;
+    chain_id: string | null;
+    date: string | null;
+    clause: string;
+  }[];
+  top_delivery: { subcap_id: string; subcap_name: string | null; stories: number }[];
+}
+
 export interface WhatIfRef {
   id: string;
   name: string;
@@ -822,6 +890,17 @@ export const api = {
     http<Me>('/api/me/preferences', { method: 'PATCH', body: JSON.stringify({ preferences }) }),
   versions: (): Promise<VersionInfo[]> => http<VersionInfo[]>('/api/versions'),
   diff: (a: string, b: string): Promise<DiffResp> => http<DiffResp>(`/api/diff/${a}/${b}`),
+  sows: (version: string): Promise<SowDoc[]> => http<SowDoc[]>(`/api/sow?version=${version}`),
+  sowDetail: (id: string, version: string): Promise<SowDetail> =>
+    http<SowDetail>(`/api/sow/${id}?version=${version}`),
+  scanSows: (version: string): Promise<Record<string, number | string>> =>
+    http(`/api/admin/sow/scan/${version}`, { method: 'POST' }),
+  confirmSowMatch: (matchId: string): Promise<{ ok: boolean; status: string }> =>
+    http(`/api/sow/matches/${matchId}/confirm`, { method: 'POST' }),
+  clients: (version: string): Promise<ClientRow[]> =>
+    http<ClientRow[]>(`/api/clients?version=${version}`),
+  clientJourney: (key: string, version: string): Promise<ClientJourney> =>
+    http<ClientJourney>(`/api/clients/${encodeURIComponent(key)}/journey?version=${version}`),
   summary: (v: string): Promise<CatalogueSummary> =>
     http<CatalogueSummary>(`/api/catalogue/${v}/summary`),
   heatmap: (v: string, lens: string, pillar: string, sv: string): Promise<HeatmapResp> => {

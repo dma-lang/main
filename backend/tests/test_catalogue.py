@@ -89,7 +89,7 @@ def test_subcap_timeline_contract(client: TestClient) -> None:
     assert body["subcap_id"] == sid and body["name"]
     assert isinstance(body["events"], list) and isinstance(body["stories"], int)
     for ev in body["events"]:
-        assert ev["kind"] in {"news", "vendor", "suggestion", "benchmark", "trend"}
+        assert ev["kind"] in {"news", "vendor", "suggestion", "benchmark", "trend", "sow"}
         assert {"date", "title", "claim", "tier", "chain"} <= set(ev)
     assert client.get("/api/catalogue/v7/subcaps/NOPE.0.0/timeline").status_code == 404
 

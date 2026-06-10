@@ -7,8 +7,12 @@ import {
   type AuditRow,
   type BenchResp,
   type CatalogueSummary,
+  type ClientJourney,
+  type ClientRow,
   type DiffResp,
   type HeatmapResp,
+  type SowDetail,
+  type SowDoc,
   type KgResp,
   type TimelineResp,
   type WhatIfResp,
@@ -87,6 +91,46 @@ export const useWhatIf = (version: string, subcap: string, action: string, enabl
     queryKey: ['whatif', version, subcap, action],
     queryFn: () => api.whatif(version, subcap, action),
     enabled: enabled && !!version && !!subcap,
+  });
+
+export const useSows = (version: string) =>
+  useQuery<SowDoc[]>({
+    queryKey: ['sows', version],
+    queryFn: () => api.sows(version),
+    enabled: !!version,
+  });
+
+export const useSowDetail = (id: string | null, version: string) =>
+  useQuery<SowDetail>({
+    queryKey: ['sow', id, version],
+    queryFn: () => api.sowDetail(id ?? '', version),
+    enabled: !!id && !!version,
+  });
+
+export function useSowActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['sows'] });
+    void qc.invalidateQueries({ queryKey: ['sow'] });
+    void qc.invalidateQueries({ queryKey: ['clients'] });
+  };
+  const scan = useMutation({ mutationFn: api.scanSows, onSuccess: invalidate });
+  const confirm = useMutation({ mutationFn: api.confirmSowMatch, onSuccess: invalidate });
+  return { scan, confirm };
+}
+
+export const useClients = (version: string) =>
+  useQuery<ClientRow[]>({
+    queryKey: ['clients', version],
+    queryFn: () => api.clients(version),
+    enabled: !!version,
+  });
+
+export const useClientJourney = (key: string | null, version: string) =>
+  useQuery<ClientJourney>({
+    queryKey: ['client-journey', key, version],
+    queryFn: () => api.clientJourney(key ?? '', version),
+    enabled: !!key && !!version,
   });
 
 export const useDiff = (a: string, b: string) =>
