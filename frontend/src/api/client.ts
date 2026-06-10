@@ -264,6 +264,48 @@ export interface TrendEvidenceResp {
   evidence: TrendEvidenceItem[];
 }
 
+export interface BenchItem {
+  id: string;
+  metric: string;
+  unit: string;
+  segment: string;
+  date: string;
+  n: number;
+  observations: number[];
+  p25: number;
+  p50: number;
+  p75: number;
+  ci_low: number | null; // null = suppressed (thin coverage — no false precision)
+  ci_high: number | null;
+  thin: boolean;
+  coverage_note: string | null;
+  methodology: string; // "not documented" when the source did not publish one
+  verdict: string; // BENCHMARK | INDICATIVE | EXPLORATORY | pending
+  verdict_note: string;
+  label: string;
+  tier: string;
+  ers: number;
+  reliability: number;
+  source: NewsSource;
+  affects: [string, number, string][]; // [subcap_id, score, name]
+  chain: string | null;
+}
+
+export interface BenchResp {
+  items: BenchItem[];
+  segments: string[];
+  scan: NewsScan;
+}
+
+export interface BenchScanStats {
+  version: string;
+  fetched: number;
+  created: number;
+  deduped: number;
+  mapped: number;
+  flagged: number;
+}
+
 export interface ChatCitation {
   subcap_id: string;
   name: string;
@@ -634,6 +676,15 @@ export const api = {
     }),
   trendLoop: (id: string): Promise<NewsLoopOut> =>
     http<NewsLoopOut>(`/api/trends/${id}/loop`, { method: 'POST' }),
+  benchmarks: (segment?: string): Promise<BenchResp> => {
+    const qs = new URLSearchParams({ kind: 'benchmark' });
+    if (segment && segment !== 'all') qs.set('segment', segment);
+    return http<BenchResp>(`/api/evidence?${qs.toString()}`);
+  },
+  scanBenchmarks: (version: string): Promise<BenchScanStats> =>
+    http<BenchScanStats>(`/api/admin/evidence/scan/benchmarks/${version}`, { method: 'POST' }),
+  benchmarkLoop: (id: string): Promise<NewsLoopOut> =>
+    http<NewsLoopOut>(`/api/evidence/benchmark/${id}/loop`, { method: 'POST' }),
   gates: (): Promise<GatesLog> => http<GatesLog>('/api/gates'),
   qaMetrics: (): Promise<QaMetrics> => http<QaMetrics>('/api/qa/metrics'),
   auditLog: (): Promise<AuditRow[]> => http<AuditRow[]>('/api/audit-log'),

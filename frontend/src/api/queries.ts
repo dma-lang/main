@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   api,
   type AuditRow,
+  type BenchResp,
   type CatalogueSummary,
   type ChangeFlagsResp,
   type ChatResponse,
@@ -147,6 +148,25 @@ export function useNewsActions() {
   };
   const scan = useMutation({ mutationFn: api.scanNews, onSuccess: invalidate });
   const loop = useMutation({ mutationFn: api.newsLoop, onSuccess: invalidate });
+  return { scan, loop };
+}
+
+export const useBenchmarks = (segment: string) =>
+  useQuery<BenchResp>({
+    queryKey: ['benchmarks', segment],
+    queryFn: () => api.benchmarks(segment),
+    placeholderData: (prev) => prev,
+  });
+
+export function useBenchmarkActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['benchmarks'] });
+    void qc.invalidateQueries({ queryKey: ['suggestions'] });
+    void qc.invalidateQueries({ queryKey: ['change-flags'] });
+  };
+  const scan = useMutation({ mutationFn: api.scanBenchmarks, onSuccess: invalidate });
+  const loop = useMutation({ mutationFn: api.benchmarkLoop, onSuccess: invalidate });
   return { scan, loop };
 }
 

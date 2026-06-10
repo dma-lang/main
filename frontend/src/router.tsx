@@ -3,6 +3,7 @@
 import type { ReactElement } from 'react';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
+import { Benchmarks } from './pages/Benchmarks';
 import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
 import { ChangeFlags } from './pages/ChangeFlags';
 import { Chat } from './pages/Chat';
@@ -38,6 +39,7 @@ const LIVE: Record<string, ReactElement> = {
   chat: <Chat />,
   news: <News />,
   trends: <Trends />,
+  benchmarks: <Benchmarks />,
   suggestions: <Suggestions />,
   gates: <Gates />,
   qa: <QA />,
