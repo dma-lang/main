@@ -48,7 +48,10 @@ gcloud auth list                       # confirm the ACTIVE account is the inten
 
 ## 3. One-time environment bootstrap (HUMAN-GATED)
 
-Run once per environment, in order. Skip any step whose validation already passes.
+Run once per environment, in order. Skip any step whose validation already passes. These execute
+against **live GCP**, so a project's defaults or org policies can surface here (region-specific
+machine types, the Cloud SQL edition default in 3.5, org-policy constraints) — that's what each
+step's **Validate** block is for: run it, confirm the expected output, then move on.
 
 ### 3.1 Enable APIs
 
@@ -131,8 +134,15 @@ gcloud compute networks vpc-access connectors create cia-svpc \
 
 ### 3.5 Cloud SQL — Postgres 16 + pgvector, private IP, backups + PITR
 
+`--edition=ENTERPRISE` is REQUIRED: the custom tier `db-custom-2-7680` (2 vCPU / 7.5 GB, right-
+sized for ~10–30 users) is only valid on the Enterprise edition. Without it the project may default
+to **Enterprise Plus**, which rejects custom tiers with `Invalid Tier ... for (ENTERPRISE_PLUS)
+Edition`. (Enterprise Plus would need a predefined tier like `db-perf-optimized-N-2` and costs more
+— not needed here.) Each command waits for the previous one; the create takes a few minutes.
+
 ```bash
 gcloud sql instances create cia-pg \
+  --edition=ENTERPRISE \
   --database-version=POSTGRES_16 --tier=db-custom-2-7680 --region="$REGION" \
   --network=default --no-assign-ip \
   --backup --backup-start-time=03:00 --enable-point-in-time-recovery \
@@ -145,12 +155,16 @@ PRIVATE_IP="$(gcloud sql instances describe cia-pg --format='value(ipAddresses[0
 
 pgvector ships with Cloud SQL PG16; migrations run `CREATE EXTENSION IF NOT EXISTS vector`.
 
+The `databases create` / `users create` / `describe` steps only work once the INSTANCE exists — if
+the create above fails, they cascade into 403/404 errors against the missing `cia-pg`. Fix the
+create first, then re-run them (all idempotent).
+
 **Validate:**
 
 ```bash
 gcloud sql instances describe cia-pg \
-  --format='value(state, settings.ipConfiguration.ipv4Enabled, settings.backupConfiguration.enabled, settings.backupConfiguration.pointInTimeRecoveryEnabled)'
-# expect: RUNNABLE  False  True  True     (private-only, backups on, PITR on)
+  --format='value(state, settings.edition, settings.ipConfiguration.ipv4Enabled, settings.backupConfiguration.enabled, settings.backupConfiguration.pointInTimeRecoveryEnabled)'
+# expect: RUNNABLE  ENTERPRISE  False  True  True   (Enterprise, private-only, backups on, PITR on)
 echo "$PRIVATE_IP"                                    # a 10.x address
 ```
 
@@ -439,6 +453,8 @@ scratch service at it; run `BASE=<scratch> python3 scripts/qa_walk.py`.
 
 | Symptom | Likely cause | Fix | Re-validate |
 |---|---|---|---|
+| `sql instances create` → `Invalid Tier (db-custom-…) for (ENTERPRISE_PLUS)` | project defaults to Enterprise Plus, which rejects custom tiers | add `--edition=ENTERPRISE` (§3.5) | §3.5 |
+| `sql databases/users create` → 403/404 on `cia-pg` | the instance create above failed, so there is no instance | fix the create, then re-run these (idempotent) | §3.5 |
 | `healthz` → `db: down` | wrong `DATABASE_URL` secret / VPC connector missing | check secret version; `vpc-access connectors describe cia-svpc` | §7.1 |
 | `/api/me` → 200 without token | `AUTH_MODE=dev` leaked into the service env | remove it (`gcloud run services update cia --remove-env-vars AUTH_MODE`) | §7.1 (expect 401) |
 | 403 `account not permitted` on login | non-domain or unverified email | use `@zennify.com` verified account | §7.2 |
