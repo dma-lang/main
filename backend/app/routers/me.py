@@ -27,14 +27,19 @@ class PreferencesUpdate(BaseModel):
 @router.get("/config")
 async def client_config(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     """Public bootstrap config for the SPA login: which auth mode is active and, in live mode,
-    the public Firebase web config (the web API key is public by design — security comes from
-    token VERIFICATION server-side, which fails closed)."""
+    the FULL public Firebase web config (these values ship to every browser by design — security
+    comes from token VERIFICATION server-side, which fails closed). Defaults are hardcoded in
+    settings.py; env vars override them on rotation."""
     firebase = None
     if not settings.is_dev_auth and settings.firebase_project_id and settings.firebase_web_api_key:
         firebase = {
-            "project_id": settings.firebase_project_id,
             "api_key": settings.firebase_web_api_key,
-            "auth_domain": f"{settings.firebase_project_id}.firebaseapp.com",
+            "auth_domain": settings.firebase_auth_domain,
+            "project_id": settings.firebase_project_id,
+            "storage_bucket": settings.firebase_storage_bucket,
+            "messaging_sender_id": settings.firebase_messaging_sender_id,
+            "app_id": settings.firebase_app_id,
+            "measurement_id": settings.firebase_measurement_id,
         }
     return {
         "auth_mode": "dev" if settings.is_dev_auth else "live",

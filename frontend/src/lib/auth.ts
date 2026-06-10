@@ -7,7 +7,15 @@ import type { User } from 'firebase/auth';
 export interface ClientConfig {
   auth_mode: 'dev' | 'live';
   auth_email_domain: string;
-  firebase: { project_id: string; api_key: string; auth_domain: string } | null;
+  firebase: {
+    api_key: string;
+    auth_domain: string;
+    project_id: string;
+    storage_bucket?: string;
+    messaging_sender_id?: string;
+    app_id?: string;
+    measurement_id?: string;
+  } | null;
 }
 
 let config: ClientConfig | null = null;
@@ -27,11 +35,22 @@ async function initFirebase(cfg: ClientConfig): Promise<void> {
     import('firebase/app'),
     import('firebase/auth'),
   ]);
+  // The full public web config, served by /api/config (hardcoded server-side, env-overridable).
   const app = initializeApp({
     apiKey: cfg.firebase.api_key,
     authDomain: cfg.firebase.auth_domain,
     projectId: cfg.firebase.project_id,
+    storageBucket: cfg.firebase.storage_bucket,
+    messagingSenderId: cfg.firebase.messaging_sender_id,
+    appId: cfg.firebase.app_id,
+    measurementId: cfg.firebase.measurement_id,
   });
+  if (cfg.firebase.measurement_id) {
+    // Analytics is optional + lazy; isSupported() guards non-browser/blocked environments.
+    void import('firebase/analytics').then(({ getAnalytics, isSupported }) =>
+      isSupported().then((ok) => ok && getAnalytics(app)).catch(() => undefined),
+    );
+  }
   await new Promise<void>((resolve) => {
     const off = onAuthStateChanged(getAuth(app), (u) => {
       user = u;
