@@ -67,8 +67,16 @@ export function Header() {
     ...SUBVERTICALS.map((s) => ({ v: s.code, l: `${s.code} · ${s.name}` })),
   ];
   const versions = versionsQ.data ?? [];
-  const versionOpts = versions.length
-    ? versions.map((v) => ({ v: v.version_id, l: `${v.version_id} · ${v.status}` }))
+  const sortedVersions = [...versions].sort(
+    (a, b) =>
+      (parseInt(b.version_id.replace(/\D/g, ''), 10) || 0) -
+      (parseInt(a.version_id.replace(/\D/g, ''), 10) || 0),
+  );
+  const versionOpts = sortedVersions.length
+    ? sortedVersions.map((v, i) => ({
+        v: v.version_id,
+        l: `${v.version_id} · ${i === 0 ? 'active' : 'legacy'}`,
+      }))
     : [{ v: '', l: 'no catalogue yet' }];
 
   return (

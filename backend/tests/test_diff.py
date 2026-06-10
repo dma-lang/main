@@ -28,9 +28,16 @@ SCRATCH = "vdiff"
 
 @pytest.fixture(scope="module")
 def two_versions() -> Iterator[None]:
+    import shutil
+
     from app import migrate
+    from app.services.provision import _SEED_DIR
 
     migrate.run()
+    # seeds are strictly per-version (no silent fallback), so the scratch version gets an
+    # explicit copy of the v7 seed — identical catalogues -> an empty diff, by construction
+    scratch_seed = _SEED_DIR / f"catalogue_{SCRATCH}.json.gz"
+    shutil.copyfile(_SEED_DIR / "catalogue_v7.json.gz", scratch_seed)
 
     async def _setup() -> None:
         db.init_engine()
@@ -79,9 +86,12 @@ def two_versions() -> Iterator[None]:
                 )
         await db.dispose_engine()
 
-    asyncio.run(_setup())
-    yield
-    asyncio.run(_teardown())
+    try:
+        asyncio.run(_setup())
+        yield
+    finally:
+        scratch_seed.unlink(missing_ok=True)
+        asyncio.run(_teardown())
 
 
 @pytest.fixture

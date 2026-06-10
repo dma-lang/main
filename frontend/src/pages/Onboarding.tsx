@@ -24,7 +24,7 @@ export function Onboarding() {
   const ui = useUi();
   const versions = useVersions();
   const [step, setStep] = useState(0);
-  const [target] = useState('v7');
+  const [target, setTarget] = useState('v7');
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<Record<string, number | string> | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -38,7 +38,10 @@ export function Onboarding() {
     try {
       const out = await api.uploadCatalogue(target, f);
       setUploaded(out);
-      toast(`Received ${out.workbooks.length} workbook(s) — pillars ${out.pillars_recognised.join(', ') || '—'}`);
+      toast(
+        `Received ${out.workbooks.length} workbook(s) — pillars ${out.pillars_recognised.join(', ') || '—'}` +
+          (out.subcaps_parsed ? ` · ${out.subcaps_parsed} subcaps` : ''),
+      );
     } catch (e) {
       toast('Upload failed: ' + String((e as Error)?.message ?? e).slice(0, 90));
     } finally {
@@ -150,9 +153,11 @@ export function Onboarding() {
               Upload the four pillar workbooks
             </div>
             <div className="muted" style={{ fontSize: 13, marginBottom: 20, maxWidth: 620, lineHeight: 1.5 }}>
-              The v7 pillar workbooks ship with the catalogue seed. Provisioning brings the version
-              online from that seed and writes its own <span className="mono">cat_{target}</span>{' '}
-              schema. The first successful ingest persists for every user — no re-upload.
+              The v5 and v7 pillar workbooks ship as committed seeds; uploading a ZIP of pillar
+              workbooks (or a single .xlsx) creates the seed for any other version. Provisioning
+              brings the version online from its seed and writes its own{' '}
+              <span className="mono">cat_{target}</span> schema. The first successful ingest
+              persists for every user — no re-upload.
             </div>
             <div
               className="card"
@@ -176,8 +181,34 @@ export function Onboarding() {
               <div className="h3" style={{ marginBottom: 4 }}>
                 Provision {target} from the catalogue seed
               </div>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 16 }}>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
                 P1 Strategy · P2 Experience · P3 Operations · P4 Data &amp; AI · .xlsx
+              </div>
+              <div className="row gap8" style={{ justifyContent: 'center', marginBottom: 12 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Target version
+                </span>
+                <input
+                  className="mono"
+                  value={target}
+                  disabled={!isAdmin || busy}
+                  onChange={(e) =>
+                    setTarget(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))
+                  }
+                  style={{
+                    width: 72,
+                    padding: '4px 8px',
+                    fontSize: 12,
+                    background: 'var(--surface-raised)',
+                    border: '1px solid var(--border-medium)',
+                    borderRadius: 6,
+                    color: 'var(--text-primary)',
+                  }}
+                  aria-label="Target catalogue version"
+                />
+                <span className="muted" style={{ fontSize: 11 }}>
+                  e.g. v5, v7, v8 — newest becomes the default
+                </span>
               </div>
               <input
                 ref={fileRef}
@@ -214,8 +245,34 @@ export function Onboarding() {
                   {uploaded.workbooks.length} workbook(s) received
                   {uploaded.pillars_recognised.length
                     ? ` — pillars ${uploaded.pillars_recognised.join(', ')}`
-                    : ''}{' '}
-                  · recorded in the source registry. {uploaded.note}
+                    : ''}
+                  {uploaded.subcaps_parsed ? ` · ${uploaded.subcaps_parsed} subcaps parsed` : ''} ·
+                  recorded in the source registry. {uploaded.note}
+                </div>
+              )}
+              {uploaded && uploaded.id_reconciliations.length > 0 && (
+                <div className="banner info" style={{ marginTop: 8, textAlign: 'left' }}>
+                  <Icon n="branch" s={14} />
+                  ID governance: {uploaded.id_reconciliations.length} colliding id(s) reconciled by
+                  name against the governing register (ids are never reused or recycled) —{' '}
+                  {uploaded.id_reconciliations
+                    .slice(0, 3)
+                    .map((r) => `${r.source_id} → ${r.assigned_id} (“${r.name}”)`)
+                    .join('; ')}
+                  {uploaded.id_reconciliations.length > 3 ? ' …' : ''}. Each is recorded in the
+                  version crosswalk at provision.
+                </div>
+              )}
+              {uploaded && uploaded.id_conflicts.length > 0 && (
+                <div className="banner warn" style={{ marginTop: 8, textAlign: 'left' }}>
+                  <Icon n="alert" s={14} />
+                  {uploaded.id_conflicts.length} id conflict(s) need a human decision (kept out of
+                  the seed, never silently dropped):{' '}
+                  {uploaded.id_conflicts
+                    .slice(0, 3)
+                    .map((c) => `${c.source_id} “${c.name}” in ${c.file}`)
+                    .join('; ')}
+                  {uploaded.id_conflicts.length > 3 ? ' …' : ''}
                 </div>
               )}
             </div>

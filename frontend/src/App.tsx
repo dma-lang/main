@@ -35,7 +35,16 @@ function Authed({ me }: { me: Me }) {
 
   useEffect(() => {
     const vs = versions.data;
-    if (vs && vs.length > 0 && !version) setVersion(vs[0].version_id);
+    // Default to the MOST RECENT catalogue version — highest version number, not latest
+    // provisioned row (re-provisioning legacy v5 must never steal the default from v7).
+    if (vs && vs.length > 0 && !version) {
+      const newest = [...vs].sort(
+        (a, b) =>
+          (parseInt(b.version_id.replace(/\D/g, ''), 10) || 0) -
+          (parseInt(a.version_id.replace(/\D/g, ''), 10) || 0),
+      )[0];
+      setVersion(newest.version_id);
+    }
   }, [versions.data, version, setVersion]);
 
   return <RouterProvider router={router} />;

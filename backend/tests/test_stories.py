@@ -65,25 +65,68 @@ def client(carried: dict[str, Any]) -> Iterator[TestClient]:
 @needs_db
 def test_carry_summary(carried: dict[str, Any]) -> None:
     # Exact, because the seed is the canonical 14,406-row corpus committed to the repo.
+    # 13,656 carry natively; the 750 whose subvertical-suffixed subcap ids are absent from v7
+    # (P3C1.8.PEN1/PEN2 …) fall through to the embedding nearest-neighbour pass — never dropped.
     assert carried["stories_ingested"] == 14406
-    assert carried["confirmed"] == 13656
-    assert carried["unmapped"] == 750
-    assert carried["confirmed"] + carried["unmapped"] == carried["stories_ingested"]
+    assert carried["confirmed"] == 14406
+    assert carried["unmapped"] == 0
+    total = carried["confirmed"] + carried["review"] + carried["unmapped"]
+    assert total == carried["stories_ingested"]
+    # The v7 workbooks' embedded synthetic stories ingest alongside, labelled, never mixed.
+    assert carried["synthetic_ingested"] == 4552
+
+
+@needs_db
+def test_nearest_neighbour_via_recorded(carried: dict[str, Any]) -> None:
+    # The NN fallback is auditable: carries it resolved say so, with a similarity in-band.
+    async def _q() -> list[dict[str, Any]]:
+        db.init_engine()
+        engine = db.get_engine()
+        assert engine is not None
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT via, count(*) AS n, min(similarity) AS lo, max(similarity) AS hi "
+                        "FROM control.story_subcap_carry c "
+                        "JOIN control.story s ON s.story_key = c.story_key "
+                        "WHERE c.target_version = 'v7' AND NOT s.is_synthetic "
+                        "GROUP BY via ORDER BY via"
+                    )
+                )
+            ).mappings()
+            out = [dict(r) for r in rows]
+        await db.dispose_engine()
+        return out
+
+    by_via = {r["via"]: r for r in asyncio.run(_q())}
+    assert by_via["native"]["n"] == 13656
+    nn = by_via["nearest_neighbour"]
+    assert nn["n"] == 750
+    assert float(nn["lo"]) >= 0.70  # gated: only confirm/review bands carry a subcap
 
 
 @needs_db
 def test_carry_idempotent(carried: dict[str, Any]) -> None:
-    async def _rerun() -> int:
+    async def _rerun() -> tuple[int, int]:
         db.init_engine()
         await stories.carry_forward("v7")
         engine = db.get_engine()
         assert engine is not None
         async with engine.connect() as conn:
-            n = (await conn.execute(text("SELECT count(*) FROM control.story"))).scalar()
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FILTER (WHERE NOT is_synthetic) AS jira, "
+                        "count(*) FILTER (WHERE is_synthetic) AS synthetic FROM control.story"
+                    )
+                )
+            ).one()
         await db.dispose_engine()
-        return int(n or 0)
+        return int(row.jira), int(row.synthetic)
 
-    assert asyncio.run(_rerun()) == 14406  # re-run upserts, never duplicates
+    # re-run upserts, never duplicates — and never blurs the Jira/synthetic boundary
+    assert asyncio.run(_rerun()) == (14406, 4552)
 
 
 @needs_db
@@ -106,8 +149,8 @@ def test_detail_n_stories_lights_up(client: TestClient) -> None:
 
 
 @needs_db
-def test_unmapped_subcap_has_no_stories(client: TestClient) -> None:
-    # P3C1.8.PEN1/PEN2 subverticals are absent from v7 -> those stories are unmapped, never dropped.
+def test_undelivered_subcap_has_no_stories(client: TestClient) -> None:
+    # A subcap with no delivery history shows an honest zero, not borrowed counts.
     r = client.get("/api/catalogue/v7/subcaps/P1C1.1.1/stories")
     assert r.status_code == 200
     assert r.json()["total"] == 0
@@ -127,10 +170,59 @@ def test_lifecycle(client: TestClient) -> None:
 @needs_db
 def test_story_library_endpoint(client: TestClient) -> None:
     body = client.get("/api/stories?size=5").json()
-    assert body["total"] == 14406  # the canonical corpus (synthetic excluded)
+    assert body["total"] == 14406  # the canonical corpus (synthetic excluded by default)
+    assert (body["jira_total"], body["synthetic_total"]) == (14406, 4552)
     assert (body["high"], body["medium"], body["low"]) == (12417, 1873, 116)
     assert len(body["buckets"]) == 6 and sum(body["buckets"]) == 14406
     assert len(body["items"]) == 5
+    assert all(r["is_synthetic"] is False for r in body["items"])
     # filters narrow the analysis set
     hi = client.get("/api/stories?conf=HIGH&pillar=P3&min_composite=2.5&size=1").json()
     assert 0 < hi["total"] < body["total"]
+
+
+@needs_db
+def test_story_library_synthetic_filter(client: TestClient) -> None:
+    only = client.get("/api/stories?synthetic=only&size=5").json()
+    assert only["total"] == 4552
+    assert all(r["is_synthetic"] is True for r in only["items"])
+    # synthetic keys are the workbook generations, never Jira-prefixed real keys
+    assert all(r["source_system"] != "jira" for r in only["items"])
+    both = client.get("/api/stories?synthetic=include&size=1").json()
+    assert both["total"] == 14406 + 4552
+    bogus = client.get("/api/stories?synthetic=everything&size=1").json()
+    assert bogus["total"] == 14406  # unknown mode falls back to the safe default (exclude)
+
+
+@needs_db
+def test_analysis_view_is_jira_only(carried: dict[str, Any]) -> None:
+    # The analysis-grade view (heatmap, counts, lifecycle, trace…) excludes synthetic rows by
+    # construction — migration 0011 joins control.story and filters is_synthetic.
+    async def _q() -> tuple[int, int]:
+        db.init_engine()
+        engine = db.get_engine()
+        assert engine is not None
+        async with engine.connect() as conn:
+            linked = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM control.story_catalogue_link "
+                        "WHERE version_id = 'v7'"
+                    )
+                )
+            ).scalar()
+            syn_carries = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM control.story_subcap_carry c "
+                        "JOIN control.story s ON s.story_key = c.story_key "
+                        "WHERE c.target_version = 'v7' AND s.is_synthetic"
+                    )
+                )
+            ).scalar()
+        await db.dispose_engine()
+        return int(linked or 0), int(syn_carries or 0)
+
+    linked, syn_carries = asyncio.run(_q())
+    assert linked == 14406  # every analysis row is a real Jira story
+    assert syn_carries > 0  # synthetic carries exist (visible in the library) yet never leak

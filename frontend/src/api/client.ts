@@ -853,6 +853,8 @@ export interface StoryLibraryRow {
   ac_score: number | null;
   sd_score: number | null;
   story_score: number | null;
+  is_synthetic: boolean;
+  source_system: string | null; // jira | gen_stories_v1 | gen_synthesized_gap_fill | …
 }
 
 export interface StoryLibraryPage {
@@ -863,6 +865,8 @@ export interface StoryLibraryPage {
   high: number;
   medium: number;
   low: number;
+  jira_total: number; // the real corpus (analysis-grade)
+  synthetic_total: number; // workbook-embedded synthetic rows (labelled, excluded by default)
   buckets: number[];
 }
 
@@ -872,8 +876,36 @@ export interface StoryLibraryQuery {
   sv?: string;
   min_composite?: number;
   q?: string;
+  synthetic?: 'exclude' | 'include' | 'only';
   page?: number;
   size?: number;
+}
+
+// An ID collision in the source workbook reconciled by name against the governing version's
+// register (subcap ids are never reused, recycled, or invented).
+export interface IdReconciliation {
+  source_id: string;
+  assigned_id: string;
+  name: string;
+  via: string;
+}
+
+export interface IdConflict {
+  source_id: string;
+  name: string;
+  file: string;
+}
+
+export interface UploadManifest {
+  version: string;
+  workbooks: { name: string; bytes: number }[];
+  pillars_recognised: string[];
+  subcaps_parsed: number;
+  synthetic_stories_found: number;
+  id_reconciliations: IdReconciliation[];
+  id_conflicts: IdConflict[];
+  recorded: boolean;
+  note: string;
 }
 
 import { getToken, isLiveAuth } from '../lib/auth';
@@ -982,6 +1014,7 @@ export const api = {
     if (p.sv) qs.set('sv', p.sv);
     if (p.min_composite) qs.set('min_composite', String(p.min_composite));
     if (p.q) qs.set('q', p.q);
+    if (p.synthetic) qs.set('synthetic', p.synthetic);
     qs.set('page', String(p.page ?? 1));
     qs.set('size', String(p.size ?? 10));
     return http<StoryLibraryPage>(`/api/stories?${qs.toString()}`);
@@ -1052,16 +1085,7 @@ export const api = {
     http('/api/exports/digest', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
   provisionVersion: (version: string): Promise<Record<string, number | string>> =>
     http(`/api/admin/provision/${version}`, { method: 'POST' }),
-  uploadCatalogue: async (
-    version: string,
-    file: File,
-  ): Promise<{
-    version: string;
-    workbooks: { name: string; bytes: number }[];
-    pillars_recognised: string[];
-    recorded: boolean;
-    note: string;
-  }> => {
+  uploadCatalogue: async (version: string, file: File): Promise<UploadManifest> => {
     // multipart: let the browser set the boundary — our default JSON header must not apply
     const token = await getToken().catch(() => null);
     const form = new FormData();

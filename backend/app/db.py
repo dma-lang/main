@@ -109,9 +109,12 @@ async def active_catalogue_version() -> str | None:
         async with _engine.connect() as conn:
             result = await conn.execute(
                 text(
+                    # most-recent = highest numeric version id, NOT latest created_at —
+                    # re-provisioning legacy v5 must never steal the default from v7
                     "SELECT version_id FROM control.catalogue_version "
                     "WHERE status IN ('active', 'provisioned') "
-                    "ORDER BY created_at DESC LIMIT 1"
+                    "ORDER BY coalesce(nullif(regexp_replace(version_id, '[^0-9]', '', 'g'), "
+                    "''), '0')::int DESC, created_at DESC LIMIT 1"
                 )
             )
             row = result.first()

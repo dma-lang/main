@@ -43,8 +43,15 @@ async def _fetch(clause: str, params: dict[str, object]) -> Version | None:
 
 
 async def get_active_version() -> Version | None:
-    """The active / most-recent provisioned version, or None (no DB / nothing provisioned)."""
-    return await _fetch("WHERE status IN ('active', 'provisioned') ORDER BY created_at DESC", {})
+    """The active / most-recent provisioned version, or None (no DB / nothing provisioned).
+    Most-recent = highest NUMERIC version id (re-provisioning legacy v5 after v7 must never
+    steal the default), created_at only as the tie-break."""
+    return await _fetch(
+        "WHERE status IN ('active', 'provisioned') "
+        "ORDER BY coalesce(nullif(regexp_replace(version_id, '[^0-9]', '', 'g'), '')::int, 0) "
+        "DESC, created_at DESC",
+        {},
+    )
 
 
 async def resolve_version(version: str) -> Version:

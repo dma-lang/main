@@ -32,8 +32,12 @@ async def list_versions(_user: dict[str, Any] = Depends(get_current_user)) -> li
     if engine is None:
         return []
     sql = (
+        # newest (highest numeric version) first — the governed "most recent" order, so every
+        # consumer defaults the same way the header/active-version resolution does
         "SELECT version_id, label, status, schema_name, created_at::text AS created_at "
-        "FROM control.catalogue_version ORDER BY created_at"
+        "FROM control.catalogue_version "
+        "ORDER BY coalesce(nullif(regexp_replace(version_id, '[^0-9]', '', 'g'), '')::int, 0) "
+        "DESC, created_at DESC"
     )
     async with engine.connect() as conn:
         rows = (await conn.execute(text(sql))).mappings().all()

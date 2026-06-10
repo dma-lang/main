@@ -30,6 +30,8 @@ class StoryLibraryRow(BaseModel):
     ac_score: float | None = None
     sd_score: float | None = None
     story_score: float | None = None
+    is_synthetic: bool = False
+    source_system: str | None = None
 
 
 class StoryLibraryPage(BaseModel):
@@ -40,11 +42,15 @@ class StoryLibraryPage(BaseModel):
     high: int
     medium: int
     low: int
+    jira_total: int  # the real corpus (analysis-grade)
+    synthetic_total: int  # workbook-embedded synthetic/derived rows (labelled, excluded by default)
     buckets: list[int]  # composite distribution, 6 buckets of 0.6
 
 
 _WHERE = (
-    " WHERE is_synthetic = false "
+    # synthetic mode: exclude (default, Jira-only analysis) | include | only
+    " WHERE (CASE :syn WHEN 'include' THEN true WHEN 'only' THEN is_synthetic "
+    "ELSE NOT is_synthetic END) "
     "AND (:pillar = '' OR pillar_id = :pillar) "
     "AND (:conf = '' OR confidence_level::text = :conf) "
     "AND (:sv = '' OR story_sv_code = :sv) "
@@ -60,6 +66,7 @@ async def list_stories(
     sv: str = Query(""),
     min_composite: float = Query(0.0, ge=0),
     q: str = Query(""),
+    synthetic: str = Query("exclude"),
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=50),
     _user: dict[str, Any] = Depends(get_current_user),
@@ -67,9 +74,21 @@ async def list_stories(
     engine = db.get_engine()
     if engine is None:
         return StoryLibraryPage(
-            total=0, page=page, size=size, items=[], high=0, medium=0, low=0, buckets=[0] * 6
+            total=0,
+            page=page,
+            size=size,
+            items=[],
+            high=0,
+            medium=0,
+            low=0,
+            jira_total=0,
+            synthetic_total=0,
+            buckets=[0] * 6,
         )
+    if synthetic not in ("exclude", "include", "only"):
+        synthetic = "exclude"
     params = {
+        "syn": synthetic,
         "pillar": pillar,
         "conf": conf,
         "sv": sv,
@@ -81,7 +100,8 @@ async def list_stories(
         "SELECT story_key, summary, sub_cap_id AS subcap_id, sub_cap_name AS subcap_name, "
         "pillar_id AS pillar, story_sv_code AS sv, composite_score::float AS composite_score, "
         "confidence_level::text AS confidence_level, ac_score::float AS ac_score, "
-        "sd_score::float AS sd_score, story_score::float AS story_score "
+        "sd_score::float AS sd_score, story_score::float AS story_score, "
+        "is_synthetic, source_system "
         "FROM control.story" + _WHERE + " ORDER BY composite_score DESC NULLS LAST, story_key "
         "LIMIT :size OFFSET :off"
     )
@@ -97,7 +117,12 @@ async def list_stories(
         "least(5, greatest(0, floor(coalesce(composite_score, 0) / 0.6)))::int AS bkt "
         "FROM control.story" + _WHERE + ") t"
     )
+    split_sql = text(
+        "SELECT count(*) FILTER (WHERE NOT is_synthetic) AS jira, "
+        "count(*) FILTER (WHERE is_synthetic) AS synthetic FROM control.story"
+    )
     async with engine.connect() as conn:
+        split = (await conn.execute(split_sql)).mappings().first()
         agg = (await conn.execute(agg_sql, params)).mappings().first()
         rows = (
             (await conn.execute(items_sql, {**params, "size": size, "off": (page - 1) * size}))
@@ -105,7 +130,10 @@ async def list_stories(
             .all()
         )
     a = dict(agg) if agg else {}
+    sp = dict(split) if split else {}
     return StoryLibraryPage(
+        jira_total=int(sp.get("jira", 0)),
+        synthetic_total=int(sp.get("synthetic", 0)),
         total=int(a.get("total", 0)),
         page=page,
         size=size,

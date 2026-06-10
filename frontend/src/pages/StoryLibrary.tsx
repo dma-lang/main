@@ -19,6 +19,14 @@ const CONF_OPTS = [
   { v: 'MEDIUM', l: 'MEDIUM' },
   { v: 'LOW', l: 'LOW' },
 ];
+// The corpus split: analysis is Jira-only; the v7 workbooks' synthetic/derived stories are
+// visible only behind an explicit, labelled filter (never mixed into analysis).
+const SYN_OPTS = [
+  { v: 'exclude', l: 'Jira only' },
+  { v: 'include', l: 'Jira + synthetic' },
+  { v: 'only', l: 'Synthetic only' },
+] as const;
+type SynMode = (typeof SYN_OPTS)[number]['v'];
 const PER = 10;
 
 const confClass = (c: string | null) =>
@@ -36,10 +44,18 @@ function StoryDrill({ s }: { s: StoryLibraryRow }) {
     <div className="fade-in" style={{ padding: '12px 16px', background: 'var(--surface-raised)' }}>
       <div className="row gap8" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
         <span className={'chip ' + confClass(s.confidence_level)}>{s.confidence_level} confidence</span>
+        {s.is_synthetic && (
+          <span className="chip orange" title={'Source: ' + (s.source_system ?? 'synthetic')}>
+            synthetic · provisional — not used in analysis
+          </span>
+        )}
         {s.pillar && <span className="chip soft mono">{s.pillar}</span>}
         {s.sv && <span className="chip soft">{s.sv}</span>}
         <span className="muted" style={{ fontSize: 11.5 }}>
           {s.subcap_name ?? s.subcap_id}
+        </span>
+        <span className="muted mono" style={{ fontSize: 10.5 }}>
+          {s.source_system ?? (s.is_synthetic ? 'synthetic' : 'jira')}
         </span>
       </div>
       <div className="row gap16" style={{ maxWidth: 520, marginBottom: 12 }}>
@@ -64,6 +80,7 @@ export function StoryLibrary() {
   const sv = useUi((st) => st.sv);
   const [pillar, setPillar] = useState('all');
   const [conf, setConf] = useState('all');
+  const [syn, setSyn] = useState<SynMode>('exclude');
   const [minQ, setMinQ] = useState(0);
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
@@ -74,7 +91,7 @@ export function StoryLibrary() {
     const t = setTimeout(() => setQ(qInput), 300);
     return () => clearTimeout(t);
   }, [qInput]);
-  useEffect(() => setPage(1), [pillar, conf, minQ, sv, q]);
+  useEffect(() => setPage(1), [pillar, conf, syn, minQ, sv, q]);
 
   const res = useStoryLibrary({
     pillar: pillar === 'all' ? '' : pillar,
@@ -82,6 +99,7 @@ export function StoryLibrary() {
     sv: sv === 'all' ? '' : sv,
     min_composite: minQ,
     q,
+    synthetic: syn,
     page,
     size: PER,
   });
@@ -91,6 +109,8 @@ export function StoryLibrary() {
   const pages = Math.max(1, Math.ceil(total / PER));
   const buckets = data?.buckets ?? [0, 0, 0, 0, 0, 0];
   const bmax = Math.max(1, ...buckets);
+  const jiraTotal = data?.jira_total ?? 0;
+  const synTotal = data?.synthetic_total ?? 0;
 
   return (
     <Page
@@ -98,9 +118,11 @@ export function StoryLibrary() {
       title="Story library"
       intro={
         <>
-          The canonical <b>14,406 real-client Jira stories</b> — the analysis set. Synthetic stories
-          are excluded by default and only appear, labelled provisional, when a trend flags their
-          subcap as emergent. Filter, search and open any story for its quality and match breakdown.
+          The canonical <b>{jiraTotal ? jiraTotal.toLocaleString() : '14,406'} real-client Jira
+          stories</b> — the analysis set. The {synTotal ? synTotal.toLocaleString() + ' ' : ''}
+          synthetic stories shipped inside the v7 workbooks are excluded from analysis by
+          construction; flip the corpus filter to inspect them, always labelled provisional. Filter,
+          search and open any story for its quality and match breakdown.
         </>
       }
     >
@@ -131,6 +153,11 @@ export function StoryLibrary() {
               ))}
             </div>
             <Dropdown value={conf} options={CONF_OPTS} onChange={setConf} />
+            <Dropdown
+              value={syn}
+              options={[...SYN_OPTS]}
+              onChange={(v) => setSyn(v as SynMode)}
+            />
             <div className="row gap8">
               <span className="muted" style={{ fontSize: 12 }}>
                 Min composite
@@ -206,8 +233,15 @@ export function StoryLibrary() {
                       {s.story_key}
                     </td>
                     <td>
-                      <div style={{ maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5 }}>
-                        {s.summary}
+                      <div className="row gap8" style={{ flexWrap: 'nowrap' }}>
+                        {s.is_synthetic && (
+                          <span className="chip orange" style={{ fontSize: 9.5, flexShrink: 0 }}>
+                            synthetic · provisional
+                          </span>
+                        )}
+                        <div style={{ maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5 }}>
+                          {s.summary}
+                        </div>
                       </div>
                     </td>
                     <td>
@@ -259,7 +293,10 @@ export function StoryLibrary() {
 
       <div className="between mt16">
         <span className="muted" style={{ fontSize: 12 }}>
-          Page {page} of {pages} · {total.toLocaleString()} of 14,406 stories
+          Page {page} of {pages} · {total.toLocaleString()} match · corpus{' '}
+          {jiraTotal.toLocaleString()} Jira
+          {synTotal > 0 ? ` + ${synTotal.toLocaleString()} synthetic` : ''}
+          {syn === 'exclude' ? ' (synthetic excluded)' : ''}
         </span>
         <div className="row gap8">
           <button className="btn ghost sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>

@@ -7,6 +7,35 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **Pillar-wise workbook parser (FR-1, real)**: `services/workbooks.py` parses an uploaded ZIP of
+  per-pillar .xlsx capability maps into the provisioning seed — tolerant header aliasing across the
+  v5/v7 variants (incl. the v5 Pillar-3 layout), consolidated/archived files ignored, unparseable
+  rows counted (never invented), corrupt members a clean 400. The upload endpoint now writes the
+  seed it parses (`catalogue_<v>.json.gz`): the upload IS the version's source. Committed seeds for
+  **v5 (837 subcaps / 17 categories)** and v7 (851), both regenerated from the real workbooks.
+- **Subcap-ID governance**: ids are never reused, recycled, or minted. An in-source ID collision
+  (two different subcaps under one id — the real v5 `P2C3.2.IC1` case) is reconciled by name
+  against the governing version's ID register (v7) and recorded in `control.version_crosswalk`
+  (`id-governance:` notes); unresolvable colliders surface as `id_conflicts` for a human, kept out
+  of the seed but never silently dropped. Crosswalk records defer (not fail) when the register's
+  version isn't provisioned yet and land self-healing on its provision; the upload manifest and
+  onboarding surface reconciliations/conflicts.
+- **Jira vs synthetic story split**: the v7 workbooks' embedded story catalogue (4,552 GEN-*/PUB-*
+  rows: gen_stories_v1 / gen_synthesized_gap_fill / use_case_derived_public_validated) ingests as
+  `is_synthetic` + `source_system`, per-version seeds (`stories_synthetic_<v>.json.gz`) extracted
+  on upload. **Analysis is Jira-only by construction** — migration 0011 redefines
+  `story_catalogue_link` to join `control.story` and exclude synthetic rows, so heatmap, counts,
+  lifecycle, trace and gates only ever see the canonical 14,406-row corpus. The story library
+  shows the split (default "Jira only"; `synthetic=include|only` behind an explicit filter, rows
+  chipped "synthetic · provisional").
+- **Carry-forward nearest-neighbour fallback**: carries the id rules can't place run a banded
+  lexical NN over the target catalogue (config `gates.yaml` matching bands, shared with the SOW
+  matcher): v7 now carries 14,406/14,406 (13,656 native + 750 nearest-neighbour, all auditable
+  via `via`/`similarity`); v5 carries clean too.
+- **Most-recent version default everywhere**: highest *numeric* version id (not `created_at`) on
+  `/healthz`, active-version resolution, `/api/versions` order, and the SPA header/default —
+  re-provisioning legacy v5 can never steal the default from v7. Onboarding gains a target-version
+  field (any `v<n>`), so multiple versions provision side by side.
 - **Catalogue read endpoints (version-scoped, F9)**: `GET /api/catalogue/{v}/subcaps` (tree),
   `/subcaps/{id}` (detail), `/summary` (per-pillar counts) over `cat_<version>`; pillar counts match
   the PRD (P1 205 / P2 292 / P3 164 / P4 190). `version_id` validated as a SQL identifier (hardening).

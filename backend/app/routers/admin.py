@@ -216,6 +216,50 @@ async def upload_catalogue(
             if f"pillar {n}" in str(w["name"]).lower() or f"pillar{n}" in str(w["name"]).lower()
         }
     )
+    # Parse the workbooks into the provisioning seed (services/workbooks): the upload is not
+    # just validated, it BECOMES the version's catalogue source. Committed seeds (v5/v7) are
+    # regenerated the same way; a new version's seed lives for the instance's life (re-upload
+    # after a restart — Cloud Run's filesystem is ephemeral).
+    subcaps_parsed = 0
+    synthetic_found = 0
+    parsed: dict[str, Any] = {}
+    if name.endswith(".zip"):
+        import gzip as _gzip
+
+        from app.services import workbooks as wb_service
+        from app.services.provision import _SEED_DIR, load_id_register
+
+        reg_ver, register = load_id_register(exclude_version=version)
+        try:
+            parsed = wb_service.parse_catalogue_zip(raw, version, id_register=register)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        subcaps_parsed = len(parsed["subcaps"])
+        parsed["id_register_version"] = reg_ver
+        with _gzip.open(_SEED_DIR / f"catalogue_{version}.json.gz", "wt", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    k: parsed[k]
+                    for k in (
+                        "pillars",
+                        "catNames",
+                        "subcaps",
+                        "id_reconciliations",
+                        "id_conflicts",
+                        "id_register_version",
+                    )
+                },
+                fh,
+            )
+        # The workbooks may embed a user-story tab: its non-Jira rows are SYNTHETIC stories,
+        # seeded per version and ingested labelled (is_synthetic) at carry — the real corpus
+        # comes only from the Full Story Catalog, so the two never mix.
+        synthetic = wb_service.parse_synthetic_stories_zip(raw)
+        synthetic_found = len(synthetic)
+        if synthetic:
+            syn_path = _SEED_DIR / f"stories_synthetic_{version}.json.gz"
+            with _gzip.open(syn_path, "wt", encoding="utf-8") as fh:
+                json.dump(synthetic, fh)
     engine = db.require_engine()
     async with engine.begin() as conn:
         await conn.execute(
@@ -235,6 +279,20 @@ async def upload_catalogue(
         "version": version,
         "workbooks": workbooks,
         "pillars_recognised": pillars,
+        "subcaps_parsed": subcaps_parsed,
+        "synthetic_stories_found": synthetic_found,
+        "id_reconciliations": parsed.get("id_reconciliations", []),
+        "id_conflicts": parsed.get("id_conflicts", []),
         "recorded": True,
-        "note": "Upload validated and recorded; run Apply & provision to bring the version online.",
+        "note": (
+            f"Parsed {subcaps_parsed} subcaps from the workbooks"
+            + (
+                f" (+{synthetic_found} embedded synthetic stories, labelled, never analysis)"
+                if synthetic_found
+                else ""
+            )
+            + "; run Apply & provision to bring the version online."
+            if subcaps_parsed
+            else "Upload validated and recorded; run Apply & provision to bring the version online."
+        ),
     }

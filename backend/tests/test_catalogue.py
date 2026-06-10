@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -243,31 +244,136 @@ def test_applied_mapping_registry(client: TestClient) -> None:
     assert client.get("/api/admin/mapping/v5").status_code == 404
 
 
+def _mini_book(sheets: dict[str, list[list[Any]]]) -> bytes:
+    import io
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    default = wb.active
+    if default is not None:
+        wb.remove(default)
+    for name, rows in sheets.items():
+        ws = wb.create_sheet(title=name)
+        for row in rows:
+            ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 @needs_db
 def test_catalogue_zip_upload(client: TestClient) -> None:
-    """FR-1: the pillar-wise catalogue uploads as a ZIP of .xlsx workbooks — validated, the
-    pillar files recognised, and the upload recorded as an ingest_run. Bad payloads are clean
+    """FR-1: a pillar-wise ZIP of real .xlsx workbooks parses into the version's seed — subcaps
+    counted, embedded synthetic stories extracted (labelled, never the analysis corpus), id
+    collisions reconciled against the governing register or surfaced as human conflicts. Targets
+    a scratch version so the committed v7/v5 seeds are never touched. Bad payloads are clean
     400s, never 500s."""
     import io
     import zipfile
 
+    from app.services.provision import _SEED_DIR
+
+    hdr = ["Sub-Cap ID", "Sub-Capability", "Description", "Tier", "Category ID", "Category Name"]
+    story_hdr = ["Story_Key", "Source_Type", "Sub_Cap_ID", "Story_Summary", "Match_Confidence"]
+    books = {
+        "Pillar 1 Test.xlsx": _mini_book(
+            {
+                "Capability Map": [
+                    hdr,
+                    ["P1C9.1", "Test Vision", "", "Core", "P1C9", "Test Strategy"],
+                    ["P1C9.2", "Test Operating Model", "", "Core", "P1C9", "Test Strategy"],
+                ],
+                # an embedded story tab: the jira row must be skipped, the rest are synthetic
+                "3_User_Stories_Catalogue": [
+                    story_hdr,
+                    ["TESTJIRA-1", "jira_completed", "P1C9.1", "real — not re-ingested", "HIGH"],
+                    ["GEN-TEST-1", "gen_stories_v1", "P1C9.1", "made up", "MEDIUM"],
+                    ["PUB-TEST-1", "use_case_derived_public_validated", "P1C9.2", "derived", ""],
+                ],
+            }
+        ),
+        # an id collision the v7 register CAN place: 'AI Claims Estimation' is governed as
+        # P2C3.2.IC2 (the real v5 case) — reconciled, never re-minted
+        "Pillar 2 Test.xlsx": _mini_book(
+            {
+                "Capability Map": [
+                    hdr,
+                    ["P2C9.1", "Test Journeys", "", "Core", "P2C9", "Test Experience"],
+                    ["P2C9.1", "AI Claims Estimation", "", "Core", "P2C9", "Test Experience"],
+                ]
+            }
+        ),
+        # an id collision nothing can place: a human conflict, kept out of the seed
+        "Pillar 3 Test.xlsx": _mini_book(
+            {
+                "Capability Map": [
+                    hdr,
+                    ["P3C9.1", "Test Automation", "", "Core", "P3C9", "Test Ops"],
+                    ["P3C9.1", "Zz Unplaceable Test Subcap", "", "Core", "P3C9", "Test Ops"],
+                ]
+            }
+        ),
+        "Pillar 4 Test.xlsx": _mini_book(
+            {
+                "Capability Map": [
+                    hdr,
+                    ["P4C9.1", "Test Data Foundation", "", "Core", "P4C9", "Test Data"],
+                ]
+            }
+        ),
+    }
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        for n in (1, 2, 3, 4):
-            zf.writestr(f"Version 7/Pillar {n} Comprehensive Capability Mapping v7.0.xlsx", b"x")
-        zf.writestr("Version 7/notes.txt", b"ignored")
-    out = client.post(
-        "/api/admin/catalogue/upload/v7",
-        files={"file": ("Version_7.zip", buf.getvalue(), "application/zip")},
-    ).json()
-    assert out["recorded"] is True and len(out["workbooks"]) == 4
-    assert out["pillars_recognised"] == ["P1", "P2", "P3", "P4"]
+        for n, b in books.items():
+            zf.writestr(f"Version 9/{n}", b)
+        zf.writestr("Version 9/notes.txt", b"ignored")
+
+    scratch = "v9scratch"
+    cat_seed = _SEED_DIR / f"catalogue_{scratch}.json.gz"
+    syn_seed = _SEED_DIR / f"stories_synthetic_{scratch}.json.gz"
+    try:
+        out = client.post(
+            f"/api/admin/catalogue/upload/{scratch}",
+            files={"file": ("Version_9.zip", buf.getvalue(), "application/zip")},
+        ).json()
+        assert out["recorded"] is True and len(out["workbooks"]) == 4
+        assert out["pillars_recognised"] == ["P1", "P2", "P3", "P4"]
+        # 2 (P1) + 2 (P2: collider reconciled, both kept) + 1 (P3: collider conflicted) + 1 (P4)
+        assert out["subcaps_parsed"] == 6
+        assert out["synthetic_stories_found"] == 2  # the jira_completed row is never re-ingested
+        assert out["id_reconciliations"] == [
+            {
+                "source_id": "P2C9.1",
+                "assigned_id": "P2C3.2.IC2",
+                "name": "AI Claims Estimation",
+                "via": "register",
+            }
+        ]
+        assert [c["source_id"] for c in out["id_conflicts"]] == ["P3C9.1"]
+        assert cat_seed.exists() and syn_seed.exists()  # the upload IS the version's source
+    finally:
+        cat_seed.unlink(missing_ok=True)
+        syn_seed.unlink(missing_ok=True)
 
     bad = client.post(
-        "/api/admin/catalogue/upload/v7", files={"file": ("x.zip", b"not a zip", "application/zip")}
+        f"/api/admin/catalogue/upload/{scratch}",
+        files={"file": ("x.zip", b"not a zip", "application/zip")},
     )
     assert bad.status_code == 400
+    # a zip whose pillar workbook is not a real .xlsx is a clean, named 400 — never a 500
+    fake = io.BytesIO()
+    with zipfile.ZipFile(fake, "w") as zf:
+        zf.writestr("Pillar 1 Broken.xlsx", b"x")
+    broken = client.post(
+        f"/api/admin/catalogue/upload/{scratch}",
+        files={"file": ("broken.zip", fake.getvalue(), "application/zip")},
+    )
+    assert broken.status_code == 400
+    assert "not a readable" in broken.json()["error"]["message"]
+    assert not cat_seed.exists()  # a failed parse never writes a seed
     wrong = client.post(
-        "/api/admin/catalogue/upload/v7", files={"file": ("x.pdf", b"%PDF", "application/pdf")}
+        f"/api/admin/catalogue/upload/{scratch}",
+        files={"file": ("x.pdf", b"%PDF", "application/pdf")},
     )
     assert wrong.status_code == 400
