@@ -6,6 +6,7 @@ ids resolve to stored evidence). The full G1-G8 set extends this for the suggest
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,56 @@ def evidence_thresholds() -> tuple[float, float]:
     if not 0 < floor < strong:
         raise ValueError("gates.yaml: evidence thresholds must satisfy 0 < floor < strong")
     return floor, strong
+
+
+@dataclass(frozen=True)
+class TrendConfig:
+    """Trend signal weights + emergence cutoff + cluster floors (config/gates.yaml: trends.*)."""
+
+    velocity: float
+    diversity: float
+    novelty: float
+    persistence: float
+    emergent_cut: float
+    trend_threshold: float
+    min_cluster: int
+    min_sources: int
+
+    def score(self, velocity: float, diversity: float, novelty: float, persistence: float) -> float:
+        """The composite trend score (spec §18.1): the weighted blend of the four signals."""
+        return round(
+            self.velocity * velocity
+            + self.diversity * diversity
+            + self.novelty * novelty
+            + self.persistence * persistence,
+            3,
+        )
+
+
+def trends_config() -> TrendConfig:
+    """Signal weights (velocity/diversity/novelty/persistence — must sum to 1.0), the score floor a
+    cluster must clear (trend_threshold), the novelty cutoff above which a subcap is flagged
+    emergent (the only path a synthetic story may surface), and the cluster floors (min_cluster /
+    min_sources) below which a thin cluster is filtered, never promoted. Config, not code: analyst
+    feedback recalibrates these without a deploy (spec §18.3)."""
+    section = load_gate_config().get("trends") or {}
+    cfg = TrendConfig(
+        velocity=float(section.get("weight_velocity", 0.35)),
+        diversity=float(section.get("weight_diversity", 0.30)),
+        novelty=float(section.get("weight_novelty", 0.20)),
+        persistence=float(section.get("weight_persistence", 0.15)),
+        emergent_cut=float(section.get("emergent_cut", 0.80)),
+        trend_threshold=float(section.get("trend_threshold", 0.45)),
+        min_cluster=int(section.get("min_cluster", 4)),
+        min_sources=int(section.get("min_sources", 3)),
+    )
+    if abs((cfg.velocity + cfg.diversity + cfg.novelty + cfg.persistence) - 1.0) > 1e-6:
+        raise ValueError("gates.yaml: trend signal weights must sum to 1.0")
+    if not 0 < cfg.emergent_cut <= 1:
+        raise ValueError("gates.yaml: trends.emergent_cut must be in (0, 1]")
+    if not 0 <= cfg.trend_threshold <= 1:
+        raise ValueError("gates.yaml: trends.trend_threshold must be in [0, 1]")
+    return cfg
 
 
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
@@ -123,6 +174,38 @@ def evaluate_evidence(
         ),
         "G6_contradiction": _r(not contradicts, "claim does not contradict delivery reality"),
         "G7_citation_verification": _r(cited, "cited ids resolve to stored evidence"),
+    }
+    verdict = "pass" if all(g["verdict"] == "pass" for g in results.values()) else "fail"
+    return results, verdict
+
+
+def evaluate_trend(
+    *,
+    cluster_size: int,
+    distinct_sources: int,
+    best_tier: str,
+    min_cluster: int,
+    min_sources: int,
+    contradicts: bool,
+) -> tuple[dict[str, Any], str]:
+    """Gate a detected trend before it is staged (spec §18.1: cluster -> score -> G2/G3/G6). G2:
+    the cluster holds enough independent evidence (>= min_cluster). G3: it clears the source-tier
+    floor AND draws on enough DISTINCT sources (>= min_sources) — one low-tier source repeated is
+    not a trend. G6: it does not contradict delivery reality. The thin-cluster floors are also
+    applied pre-scoring (filtered silently); a cluster that clears them but fails a gate is routed
+    to review (Change Flags), never promoted low-confidence ("trends are earned, not counted")."""
+    tier_ok = best_tier in ("T1", "T2", "T3")
+    results: dict[str, Any] = {
+        "G2_evidence_sufficiency": _r(
+            cluster_size >= min_cluster,
+            f"{cluster_size} clustered evidence item(s) (floor {min_cluster})",
+        ),
+        "G3_source_tier_floor": _r(
+            tier_ok and distinct_sources >= min_sources,
+            f"{distinct_sources} distinct source(s), best tier {best_tier} "
+            f"(floor T3, >= {min_sources} sources)",
+        ),
+        "G6_contradiction": _r(not contradicts, "trend does not contradict delivery reality"),
     }
     verdict = "pass" if all(g["verdict"] == "pass" for g in results.values()) else "fail"
     return results, verdict

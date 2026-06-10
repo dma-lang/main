@@ -108,15 +108,15 @@ def _gate_run_count() -> int:
 @needs_db
 def test_news_scan_and_read_model(client: TestClient) -> None:
     scanned = client.post("/api/admin/evidence/scan/news/v7").json()
-    assert scanned["fetched"] == 8 and scanned["created"] == 8 and scanned["deduped"] == 0
+    assert scanned["fetched"] == 12 and scanned["created"] == 12 and scanned["deduped"] == 0
     # every fetched item is accounted for: mapped or queued to review — never dropped
-    assert scanned["mapped"] + scanned["flagged"] == 8
+    assert scanned["mapped"] + scanned["flagged"] == 12
     # two distinct failure modes queue: retire-vs-delivery (G6) + off-catalogue noise (G5)
     assert scanned["flagged"] == 2
 
     # idempotent re-scan: dedupe on (source, headline), nothing duplicated
     rescan = client.post("/api/admin/evidence/scan/news/v7").json()
-    assert rescan["created"] == 0 and rescan["deduped"] == 8
+    assert rescan["created"] == 0 and rescan["deduped"] == 12
 
     body = client.get("/api/evidence?kind=news").json()
     items = body["items"]
@@ -159,9 +159,11 @@ def test_news_scan_and_read_model(client: TestClient) -> None:
 
     # server-side filters
     t1 = client.get("/api/evidence?kind=news&tier=T1").json()["items"]
-    assert len(t1) == 3 and all(i["tier"] == "T1" for i in t1)
+    # OCC, FinCEN, Fed + the three T1 AI model-risk regulators (NIST, Basel, EBA)
+    assert len(t1) == 6 and all(i["tier"] == "T1" for i in t1)
     dr = client.get("/api/evidence?kind=news&impact=descriptor_revision").json()["items"]
-    assert len(dr) == 2 and all(i["impact"] == "descriptor_revision" for i in dr)
+    # OCC + Fed + the four AI model-risk items (NIST, Basel, Gartner, EBA)
+    assert len(dr) == 6 and all(i["impact"] == "descriptor_revision" for i in dr)
 
     # only the wired kind is served
     r = client.get("/api/evidence?kind=sow_chunk")

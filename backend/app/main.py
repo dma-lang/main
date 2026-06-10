@@ -85,6 +85,7 @@ def create_app() -> FastAPI:
     from app.routers import me as me_router
     from app.routers import stories as stories_router
     from app.routers import suggestions as suggestions_router
+    from app.routers import trends as trends_router
     from app.routers import versions as versions_router
 
     app.include_router(admin_router.router)
@@ -95,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(me_router.router)
     app.include_router(stories_router.router)
     app.include_router(suggestions_router.router)
+    app.include_router(trends_router.router)
     app.include_router(versions_router.router)
 
     _mount_spa(app, settings.static_dir)

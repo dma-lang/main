@@ -46,10 +46,14 @@ class NewsEnrichment:
 
 
 # The recorded fixture: real public-source items + the enrichment the classify model would
-# produce. Two entries exist to prove the robustness rails end-to-end: the American Banker item
-# grounds WEAKLY (every catalogue match lands between the relevance floor and the strong-
-# grounding bar -> label downgraded, scores scaled down) and the Reuters sports-media item is
-# OFF-CATALOGUE (no match above the floor -> G5 fail -> queued to Change Flags, never mapped).
+# produce. Two entries prove the robustness rails end-to-end: the American Banker item grounds
+# WEAKLY (every catalogue match lands between the relevance floor and the strong-grounding bar ->
+# label downgraded, scores scaled down) and the Reuters sports-media item is OFF-CATALOGUE (no
+# match above the floor -> G5 fail -> queued to Change Flags, never mapped). A coherent block of AI
+# model-risk items (NIST/Basel/Gartner/EBA) from independent sources clusters with the Fed item on
+# the GenAI Model Risk Management subcap, so trend detection (D2) has a real multi-source signal to
+# earn — while single-theme items (OCC credit decisioning, branch staffing) stay singletons and are
+# filtered, demonstrating "trends are earned, not counted".
 _FIXTURE: tuple[tuple[RawNewsItem, NewsEnrichment], ...] = (
     (
         RawNewsItem(
@@ -160,6 +164,81 @@ _FIXTURE: tuple[tuple[RawNewsItem, NewsEnrichment], ...] = (
             claim_label="INFERENCE",
             specificity=0.7,
             topics="marketing automation platform campaign journeys",
+            model="hermetic-stub",
+        ),
+    ),
+    # --- AI model-risk cluster (D2 trend seed): four independent public sources on the same theme
+    # within the 8-week window; each maps to GenAI Model Risk Management, so they cluster with the
+    # Fed gen-AI item into one multi-source trend (the OCC credit-decisioning item stays separate).
+    (
+        RawNewsItem(
+            source="NIST",
+            source_type="regulator",
+            tier="T1",
+            url="https://www.nist.gov/itl/ai-risk-management-framework",
+            published="2026-05-20",
+            headline="NIST finalizes AI model-risk management profile for financial institutions",
+        ),
+        NewsEnrichment(
+            impact="descriptor_revision",
+            impact_note="model-risk descriptors should reference the NIST AI RMF profile",
+            claim_label="FACT",
+            specificity=0.85,
+            topics="AI model risk management governance validation monitoring",
+            model="hermetic-stub",
+        ),
+    ),
+    (
+        RawNewsItem(
+            source="Basel Committee",
+            source_type="regulator",
+            tier="T1",
+            url="https://www.bis.org/bcbs/",
+            published="2026-05-06",
+            headline="Basel Committee issues principles for AI model-risk management in banks",
+        ),
+        NewsEnrichment(
+            impact="descriptor_revision",
+            impact_note="AI model-risk controls now carry global supervisory principles",
+            claim_label="FACT",
+            specificity=0.8,
+            topics="AI model risk management governance validation monitoring",
+            model="hermetic-stub",
+        ),
+    ),
+    (
+        RawNewsItem(
+            source="Gartner",
+            source_type="analyst",
+            tier="T2",
+            url="https://www.gartner.com/en/industries/banking",
+            published="2026-05-14",
+            headline="Gartner names AI model-risk management a top-three banking priority for 2026",
+        ),
+        NewsEnrichment(
+            impact="descriptor_revision",
+            impact_note="model-risk capability rising to a board-level priority across banks",
+            claim_label="INFERENCE",
+            specificity=0.7,
+            topics="AI model risk management governance validation monitoring",
+            model="hermetic-stub",
+        ),
+    ),
+    (
+        RawNewsItem(
+            source="European Banking Authority",
+            source_type="regulator",
+            tier="T1",
+            url="https://www.eba.europa.eu/",
+            published="2026-05-23",
+            headline="EBA consults on supervisory expectations for AI model-risk management",
+        ),
+        NewsEnrichment(
+            impact="descriptor_revision",
+            impact_note="EU supervisory expectations tighten AI model-risk governance",
+            claim_label="FACT",
+            specificity=0.8,
+            topics="AI model risk management governance validation monitoring",
             model="hermetic-stub",
         ),
     ),

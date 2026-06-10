@@ -62,6 +62,7 @@ trends:
   weight_novelty: 0.20
   weight_persistence: 0.15
   emergent_cut: 0.80             # novelty above this flags an emergent subcap (only path a synthetic story surfaces)
+  trend_threshold: 0.45          # composite-score floor a cluster must clear to surface (recalibrated from precision/recall)
   dedupe_cosine: 0.95
   min_cluster: 4
   min_sources: 3
