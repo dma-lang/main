@@ -249,14 +249,16 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$R
 ## A9. Create the tables (run the migration job once)
 
 This reuses the exact image A7 just built and runs the database migration to completion. Safe to
-run again anytime — when there's nothing to do it says so and exits.
+run again anytime — when there's nothing to do it says so and exits. (Note the flag difference:
+**services** use `--add-cloudsql-instances`, **jobs** use `--set-cloudsql-instances` — gcloud's
+flag families differ between the two.)
 
 ```bash
 IMAGE="$(gcloud run services describe cia --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
 gcloud run jobs create cia-migrate \
   --image "$IMAGE" \
   --region "$REGION" \
-  --add-cloudsql-instances "$SQL_CONN" \
+  --set-cloudsql-instances "$SQL_CONN" \
   --set-secrets "DATABASE_URL=cia-database-url:latest" \
   --command uv \
   --args run,python,-m,app.migrate \
@@ -361,6 +363,7 @@ pick a green one, then
 | `Invalid Tier … for (ENTERPRISE_PLUS)` creating the DB | instance defaulted to Enterprise Plus | use `--edition=enterprise` (A4) / pick Enterprise (B2) |
 | `databases/users create` → 403/404 on `cia-pg` | the instance create failed or hasn't finished | wait for `RUNNABLE`, re-run those commands (safe) |
 | `-bash: --some-flag: command not found` while pasting | a comment after a `\` split the command | paste the blocks from this guide verbatim — they contain no inline comments |
+| `jobs create` → `unrecognized arguments: --add-cloudsql-instances` (and then `jobs execute` → NOT_FOUND) | jobs use a different flag family than services | use `--set-cloudsql-instances` on `jobs create` (A9); the NOT_FOUND clears once the job is created |
 | `healthz` shows `"db":"down"` | migration not run yet, wrong secret value, or missing Cloud SQL connection / IAM role | run A9; re-check the A5 secret, the `--add-cloudsql-instances` flag, the A8 roles |
 | sign-in popup: *domain not authorized* | the service URL isn't in Firebase's authorized domains | Firebase → Authentication → Settings → Authorized domains → add the `…run.app` host |
 | `403 account not permitted` after Google sign-in | not a verified `@zennify.com` account | sign in with a verified `@zennify.com` Google account |
