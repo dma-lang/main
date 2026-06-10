@@ -1052,6 +1052,32 @@ export const api = {
     http('/api/exports/digest', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
   provisionVersion: (version: string): Promise<Record<string, number | string>> =>
     http(`/api/admin/provision/${version}`, { method: 'POST' }),
+  uploadCatalogue: async (
+    version: string,
+    file: File,
+  ): Promise<{
+    version: string;
+    workbooks: { name: string; bytes: number }[];
+    pillars_recognised: string[];
+    recorded: boolean;
+    note: string;
+  }> => {
+    // multipart: let the browser set the boundary — our default JSON header must not apply
+    const token = await getToken().catch(() => null);
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`/api/admin/catalogue/upload/${version}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: form,
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+      throw new Error(`${res.status}: ${body?.error?.message ?? res.statusText}`);
+    }
+    return res.json();
+  },
   carryForward: (version: string): Promise<Record<string, number | string>> =>
     http(`/api/admin/carry-forward/${version}`, { method: 'POST' }),
   admins: (): Promise<AdminRow[]> => http<AdminRow[]>('/api/admin/admins'),

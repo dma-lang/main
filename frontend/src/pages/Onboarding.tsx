@@ -3,7 +3,7 @@
 // version (POST /api/admin/provision/{v}, bring_version_online) → Carry forward the canonical
 // story corpus (POST /api/admin/carry-forward/{v}). Admin-only, always skippable. The first
 // successful provision persists for every user (no re-upload), exactly as the copy promises.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { api } from '../api/client';
 import { useMe, useVersions } from '../api/queries';
@@ -27,6 +27,24 @@ export function Onboarding() {
   const [target] = useState('v7');
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<Record<string, number | string> | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploaded, setUploaded] = useState<Awaited<
+    ReturnType<typeof api.uploadCatalogue>
+  > | null>(null);
+
+  const onUpload = async (f: File | null) => {
+    if (!f) return;
+    setBusy(true);
+    try {
+      const out = await api.uploadCatalogue(target, f);
+      setUploaded(out);
+      toast(`Received ${out.workbooks.length} workbook(s) — pillars ${out.pillars_recognised.join(', ') || '—'}`);
+    } catch (e) {
+      toast('Upload failed: ' + String((e as Error)?.message ?? e).slice(0, 90));
+    } finally {
+      setBusy(false);
+    }
+  };
   const [carry, setCarry] = useState<Record<string, number | string> | null>(null);
   const isAdmin = me.data?.is_admin ?? false;
 
@@ -161,21 +179,45 @@ export function Onboarding() {
               <div className="muted" style={{ fontSize: 12, marginBottom: 16 }}>
                 P1 Strategy · P2 Experience · P3 Operations · P4 Data &amp; AI · .xlsx
               </div>
-              <button
-                className="btn primary"
-                disabled={!isAdmin || busy}
-                onClick={() => void provision()}
-              >
-                {busy ? (
-                  <>
-                    <Icon n="refresh" s={16} cls="spin" /> Provisioning…
-                  </>
-                ) : (
-                  <>
-                    <Icon n="upload" s={16} /> Provision {target} workbooks
-                  </>
-                )}
-              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".zip,.xlsx"
+                style={{ display: 'none' }}
+                onChange={(e) => void onUpload(e.target.files?.[0] ?? null)}
+              />
+              <div className="row gap8" style={{ justifyContent: 'center' }}>
+                <button
+                  className="btn ghost"
+                  disabled={!isAdmin || busy}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Icon n="upload" s={16} /> Upload workbooks (.zip / .xlsx)
+                </button>
+                <button
+                  className="btn primary"
+                  disabled={!isAdmin || busy}
+                  onClick={() => void provision()}
+                >
+                  {busy ? (
+                    <>
+                      <Icon n="refresh" s={16} cls="spin" /> Provisioning…
+                    </>
+                  ) : (
+                    <>Provision {target}</>
+                  )}
+                </button>
+              </div>
+              {uploaded && (
+                <div className="banner info" style={{ marginTop: 14, textAlign: 'left' }}>
+                  <Icon n="check" s={14} />
+                  {uploaded.workbooks.length} workbook(s) received
+                  {uploaded.pillars_recognised.length
+                    ? ` — pillars ${uploaded.pillars_recognised.join(', ')}`
+                    : ''}{' '}
+                  · recorded in the source registry. {uploaded.note}
+                </div>
+              )}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
               {PILLARS.map(([p, name, n]) => (

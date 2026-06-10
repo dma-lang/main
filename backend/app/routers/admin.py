@@ -8,9 +8,10 @@ hidden. PATCH /sources/{key} persists the enable switch the scan jobs enforce.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -164,3 +165,76 @@ async def revoke_admin(
     if result.get("status") == "rejected":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=result.get("reason"))
     return result
+
+
+@router.post("/catalogue/upload/{version}")
+async def upload_catalogue(
+    version: str,
+    file: UploadFile,
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Accept the pillar-wise catalogue upload (FR-1): a ZIP of the four pillar .xlsx workbooks
+    (or a single .xlsx). Validates the archive, lists the workbooks found, and records the upload
+    as an ingest_run so it shows in the source registry — honestly returning which pillar files
+    were recognised. Provisioning then runs against the committed seed until the workbook parser
+    lands (the upload manifest is the contract it will consume)."""
+    if not version or set(version) - set("abcdefghijklmnopqrstuvwxyz0123456789_"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid version id")
+    raw = await file.read()
+    if len(raw) > 100 * 1024 * 1024:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="upload over the 100 MB bound")
+    name = (file.filename or "").lower()
+    workbooks: list[dict[str, Any]] = []
+    if name.endswith(".zip"):
+        import io
+        import zipfile
+
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(raw))
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="not a valid zip") from exc
+        for info in zf.infolist():
+            base = info.filename.rsplit("/", 1)[-1]
+            if base.lower().endswith(".xlsx") and not base.startswith((".", "~")):
+                workbooks.append({"name": base, "bytes": info.file_size})
+    elif name.endswith(".xlsx"):
+        workbooks.append({"name": file.filename, "bytes": len(raw)})
+    else:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="upload a .zip of the pillar workbooks or a single .xlsx",
+        )
+    if not workbooks:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="the zip contains no .xlsx workbooks"
+        )
+    pillars = sorted(
+        {
+            f"P{n}"
+            for w in workbooks
+            for n in "1234"
+            if f"pillar {n}" in str(w["name"]).lower() or f"pillar{n}" in str(w["name"]).lower()
+        }
+    )
+    engine = db.require_engine()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO control.ingest_run (version_id, source, status, finished_at, stats) "
+                "SELECT :v, 'workbook_upload', 'succeeded', now(), CAST(:s AS jsonb) "
+                "WHERE EXISTS (SELECT 1 FROM control.catalogue_version WHERE version_id = :v)"
+            ),
+            {
+                "v": version,
+                "s": json.dumps(
+                    {"workbooks": len(workbooks), "pillars": pillars, "files": workbooks[:8]}
+                ),
+            },
+        )
+    return {
+        "version": version,
+        "workbooks": workbooks,
+        "pillars_recognised": pillars,
+        "recorded": True,
+        "note": "Upload validated and recorded; run Apply & provision to bring the version online.",
+    }

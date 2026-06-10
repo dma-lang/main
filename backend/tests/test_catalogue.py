@@ -40,6 +40,12 @@ def provisioned() -> Iterator[None]:
         async with engine.begin() as conn:
             await conn.execute(text("DROP SCHEMA IF EXISTS cat_v7 CASCADE"))
             await conn.execute(
+                text(
+                    "DELETE FROM control.ingest_run WHERE version_id = 'v7' "
+                    "AND source = 'workbook_upload'"
+                )
+            )
+            await conn.execute(
                 text("DELETE FROM control.catalogue_version WHERE version_id = 'v7'")
             )
         await db.dispose_engine()
@@ -235,3 +241,33 @@ def test_applied_mapping_registry(client: TestClient) -> None:
     assert ("subcap", "uses_platform", "l3_platform") in rels
     assert ("category", "belongs_to", "pillar") in rels
     assert client.get("/api/admin/mapping/v5").status_code == 404
+
+
+@needs_db
+def test_catalogue_zip_upload(client: TestClient) -> None:
+    """FR-1: the pillar-wise catalogue uploads as a ZIP of .xlsx workbooks — validated, the
+    pillar files recognised, and the upload recorded as an ingest_run. Bad payloads are clean
+    400s, never 500s."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for n in (1, 2, 3, 4):
+            zf.writestr(f"Version 7/Pillar {n} Comprehensive Capability Mapping v7.0.xlsx", b"x")
+        zf.writestr("Version 7/notes.txt", b"ignored")
+    out = client.post(
+        "/api/admin/catalogue/upload/v7",
+        files={"file": ("Version_7.zip", buf.getvalue(), "application/zip")},
+    ).json()
+    assert out["recorded"] is True and len(out["workbooks"]) == 4
+    assert out["pillars_recognised"] == ["P1", "P2", "P3", "P4"]
+
+    bad = client.post(
+        "/api/admin/catalogue/upload/v7", files={"file": ("x.zip", b"not a zip", "application/zip")}
+    )
+    assert bad.status_code == 400
+    wrong = client.post(
+        "/api/admin/catalogue/upload/v7", files={"file": ("x.pdf", b"%PDF", "application/pdf")}
+    )
+    assert wrong.status_code == 400
