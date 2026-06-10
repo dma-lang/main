@@ -8,6 +8,7 @@ import {
   type BenchResp,
   type CatalogueSummary,
   type HeatmapResp,
+  type TimelineResp,
   type ChangeFlagsResp,
   type ChatResponse,
   type GatesLog,
@@ -62,6 +63,13 @@ export const useHeatmap = (version: string, lens: string, pillar: string, sv: st
     queryKey: ['heatmap', version, lens, pillar, sv],
     queryFn: () => api.heatmap(version, lens, pillar, sv),
     enabled: !!version,
+  });
+
+export const useTimeline = (version: string, id: string | null) =>
+  useQuery<TimelineResp>({
+    queryKey: ['timeline', version, id],
+    queryFn: () => api.timeline(version, id ?? ''),
+    enabled: !!version && !!id,
   });
 
 export const useSubcaps = (version: string) =>

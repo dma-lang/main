@@ -85,6 +85,7 @@ export const router = createHashRouter([
       })),
       { path: 'subcap/:id', element: <SubcapWorkbench /> },
       { path: 'platforms/:id', element: <Platforms /> },
+      { path: 'trace/:id', element: <Trace /> },
       { path: '*', element: <Surface id="not-found" /> },
     ],
   },

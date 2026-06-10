@@ -1,38 +1,83 @@
-// Project-subcap trace (Stage C · Project validation) — every event that ever touched a subcap (SOW
-// matches, delivered stories, benchmark recomputes, news, vendor moves, suggestions) entity-resolved
-// onto one timeline. Deep-linkable per subcap; reachable without an id (shows a picker). There is no
-// timeline endpoint yet, so the page renders the subcap header, KPI strip and swimlane chrome with an
-// honest Empty state for events. Ported from the prototype Trace.
+// Project-subcap trace (C3) — every cross-signal event that touched a subcap on one timeline,
+// wired to GET /api/catalogue/{v}/subcaps/{id}/timeline (a union of the news/vendor/suggestion/
+// trend/benchmark impact tables; each event carries its claim · tier · reasoning backlink).
+// Deep-linkable per subcap; reachable without an id (shows a picker). Stories carry no real
+// delivery dates, so delivery is a summary KPI, not a dated lane.
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 
-import { useSubcaps } from '../api/queries';
-import { Dropdown, Empty, Page, PillarDot } from '../components/primitives';
-import { go, openPeek, toast } from '../lib/events';
+import type { TimelineEvent } from '../api/client';
+import { useSubcaps, useTimeline } from '../api/queries';
+import { Claim, Dropdown, Empty, Page, PillarDot, Tier } from '../components/primitives';
+import { go, openPeek, openReasoning, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
-const TRACE_LANES: [string, string, string][] = [
-  ['sow', 'SOW', 'var(--z-blue)'],
-  ['story', 'Story', 'var(--interactive)'],
-  ['news', 'News', 'var(--z-orange)'],
-  ['vendor', 'Vendor', 'var(--z-slate)'],
-  ['suggestion', 'Suggestion', 'var(--p4)'],
-  ['benchmark', 'Benchmark', 'var(--z-teal-light)'],
-];
+const LANE: Record<string, { label: string; color: string; icon: string }> = {
+  news: { label: 'News', color: 'var(--z-orange)', icon: 'news' },
+  vendor: { label: 'Vendor', color: 'var(--z-slate)', icon: 'building' },
+  suggestion: { label: 'Suggestion', color: 'var(--p4)', icon: 'sparkles' },
+  benchmark: { label: 'Benchmark', color: 'var(--z-teal-light)', icon: 'bars' },
+  trend: { label: 'Trend', color: 'var(--z-blue)', icon: 'trend' },
+};
+
+function fmtDate(d: string | null): string {
+  if (!d) return '—';
+  const t = Date.parse(d);
+  return Number.isNaN(t) ? d.slice(0, 10) : new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function EventCard({ e }: { e: TimelineEvent }) {
+  const lane = LANE[e.kind] ?? { label: e.kind, color: 'var(--text-tertiary)', icon: 'dot' };
+  return (
+    <div className="card pad" style={{ padding: '11px 13px', borderLeft: `3px solid ${lane.color}` }}>
+      <div className="row gap8" style={{ marginBottom: 5, flexWrap: 'wrap' }}>
+        <span className="row gap6" style={{ fontSize: 10.5, fontWeight: 700, color: lane.color }}>
+          <Icon n={lane.icon as never} s={12} /> {lane.label.toUpperCase()}
+        </span>
+        {e.claim && <Claim label={e.claim} />}
+        {e.tier && <Tier t={e.tier} />}
+        {e.mag && <span className={'mag ' + e.mag.toLowerCase()}>{e.mag}</span>}
+        <span className="muted" style={{ fontSize: 10.5, marginLeft: 'auto' }}>
+          {fmtDate(e.date)}
+        </span>
+      </div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-primary)', lineHeight: 1.4 }}>{e.title}</div>
+      {e.excerpt && (
+        <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
+          {e.excerpt}
+        </div>
+      )}
+      {e.chain && (
+        <button className="linkbtn" style={{ marginTop: 6 }} onClick={() => openReasoning(e.chain)}>
+          <Icon n="eye" s={12} /> Reasoning
+        </button>
+      )}
+    </div>
+  );
+}
 
 export function Trace() {
   const ui = useUi();
   const { id } = useParams<{ id: string }>();
   const subs = useSubcaps(ui.version);
   const [pick, setPick] = useState('');
+  const activeId = id || pick;
+  const tl = useTimeline(ui.version, activeId || null);
 
   const options = (subs.data ?? []).slice(0, 60).map((x) => ({
     v: x.id,
     l: x.id + ' · ' + x.name.slice(0, 22),
   }));
-  const activeId = id || pick;
   const s = (subs.data ?? []).find((x) => x.id === activeId);
+  const events = tl.data?.events ?? [];
+  const lastActivity = events.find((e) => e.date)?.date ?? null;
+  const kpis: [string, string][] = [
+    [String(events.length), 'cross-signal events'],
+    [`${tl.data?.sources ?? 0}`, 'signal sources touched'],
+    [fmtDate(lastActivity), 'last activity'],
+    [(tl.data?.stories ?? 0).toLocaleString(), 'delivered stories'],
+  ];
 
   return (
     <Page
@@ -40,9 +85,9 @@ export function Trace() {
       title="Project-subcap trace"
       intro={
         <>
-          Pick any subcap to see <b>every event that ever touched it</b> — SOW matches, delivered
-          stories, benchmark recomputes, news, vendor moves and suggestions — entity-resolved onto one
-          timeline. Click an event to read what it means and drill to its source.
+          Pick any subcap to see <b>every event that ever touched it</b> — delivered stories, news,
+          vendor moves, benchmarks, trends and suggestions — on one timeline. Click an event to read
+          what it means and drill to its reasoning.
         </>
       }
       actions={
@@ -65,7 +110,7 @@ export function Trace() {
           <Empty
             icon="branch"
             title="Pick a subcap to trace"
-            desc="Choose a subcap above to assemble its cross-signal timeline. Every SOW match, delivered story, benchmark recompute, news item, vendor move and suggestion that touched it is entity-resolved onto one lane view."
+            desc="Choose a subcap above to assemble its cross-signal timeline. Every delivered story, news item, vendor move, benchmark, trend and suggestion that touched it lands on one lane view."
             cta="Browse the catalogue"
             onCta={() => go('explorer')}
           />
@@ -77,7 +122,7 @@ export function Trace() {
               <div className="row gap10">
                 {s && <PillarDot p={s.pillar} />}
                 <div>
-                  <div className="h2">{s ? s.name : activeId}</div>
+                  <div className="h2">{tl.data?.name ?? s?.name ?? activeId}</div>
                   <div className="row gap8 mt8">
                     <span className="mono muted" style={{ fontSize: 11 }}>
                       {activeId}
@@ -100,15 +145,8 @@ export function Trace() {
                 </button>
               </div>
             </div>
-            <div
-              style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginTop: 16 }}
-            >
-              {[
-                ['—', 'events'],
-                ['— / 6', 'signal sources touched'],
-                ['—', 'last activity'],
-                ['—', 'avg confidence'],
-              ].map((k, i) => (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginTop: 16 }}>
+              {kpis.map((k, i) => (
                 <div key={i} className="card" style={{ padding: '11px 14px' }}>
                   <div className="num" style={{ fontSize: 19, fontWeight: 700 }}>
                     {k[0]}
@@ -120,46 +158,29 @@ export function Trace() {
               ))}
             </div>
           </div>
-          <div
-            style={{ display: 'grid', gridTemplateColumns: '1fr 330px', gap: 18, alignItems: 'start' }}
-          >
-            <div className="card pad">
-              <div className="between" style={{ marginBottom: 4 }}>
-                <div className="h3">Signal timeline</div>
-                <span className="muted" style={{ fontSize: 11 }}>
-                  6 quarters · click a dot
-                </span>
-              </div>
-              <div className="muted" style={{ fontSize: 11.5, marginBottom: 10 }}>
-                Each lane is a signal source; the bar above each quarter shows total activity that
-                quarter.
-              </div>
-              <div className="row wrap gap8" style={{ marginBottom: 14 }}>
-                {TRACE_LANES.map((l) => (
-                  <span key={l[0]} className="row gap6" style={{ fontSize: 11 }}>
-                    <span
-                      className="pilldot"
-                      style={{ borderRadius: '50%', width: 8, height: 8, background: l[2] }}
-                    />
-                    {l[1]}
-                  </span>
-                ))}
-              </div>
+
+          <div className="card pad">
+            <div className="between" style={{ marginBottom: 10 }}>
+              <div className="h3">Signal timeline</div>
+              <span className="muted" style={{ fontSize: 11 }}>
+                newest first · each event carries its claim, tier and reasoning
+              </span>
+            </div>
+            {tl.isLoading && <div className="muted" style={{ fontSize: 12 }}>Assembling the timeline…</div>}
+            {tl.data && events.length === 0 && (
               <Empty
                 icon="route"
-                title="Timeline pipeline pending"
-                desc="The cross-signal event timeline is not yet wired to a backend endpoint. Once the trace service lands, every SOW, story, news, vendor, suggestion and benchmark event for this subcap renders on its lane here."
+                title="No signals on this subcap yet"
+                desc="No news, vendor move, benchmark, trend or suggestion has mapped to this subcap. As the weekly scans run and the consultant loop stages suggestions, they appear here on their lanes."
               />
-            </div>
-            <div className="card pad">
-              <div className="h3" style={{ marginBottom: 8 }}>
-                Event detail
+            )}
+            {events.length > 0 && (
+              <div style={{ display: 'grid', gap: 8 }}>
+                {events.map((e, i) => (
+                  <EventCard key={i} e={e} />
+                ))}
               </div>
-              <div className="muted" style={{ fontSize: 12 }}>
-                Select an event on the timeline to read what it means, see its claim and confidence, and
-                drill to its source.
-              </div>
-            </div>
+            )}
           </div>
         </>
       )}

@@ -324,6 +324,118 @@ async def subcap_stories(
     return StoryPage(total=int(total), page=page, size=size, items=items)
 
 
+class TimelineEvent(BaseModel):
+    kind: str  # news | vendor | suggestion | benchmark | trend
+    date: str | None
+    title: str
+    claim: str | None = None
+    tier: str | None = None
+    mag: str | None = None
+    excerpt: str | None = None
+    chain: str | None = None
+
+
+class TimelineResp(BaseModel):
+    subcap_id: str
+    name: str
+    stories: int  # delivery lane: carried stories (no per-story dates in the corpus)
+    sources: int  # distinct evidence sources across the dated lanes
+    events: list[TimelineEvent]
+
+
+# Project-subcap trace (C3): one subcap, every cross-signal event on a single timeline. A union of
+# the existing impact tables — each row already carries claim/tier/mag/chain, so the trust envelope
+# travels with every event. Stories carry no real delivery dates (ingest-time only) so delivery is a
+# summary count lane, not dated events.
+_TIMELINE_SQL = {
+    "news": (
+        "SELECT 'news' AS kind, ei.published_at::text AS date, ni.headline AS title, "
+        "rc.claim_label::text AS claim, ei.source_tier::text AS tier, i.mag::text AS mag, "
+        "ei.source_name AS excerpt, i.chain_id::text AS chain "
+        "FROM control.news_subcap_impact i "
+        "JOIN control.news_item ni ON ni.news_id = i.news_id "
+        "JOIN control.evidence_item ei ON ei.evidence_id = ni.evidence_id "
+        "LEFT JOIN control.reasoning_chain rc ON rc.chain_id = i.chain_id "
+        "WHERE i.version_id = :ver AND i.subcap_id = :sid"
+    ),
+    "vendor": (
+        "SELECT 'vendor' AS kind, ve.occurred_at::text AS date, ve.headline AS title, "
+        "rc.claim_label::text AS claim, ei.source_tier::text AS tier, i.mag::text AS mag, "
+        "ve.event_type::text AS excerpt, i.chain_id::text AS chain "
+        "FROM control.vendor_subcap_impact i "
+        "JOIN control.vendor_event ve ON ve.event_id = i.event_id "
+        "LEFT JOIN control.evidence_item ei ON ei.evidence_id = ve.evidence_id "
+        "LEFT JOIN control.reasoning_chain rc ON rc.chain_id = i.chain_id "
+        "WHERE i.version_id = :ver AND i.subcap_id = :sid"
+    ),
+    "suggestion": (
+        "SELECT 'suggestion' AS kind, s.created_at::text AS date, "
+        "(s.kind::text || ' · ' || coalesce(s.status::text,'')) AS title, "
+        "s.claim_label::text AS claim, s.source_tier::text AS tier, NULL AS mag, "
+        "s.reason AS excerpt, s.chain_id::text AS chain "
+        "FROM control.suggestion s "
+        "WHERE s.target_version = :ver AND s.target_subcap = :sid"
+    ),
+    "benchmark": (
+        "SELECT 'benchmark' AS kind, b.created_at::text AS date, "
+        "(b.metric || ' (' || b.verdict || ')') AS title, NULL AS claim, "
+        "ei.source_tier::text AS tier, NULL AS mag, b.verdict_note AS excerpt, "
+        "b.chain_id::text AS chain "
+        "FROM control.benchmark b "
+        "LEFT JOIN control.evidence_item ei ON ei.evidence_id = b.evidence_id "
+        "WHERE b.version_id = :ver AND b.subcap_id = :sid"
+    ),
+    "trend": (
+        "SELECT 'trend' AS kind, t.window_end::text AS date, t.label AS title, "
+        "t.claim_label::text AS claim, t.source_tier::text AS tier, NULL AS mag, "
+        "(ts.emergent::text) AS excerpt, t.chain_id::text AS chain "
+        "FROM control.trend_subcap ts JOIN control.trend t ON t.trend_id = ts.trend_id "
+        "WHERE ts.version_id = :ver AND ts.subcap_id = :sid"
+    ),
+}
+
+
+@router.get("/{version}/subcaps/{subcap_id}/timeline")
+async def subcap_timeline(
+    version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> TimelineResp:
+    v = await resolve_version(version)
+    s = _schema(v)
+    params = {"ver": v.version_id, "sid": subcap_id}
+    async with _engine().connect() as conn:
+        name_row = (
+            await conn.execute(
+                text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid"), {"sid": subcap_id}
+            )
+        ).first()
+        if name_row is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="subcap not found in this version"
+            )
+        events: list[TimelineEvent] = []
+        for sql in _TIMELINE_SQL.values():
+            rows = (await conn.execute(text(sql), params)).mappings().all()
+            events.extend(TimelineEvent.model_validate(dict(r)) for r in rows)
+        stories = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) FROM control.story_catalogue_link "
+                    "WHERE version_id = :ver AND subcap_id = :sid"
+                ),
+                params,
+            )
+        ).scalar() or 0
+    events.sort(key=lambda e: e.date or "", reverse=True)
+    sources = len({e.excerpt for e in events if e.kind in ("news", "vendor") and e.excerpt})
+    return TimelineResp(
+        subcap_id=subcap_id,
+        name=str(name_row[0]),
+        stories=int(stories),
+        sources=sources,
+        events=events,
+    )
+
+
 @router.get("/{version}/subcaps/{subcap_id}/enrichment")
 async def subcap_enrichment(
     version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)

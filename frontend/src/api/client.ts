@@ -46,6 +46,25 @@ export interface HeatmapResp {
   max: number;
 }
 
+export interface TimelineEvent {
+  kind: string;
+  date: string | null;
+  title: string;
+  claim: string | null;
+  tier: string | null;
+  mag: string | null;
+  excerpt: string | null;
+  chain: string | null;
+}
+
+export interface TimelineResp {
+  subcap_id: string;
+  name: string;
+  stories: number;
+  sources: number;
+  events: TimelineEvent[];
+}
+
 export interface SubcapNode {
   id: string;
   name: string;
@@ -753,6 +772,8 @@ export const api = {
     http<SubcapDetail>(`/api/catalogue/${v}/subcaps/${id}`),
   subcapStories: (v: string, id: string, page = 1, size = 8): Promise<StoryPage> =>
     http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
+  timeline: (v: string, id: string): Promise<TimelineResp> =>
+    http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
   subcapEnrichment: (v: string, id: string): Promise<SubcapEnrichment> =>
     http<SubcapEnrichment>(`/api/catalogue/${v}/subcaps/${id}/enrichment`),
   subcapConnections: (v: string, id: string): Promise<SubcapConnections> =>

@@ -81,6 +81,20 @@ def test_heatmap_contract(client: TestClient) -> None:
 
 
 @needs_db
+def test_subcap_timeline_contract(client: TestClient) -> None:
+    """Project-subcap trace: a known subcap returns the timeline shape (events list with the trust
+    envelope per event + a delivery story count); an unknown subcap 404s, never 500s."""
+    sid = client.get("/api/catalogue/v7/subcaps").json()[0]["id"]
+    body = client.get(f"/api/catalogue/v7/subcaps/{sid}/timeline").json()
+    assert body["subcap_id"] == sid and body["name"]
+    assert isinstance(body["events"], list) and isinstance(body["stories"], int)
+    for ev in body["events"]:
+        assert ev["kind"] in {"news", "vendor", "suggestion", "benchmark", "trend"}
+        assert {"date", "title", "claim", "tier", "chain"} <= set(ev)
+    assert client.get("/api/catalogue/v7/subcaps/NOPE.0.0/timeline").status_code == 404
+
+
+@needs_db
 def test_subcap_detail(client: TestClient) -> None:
     sid = client.get("/api/catalogue/v7/subcaps").json()[0]["id"]
     r = client.get(f"/api/catalogue/v7/subcaps/{sid}")
