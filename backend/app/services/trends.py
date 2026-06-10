@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app import db
 from app.intelligence import gates
 from app.jobs import schedule
+from app.services import sources
 from app.services.evidence import _CONTRADICTION_MIN_STORIES, _SCHEMA_RE, _TIER_SCORE, _max_delivery
 from app.services.suggestions import _catalogue_evidence
 from app.versioning import Version, get_active_version, resolve_version
@@ -220,6 +221,8 @@ async def detect_trends(version: str) -> dict[str, Any]:
 
     detected = staged = review = filtered = emergent_n = decided = 0
     async with engine.begin() as conn:
+        # Registry guard: detection is a derived source but still honours the persisted switch.
+        await sources.ensure_enabled(conn, "trends")
         await _clear_auto_trends(conn, v.version_id)
         items = (
             (

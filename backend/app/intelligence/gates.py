@@ -203,6 +203,35 @@ def evaluate_evidence(
     return results, verdict
 
 
+def evaluate_vendor_event(
+    *,
+    retrieval_count: int,
+    grounded_count: int,
+    cited: bool,
+    contradicts: bool,
+) -> tuple[dict[str, Any], str]:
+    """Gate a typed vendor development before its subcap impacts are written (F2). Vendor signal
+    is honestly LOW-TIER (newsrooms T5, press T4) — the G3 source-tier floor is NOT applied to the
+    display path (the feed shows the tier; signal is not a mutation). It applies where it matters:
+    the consultant loop refuses to stage an edit from sub-T3 evidence alone. G1 by construction,
+    G5 relevance grounding, G6 contradiction (a deprecation claim against heavy live delivery),
+    G7 citation."""
+    results: dict[str, Any] = {
+        "G1_identity_schema": _r(
+            True, "mapped subcap ids are drawn from the active version's catalogue"
+        ),
+        "G5_similarity_grounding": _r(
+            grounded_count > 0,
+            f"{grounded_count} of {retrieval_count} retrieved subcap(s) above the relevance "
+            "floor",
+        ),
+        "G6_contradiction": _r(not contradicts, "claim does not contradict delivery reality"),
+        "G7_citation_verification": _r(cited, "cited ids resolve to stored evidence"),
+    }
+    verdict = "pass" if all(g["verdict"] == "pass" for g in results.values()) else "fail"
+    return results, verdict
+
+
 def evaluate_trend(
     *,
     cluster_size: int,

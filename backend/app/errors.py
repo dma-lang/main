@@ -36,6 +36,13 @@ def register_error_handlers(app: FastAPI) -> None:
         code = _CODES.get(exc.status_code, "error")
         return JSONResponse(status_code=exc.status_code, content=_envelope(code, str(exc.detail)))
 
+    # A registry-disabled source is configuration, not a server fault: readable 409, never a 500.
+    from app.services.sources import SourceDisabledError
+
+    @app.exception_handler(SourceDisabledError)
+    async def _source_disabled(request: Request, exc: SourceDisabledError) -> JSONResponse:
+        return JSONResponse(status_code=409, content=_envelope("conflict", str(exc)))
+
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(

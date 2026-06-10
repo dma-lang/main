@@ -30,6 +30,7 @@ from app.intelligence import gates, retrieval
 from app.intelligence import news as scout
 from app.intelligence.news import NewsEnrichment, RawNewsItem
 from app.jobs import schedule
+from app.services import sources
 from app.services.suggestions import _catalogue_evidence
 from app.versioning import Version, get_active_version, resolve_version
 
@@ -187,6 +188,9 @@ async def scan_news(version: str) -> dict[str, Any]:
     engine = db.get_engine()
     if engine is None:
         raise RuntimeError("database not initialised")
+    async with engine.connect() as conn:
+        # Registry guard BEFORE the fetch: a disabled source never pulls (and never spends).
+        await sources.ensure_enabled(conn, "news")
 
     fetched = await scout.fetch_items()
     created = deduped = mapped = flagged = 0

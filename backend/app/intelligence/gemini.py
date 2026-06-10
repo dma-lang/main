@@ -12,9 +12,10 @@ from typing import TYPE_CHECKING, Any
 
 from app.settings import get_settings
 
-if TYPE_CHECKING:  # type hints only — news.py / benchmarks.py import Gemini at runtime
+if TYPE_CHECKING:  # type hints only — news/benchmarks/vendors modules import Gemini at runtime
     from app.intelligence.benchmarks import AdversaryVerdict, RawBenchmark
     from app.intelligence.news import NewsEnrichment, RawNewsItem
+    from app.intelligence.vendors import RawVendorEvent, VendorTyping
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,24 @@ class Gemini:
         A live 429/timeout yields NO verdict — the read model renders "pending", never a guess."""
         if self._settings.is_hermetic:
             raise RuntimeError("hermetic verdicts are recorded in intelligence.benchmarks")
+        raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
+
+    async def fetch_vendor_events(self) -> list[RawVendorEvent]:
+        """F2 ingest: the weekly grounded Batch fetch over vendor newsrooms / release notes.
+        Hermetic mode never reaches this — intelligence/vendors.py replays its recorded
+        fixture — so a stray call can never silently spend."""
+        if self._settings.is_hermetic:
+            raise RuntimeError(
+                "hermetic vendor fetch is the recorded fixture (intelligence.vendors)"
+            )
+        raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
+
+    async def classify_vendor_event(self, raw: RawVendorEvent) -> VendorTyping:
+        """F2 typing on the pinned flash-lite model: one of the eight vendor_event_type classes
+        (or None when untypable -> review, never a guess), the impact note, claim label and the
+        topic terms. Hermetic mode replays the recorded typing in intelligence/vendors.py."""
+        if self._settings.is_hermetic:
+            raise RuntimeError("hermetic typings are recorded in intelligence.vendors")
         raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
 
     @staticmethod

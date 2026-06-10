@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from app.deps import get_current_user, require_admin
 from app.services import benchmarks as benchmarks_svc
 from app.services import evidence as evidence_svc
+from app.services import vendors as vendors_svc
 
 router = APIRouter(prefix="/api", tags=["evidence"])
 
@@ -93,15 +94,58 @@ class BenchOut(BaseModel):
     scan: dict[str, Any]
 
 
+class VendorProfileOut(BaseModel):
+    vendor_id: str
+    name: str
+    platforms: int
+    developments_90d: int
+    subcaps_touched: int
+    heat: float
+
+
+class VendorEventOut(BaseModel):
+    id: str
+    vendor: str
+    vendor_id: str
+    event_type: str
+    type_label: str
+    title: str
+    date: str
+    mag: str
+    tier: str
+    label: str
+    impact_note: str
+    reliability: float
+    source: NewsSourceOut
+    affects: list[list[Any]]
+    chain: str | None
+
+
+class HeatCellOut(BaseModel):
+    vendor: str
+    subcap_id: str
+    name: str
+    score: float
+
+
+class VendorOut(BaseModel):
+    vendors: list[VendorProfileOut]
+    items: list[VendorEventOut]
+    heat: list[HeatCellOut]
+    types: list[dict[str, str]]
+    scan: dict[str, Any]
+
+
 @router.get("/evidence")
 async def evidence(
     kind: str = Query("news"),
     impact: str | None = Query(None),
     tier: str | None = Query(None),
     segment: str | None = Query(None),
+    event_type: str | None = Query(None),
     version: str | None = Query(None),
     _user: dict[str, Any] = Depends(get_current_user),
-) -> NewsOut | BenchOut:
+) -> NewsOut | BenchOut | VendorOut:
     if kind == "news":
         result = await evidence_svc.list_news(impact=impact, tier=tier, version=version)
         return NewsOut(
@@ -122,9 +166,21 @@ async def evidence(
             segments=bench.segments,
             scan=bench.scan,
         )
+    if kind == "vendor_event":
+        ven = await vendors_svc.list_vendor_events(event_type=event_type, version=version)
+        return VendorOut(
+            vendors=[VendorProfileOut(**vars(p)) for p in ven.vendors],
+            items=[VendorEventOut(**vars(i)) for i in ven.items],
+            heat=[HeatCellOut(**vars(h)) for h in ven.heat],
+            types=ven.types,
+            scan=ven.scan,
+        )
     raise HTTPException(
         status.HTTP_400_BAD_REQUEST,
-        detail=f"evidence kind '{kind}' is not ingested yet — wired kinds: news, benchmark",
+        detail=(
+            f"evidence kind '{kind}' is not ingested yet — wired kinds: news, benchmark, "
+            "vendor_event"
+        ),
     )
 
 
@@ -161,4 +217,21 @@ async def benchmark_loop(
     result = await benchmarks_svc.propose_from_benchmark(benchmark_id, str(user["uid"]))
     if result.get("status") == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="benchmark not found")
+    return LoopOut(**result)
+
+
+@router.post("/admin/evidence/scan/vendor/{version}")
+async def scan_vendor(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Run the weekly vendor ingest inline (hermetic); Cloud Scheduler triggers it in the cloud
+    per config/schedules.yaml."""
+    return await vendors_svc.scan_vendors(version)
+
+
+@router.post("/evidence/vendor/{event_id}/loop")
+async def vendor_loop(event_id: str, user: dict[str, Any] = Depends(get_current_user)) -> LoopOut:
+    result = await vendors_svc.propose_from_vendor_event(event_id, str(user["uid"]))
+    if result.get("status") == "not_found":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="vendor event not found")
     return LoopOut(**result)

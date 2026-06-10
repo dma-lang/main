@@ -30,6 +30,7 @@ from app.intelligence import benchmarks as scout
 from app.intelligence import gates, retrieval
 from app.intelligence.benchmarks import AdversaryVerdict, RawBenchmark
 from app.jobs import schedule
+from app.services import sources
 from app.services.evidence import _SCHEMA_RE, _impact_scores, compute_ers
 from app.services.suggestions import _catalogue_evidence
 from app.versioning import Version, get_active_version, resolve_version
@@ -121,6 +122,9 @@ async def scan_benchmarks(version: str) -> dict[str, Any]:
     engine = db.get_engine()
     if engine is None:
         raise RuntimeError("database not initialised")
+    async with engine.connect() as conn:
+        # Registry guard BEFORE the fetch: a disabled source never pulls (and never spends).
+        await sources.ensure_enabled(conn, "benchmarks")
 
     fetched = await scout.fetch_benchmarks()
     created = deduped = mapped = flagged = 0
