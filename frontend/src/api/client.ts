@@ -16,6 +16,25 @@ export interface VersionInfo {
   created_at: string | null;
 }
 
+export interface DiffRow {
+  id: string;
+  name: string;
+  pillar: string;
+}
+
+export interface DiffModified extends DiffRow {
+  changes: string[];
+}
+
+export interface DiffResp {
+  a: string;
+  b: string;
+  added: DiffRow[];
+  removed: DiffRow[];
+  modified: DiffModified[];
+  unchanged: number;
+}
+
 export interface PillarSummary {
   pillar_id: string;
   name: string;
@@ -802,6 +821,7 @@ export const api = {
   patchPreferences: (preferences: Record<string, unknown>): Promise<Me> =>
     http<Me>('/api/me/preferences', { method: 'PATCH', body: JSON.stringify({ preferences }) }),
   versions: (): Promise<VersionInfo[]> => http<VersionInfo[]>('/api/versions'),
+  diff: (a: string, b: string): Promise<DiffResp> => http<DiffResp>(`/api/diff/${a}/${b}`),
   summary: (v: string): Promise<CatalogueSummary> =>
     http<CatalogueSummary>(`/api/catalogue/${v}/summary`),
   heatmap: (v: string, lens: string, pillar: string, sv: string): Promise<HeatmapResp> => {

@@ -7,6 +7,7 @@ import {
   type AuditRow,
   type BenchResp,
   type CatalogueSummary,
+  type DiffResp,
   type HeatmapResp,
   type KgResp,
   type TimelineResp,
@@ -86,6 +87,14 @@ export const useWhatIf = (version: string, subcap: string, action: string, enabl
     queryKey: ['whatif', version, subcap, action],
     queryFn: () => api.whatif(version, subcap, action),
     enabled: enabled && !!version && !!subcap,
+  });
+
+export const useDiff = (a: string, b: string) =>
+  useQuery<DiffResp>({
+    queryKey: ['diff', a, b],
+    queryFn: () => api.diff(a, b),
+    enabled: !!a && !!b,
+    retry: false, // an unprovisioned version is a designed 404 state, not a retryable fault
   });
 
 export const useSubcaps = (version: string) =>
