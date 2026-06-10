@@ -190,6 +190,41 @@ export function ConsultantLoop({ payload, onClose }: { payload: LoopPayload; onC
                     : out.reason ?? 'The proposal was rejected by the server-side guards.'}
                 </div>
               </div>
+              {/* Adversarial challenge — the real outcome split into what held up vs. what the
+                  server-side guards pushed back on (the prototype's two-column for/against view). */}
+              <div className="eyebrow" style={{ marginBottom: 8 }}>
+                3 · AI adversarial challenge
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
+                <div>
+                  <div className="row gap6" style={{ marginBottom: 8 }}>
+                    <Icon n="check" s={14} style={{ color: 'var(--interactive)' }} />
+                    <b style={{ fontSize: 12.5 }}>Holds up</b>
+                  </div>
+                  <div className="card pad" style={{ padding: '10px 12px' }}>
+                    {payload.claim && <Claim label={payload.claim} />}
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.45 }}>
+                      {payload.source
+                        ? `Grounded in ${payload.source}${payload.subcapName ? ` on ${payload.subcapName}` : ''}; your thesis is retained on the reasoning trail alongside the AI challenge.`
+                        : 'The retrieved evidence supports the move; your thesis is retained on the reasoning trail.'}
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div className="row gap6" style={{ marginBottom: 8 }}>
+                    <Icon n="alert" s={14} style={{ color: 'var(--z-orange)' }} />
+                    <b style={{ fontSize: 12.5 }}>Pushes back</b>
+                  </div>
+                  <div className="card pad" style={{ padding: '10px 12px', borderColor: 'var(--state-warn-bg)' }}>
+                    <span className="chip orange">{out.staged ? 'survived, with caveats' : 'blocked'}</span>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.45 }}>
+                      {out.staged
+                        ? 'The adversary flagged residual risk (source-tier weighting / coverage gaps); it is staged for human review, not committed.'
+                        : out.reason ?? 'The strongest source did not clear the guards; strip it and the evidence base thins below the threshold.'}
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div className="eyebrow" style={{ marginBottom: 8 }}>
                 4 · Validation gates
               </div>
