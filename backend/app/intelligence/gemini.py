@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 from app.settings import get_settings
 
-if TYPE_CHECKING:  # imported for type hints only — news.py imports Gemini at runtime
+if TYPE_CHECKING:  # type hints only — news.py / benchmarks.py import Gemini at runtime
+    from app.intelligence.benchmarks import AdversaryVerdict, RawBenchmark
     from app.intelligence.news import NewsEnrichment, RawNewsItem
 
 
@@ -51,6 +52,25 @@ class Gemini:
         mode replays the recorded enrichment in intelligence/news.py instead."""
         if self._settings.is_hermetic:
             raise RuntimeError("hermetic enrichment is recorded in intelligence.news")
+        raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
+
+    async def fetch_benchmarks(self) -> list[RawBenchmark]:
+        """D4 ingest: the monthly grounded Batch fetch of curated public benchmark datasets (T2).
+        Hermetic mode never reaches this — intelligence/benchmarks.py replays its recorded
+        fixture — so a stray call can never silently spend."""
+        if self._settings.is_hermetic:
+            raise RuntimeError(
+                "hermetic benchmark fetch is the recorded fixture (intelligence.benchmarks)"
+            )
+        raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
+
+    async def adversary_review(self, raw: RawBenchmark) -> AdversaryVerdict:
+        """D4 adversarial review on the pinned synthesis/adversarial model: argues the opposite,
+        surfaces missing evidence and overreach; the verdict chip is BENCHMARK / INDICATIVE /
+        EXPLORATORY. Hermetic mode replays the recorded verdict in intelligence/benchmarks.py.
+        A live 429/timeout yields NO verdict — the read model renders "pending", never a guess."""
+        if self._settings.is_hermetic:
+            raise RuntimeError("hermetic verdicts are recorded in intelligence.benchmarks")
         raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
 
     @staticmethod

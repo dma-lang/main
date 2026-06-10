@@ -95,6 +95,30 @@ def trends_config() -> TrendConfig:
     return cfg
 
 
+@dataclass(frozen=True)
+class BenchmarkConfig:
+    """Benchmarks-studio thresholds (config/gates.yaml: benchmarks.*)."""
+
+    min_observations: int
+    bootstrap_resamples: int
+    ci_level: float
+
+
+def benchmarks_config() -> BenchmarkConfig:
+    """The thin-coverage floor ("too few observations -> coverage-gap banner, no false
+    precision" — the spec names no number, so it lives in config) and the bootstrap-CI
+    parameters. Recalibrated like every threshold: config, not code."""
+    section = load_gate_config().get("benchmarks") or {}
+    cfg = BenchmarkConfig(
+        min_observations=int(section.get("min_observations", 8)),
+        bootstrap_resamples=int(section.get("bootstrap_resamples", 1000)),
+        ci_level=float(section.get("ci_level", 0.95)),
+    )
+    if cfg.min_observations < 1 or cfg.bootstrap_resamples < 100 or not 0 < cfg.ci_level < 1:
+        raise ValueError("gates.yaml: invalid benchmarks thresholds")
+    return cfg
+
+
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
     """Run G5 + G7 over a grounded answer; return the gate_results jsonb and the verdict."""
     g5 = retrieval_count > 0 and citation_count > 0

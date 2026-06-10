@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.deps import get_current_user, require_admin
+from app.services import benchmarks as benchmarks_svc
 from app.services import evidence as evidence_svc
 
 router = APIRouter(prefix="/api", tags=["evidence"])
@@ -59,27 +60,71 @@ class LoopOut(BaseModel):
     target: str | None = None
 
 
+class BenchItemOut(BaseModel):
+    id: str
+    metric: str
+    unit: str
+    segment: str
+    date: str
+    n: int
+    observations: list[float]
+    p25: float
+    p50: float
+    p75: float
+    ci_low: float | None
+    ci_high: float | None
+    thin: bool
+    coverage_note: str | None
+    methodology: str
+    verdict: str
+    verdict_note: str
+    label: str
+    tier: str
+    ers: float
+    reliability: float
+    source: NewsSourceOut
+    affects: list[list[Any]]
+    chain: str | None
+
+
+class BenchOut(BaseModel):
+    items: list[BenchItemOut]
+    segments: list[str]
+    scan: dict[str, Any]
+
+
 @router.get("/evidence")
 async def evidence(
     kind: str = Query("news"),
     impact: str | None = Query(None),
     tier: str | None = Query(None),
+    segment: str | None = Query(None),
     version: str | None = Query(None),
     _user: dict[str, Any] = Depends(get_current_user),
-) -> NewsOut:
-    if kind != "news":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail=f"evidence kind '{kind}' is not ingested yet — 'news' is the wired kind",
+) -> NewsOut | BenchOut:
+    if kind == "news":
+        result = await evidence_svc.list_news(impact=impact, tier=tier, version=version)
+        return NewsOut(
+            items=[
+                NewsItemOut(**{**vars(i), "source": NewsSourceOut(**vars(i.source))})
+                for i in result.items
+            ],
+            impacts=result.impacts,
+            scan=result.scan,
         )
-    result = await evidence_svc.list_news(impact=impact, tier=tier, version=version)
-    return NewsOut(
-        items=[
-            NewsItemOut(**{**vars(i), "source": NewsSourceOut(**vars(i.source))})
-            for i in result.items
-        ],
-        impacts=result.impacts,
-        scan=result.scan,
+    if kind == "benchmark":
+        bench = await benchmarks_svc.list_benchmarks(segment=segment, version=version)
+        return BenchOut(
+            items=[
+                BenchItemOut(**{**vars(i), "source": NewsSourceOut(**vars(i.source))})
+                for i in bench.items
+            ],
+            segments=bench.segments,
+            scan=bench.scan,
+        )
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        detail=f"evidence kind '{kind}' is not ingested yet — wired kinds: news, benchmark",
     )
 
 
@@ -97,4 +142,23 @@ async def news_loop(news_id: str, user: dict[str, Any] = Depends(get_current_use
     result = await evidence_svc.propose_from_news(news_id, str(user["uid"]))
     if result.get("status") == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="news item not found")
+    return LoopOut(**result)
+
+
+@router.post("/admin/evidence/scan/benchmarks/{version}")
+async def scan_benchmarks(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Run the monthly benchmark ingest inline (hermetic); Cloud Scheduler triggers it in the
+    cloud per config/schedules.yaml."""
+    return await benchmarks_svc.scan_benchmarks(version)
+
+
+@router.post("/evidence/benchmark/{benchmark_id}/loop")
+async def benchmark_loop(
+    benchmark_id: str, user: dict[str, Any] = Depends(get_current_user)
+) -> LoopOut:
+    result = await benchmarks_svc.propose_from_benchmark(benchmark_id, str(user["uid"]))
+    if result.get("status") == "not_found":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="benchmark not found")
     return LoopOut(**result)

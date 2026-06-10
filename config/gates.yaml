@@ -45,6 +45,14 @@ evidence:
   relevance_floor: 0.025         # matches below this are noise — never mapped; zero above the floor -> G5 fail -> Change Flags
   strong_grounding: 0.04         # top match below this = weak grounding -> claim label downgraded one notch, scores scaled down
 
+# Benchmarks studio (D4). "Too few observations -> coverage-gap banner (no false precision)" —
+# the spec names no number, so the floor lives here (recalibrated like every threshold). The
+# bootstrap parameters document the CI method (seeded resample of the median).
+benchmarks:
+  min_observations: 8            # below this the benchmark is thin -> coverage-gap banner, CI band suppressed
+  bootstrap_resamples: 1000
+  ci_level: 0.95
+
 # Carry-forward + matching confidence bands (story_subcap_carry, sow_subcap_match).
 matching:
   auto_confirm_at: 0.86          # >= confirm
