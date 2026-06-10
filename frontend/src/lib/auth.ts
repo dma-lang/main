@@ -1,31 +1,44 @@
-// Auth bootstrap. The SPA asks /api/config (the only public API route) how to sign in:
-// dev mode needs no token; live mode lazy-loads the Firebase SDK (dynamic import — hermetic
-// users never download it) and attaches a fresh ID token to every API call. The backend
-// VERIFIES every token and fails closed — this module is UX, not the security boundary.
-import type { User } from 'firebase/auth';
+// Auth bootstrap — plain Google Identity Services (NO Firebase, no passwords handled or stored).
+// The SPA asks /api/config (the only public API route) how to sign in: dev mode needs no token;
+// live mode loads Google's GSI script and renders the OFFICIAL Sign-in-with-Google button, whose
+// callback hands us a Google ID token (a 1h JWT). Every API call carries it; the backend VERIFIES
+// signature + audience + @zennify.com and fails closed — this module is UX, not the boundary.
 
 export interface ClientConfig {
   auth_mode: 'dev' | 'live';
   auth_email_domain: string;
-  firebase: {
-    api_key: string;
-    auth_domain: string;
-    project_id: string;
-    storage_bucket?: string;
-    messaging_sender_id?: string;
-    app_id?: string;
-    measurement_id?: string;
-  } | null;
+  google_client_id: string | null;
 }
 
+interface GisIdApi {
+  initialize(opts: {
+    client_id: string;
+    callback: (r: { credential: string }) => void;
+    hd?: string;
+    auto_select?: boolean;
+    use_fedcm_for_prompt?: boolean;
+  }): void;
+  renderButton(parent: HTMLElement, opts: Record<string, unknown>): void;
+  disableAutoSelect(): void;
+}
+
+declare global {
+  interface Window {
+    google?: { accounts: { id: GisIdApi } };
+  }
+}
+
+const TOKEN_KEY = 'cia_id_token';
+const GSI_SRC = 'https://accounts.google.com/gsi/client';
+
 let config: ClientConfig | null = null;
-let user: User | null = null;
 let configPromise: Promise<ClientConfig> | null = null;
-let ready: Promise<void> | null = null;
+let gsiPromise: Promise<GisIdApi> | null = null;
+let token: string | null = null;
 
 export async function loadConfig(): Promise<ClientConfig> {
   // Failures are NOT cached: a transient /api/config error must stay retryable, otherwise one
-  // blip poisons every later getToken()/signIn() for the whole session.
+  // blip poisons every later getToken()/sign-in for the whole session.
   configPromise ??= fetch('/api/config').then(async (r) => {
     if (!r.ok) throw new Error(`config ${r.status}: ${r.statusText}`);
     config = (await r.json()) as ClientConfig;
@@ -39,61 +52,118 @@ export async function loadConfig(): Promise<ClientConfig> {
   }
 }
 
-/** Test seam: subscribes the module's user to an auth-like object and resolves once the
- * initial restore settles. The subscription is PERMANENT — session restore, token refresh
- * and sign-out-in-another-tab all keep flowing into `user`. */
-export async function wireAuthState(auth: {
-  currentUser: User | null;
-  authStateReady?: () => Promise<void>;
-}, onAuthStateChanged: (a: typeof auth, cb: (u: User | null) => void) => unknown): Promise<void> {
-  let settle: (() => void) | null = null;
-  const first = new Promise<void>((resolve) => {
-    settle = resolve;
-  });
-  onAuthStateChanged(auth, (u) => {
-    user = u;
-    settle?.();
-    settle = null;
-  });
-  // authStateReady (firebase ^10.7) resolves after the initial restore; the first listener
-  // emission is the fallback for fakes/tests that don't implement it.
-  await (auth.authStateReady ? auth.authStateReady() : first);
-  user = auth.currentUser ?? user;
-}
-
-async function initFirebase(cfg: ClientConfig): Promise<void> {
-  if (!cfg.firebase) return;
-  const [{ initializeApp }, { getAuth, onAuthStateChanged }] = await Promise.all([
-    import('firebase/app'),
-    import('firebase/auth'),
-  ]);
-  // The full public web config, served by /api/config (hardcoded server-side, env-overridable).
-  const app = initializeApp({
-    apiKey: cfg.firebase.api_key,
-    authDomain: cfg.firebase.auth_domain,
-    projectId: cfg.firebase.project_id,
-    storageBucket: cfg.firebase.storage_bucket,
-    messagingSenderId: cfg.firebase.messaging_sender_id,
-    appId: cfg.firebase.app_id,
-    measurementId: cfg.firebase.measurement_id,
-  });
-  if (cfg.firebase.measurement_id) {
-    // Analytics is optional + lazy; isSupported() guards non-browser/blocked environments.
-    void import('firebase/analytics').then(({ getAnalytics, isSupported }) =>
-      isSupported().then((ok) => ok && getAnalytics(app)).catch(() => undefined),
-    );
+/** JWT exp (seconds since epoch), or 0 when unparseable — an unparseable token never passes. */
+export function tokenExp(jwt: string): number {
+  try {
+    const payload = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof payload.exp === 'number' ? payload.exp : 0;
+  } catch {
+    return 0;
   }
-  await wireAuthState(getAuth(app), (a, cb) => onAuthStateChanged(a as ReturnType<typeof getAuth>, cb));
 }
 
-/** Idempotent auth init; awaited once by the API layer before the first request.
- * Like loadConfig, a rejected init resets so the Login page's Retry actually retries. */
-export function ensureAuth(): Promise<void> {
-  ready ??= loadConfig().then((cfg) => (cfg.auth_mode === 'live' ? initFirebase(cfg) : undefined));
-  return ready.catch((e) => {
-    ready = null;
+function freshToken(): string | null {
+  if (token === null) {
+    try {
+      token = sessionStorage.getItem(TOKEN_KEY);
+    } catch {
+      /* private mode */
+    }
+  }
+  // 30s skew so a token never expires mid-request; expiry means sign in again (Google ID tokens
+  // are 1h JWTs with no refresh — the Gate shows the Login and one click re-issues).
+  if (token && tokenExp(token) * 1000 > Date.now() + 30_000) return token;
+  return null;
+}
+
+export function storeToken(jwt: string): void {
+  token = jwt;
+  try {
+    sessionStorage.setItem(TOKEN_KEY, jwt);
+  } catch {
+    /* private mode */
+  }
+}
+
+/** Load Google's GSI script once. Rejects (retryably) if it cannot load — surfaced on the Login. */
+function loadGsi(): Promise<GisIdApi> {
+  gsiPromise ??= new Promise<GisIdApi>((resolve, reject) => {
+    if (window.google?.accounts?.id) {
+      resolve(window.google.accounts.id);
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = GSI_SRC;
+    s.async = true;
+    s.defer = true;
+    const timer = window.setTimeout(() => {
+      reject(new Error('Google sign-in script timed out'));
+    }, 10_000);
+    s.onload = () => {
+      window.clearTimeout(timer);
+      const api = window.google?.accounts?.id;
+      if (api) resolve(api);
+      else reject(new Error('Google sign-in script loaded without the accounts API'));
+    };
+    s.onerror = () => {
+      window.clearTimeout(timer);
+      reject(new Error('Could not load the Google sign-in script — check the network'));
+    };
+    document.head.appendChild(s);
+  });
+  return gsiPromise.catch((e) => {
+    gsiPromise = null; // retryable
     throw e;
   });
+}
+
+/** Pre-load config + the GSI script so the Login renders Google's button immediately. */
+export async function prewarmAuth(): Promise<void> {
+  const cfg = await loadConfig();
+  if (cfg.auth_mode === 'live') await loadGsi();
+}
+
+/** Render the official Sign-in-with-Google button. Google owns the click → no popup-blocked
+ * failure mode; the callback receives the ID token. `hd` pre-filters to the Zennify domain in
+ * the picker (the SERVER still enforces it — fails closed on any other account). */
+export async function renderGoogleButton(
+  parent: HTMLElement,
+  onCredential: () => void,
+): Promise<void> {
+  const cfg = await loadConfig();
+  if (cfg.auth_mode !== 'live') return;
+  if (!cfg.google_client_id) {
+    throw new Error(
+      'Sign-in is not configured — set GOOGLE_CLIENT_ID on the service (an OAuth web client id ' +
+        'from GCP Console → APIs & Services → Credentials).',
+    );
+  }
+  const gsi = await loadGsi();
+  gsi.initialize({
+    client_id: cfg.google_client_id,
+    hd: cfg.auth_email_domain,
+    auto_select: false,
+    use_fedcm_for_prompt: true,
+    callback: (r) => {
+      storeToken(r.credential);
+      onCredential();
+    },
+  });
+  parent.replaceChildren();
+  gsi.renderButton(parent, {
+    theme: 'outline',
+    size: 'large',
+    text: 'continue_with',
+    shape: 'rectangular',
+    width: 320,
+    logo_alignment: 'left',
+  });
+}
+
+/** Idempotent auth init; awaited by the API layer before the first request. With GIS there is no
+ * SDK session to restore — the stored ID token (if unexpired) IS the session. */
+export function ensureAuth(): Promise<void> {
+  return loadConfig().then(() => undefined);
 }
 
 export function isLiveAuth(): boolean {
@@ -101,30 +171,22 @@ export function isLiveAuth(): boolean {
 }
 
 export function signedIn(): boolean {
-  return !isLiveAuth() || user !== null;
+  return !isLiveAuth() || freshToken() !== null;
 }
 
-/** Fresh ID token for the Authorization header (SDK caches/refreshes); null in dev mode. */
+/** The bearer for the Authorization header; null in dev mode or when expired (→ sign in again). */
 export async function getToken(): Promise<string | null> {
   await ensureAuth();
   if (!isLiveAuth()) return null;
-  return user ? user.getIdToken() : null;
+  return freshToken();
 }
 
-/** Google sign-in popup (live mode). Returns the signed-in email. */
-export async function signIn(): Promise<string> {
-  const cfg = await loadConfig();
-  if (cfg.auth_mode !== 'live') return 'dev@' + cfg.auth_email_domain;
-  await ensureAuth();
-  const { getAuth, GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
-  const cred = await signInWithPopup(getAuth(), new GoogleAuthProvider());
-  user = cred.user; // the permanent listener also fires; this just removes any gap
-  return user.email ?? '';
-}
-
-export async function signOutUser(): Promise<void> {
-  if (!isLiveAuth()) return;
-  const { getAuth, signOut } = await import('firebase/auth');
-  await signOut(getAuth());
-  user = null;
+export function signOutUser(): void {
+  token = null;
+  try {
+    sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* private mode */
+  }
+  window.google?.accounts.id.disableAutoSelect();
 }

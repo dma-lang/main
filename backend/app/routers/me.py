@@ -3,7 +3,7 @@
 GET /api/me returns {uid, email, is_admin, preferences}; PATCH /api/me/preferences persists the
 server-side home for the prototype's cia_theme / cia_lens / cia_persona keys. GET /api/config is
 the ONLY unauthenticated API route: it tells the SPA how to sign in (auth mode + the PUBLIC
-Firebase web config) and exposes nothing else.
+Google OAuth client id) and exposes nothing else.
 """
 
 from __future__ import annotations
@@ -26,25 +26,15 @@ class PreferencesUpdate(BaseModel):
 
 @router.get("/config")
 async def client_config(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
-    """Public bootstrap config for the SPA login: which auth mode is active and, in live mode,
-    the FULL public Firebase web config (these values ship to every browser by design — security
-    comes from token VERIFICATION server-side, which fails closed). Defaults are hardcoded in
-    settings.py; env vars override them on rotation."""
-    firebase = None
-    if not settings.is_dev_auth and settings.firebase_project_id and settings.firebase_web_api_key:
-        firebase = {
-            "api_key": settings.firebase_web_api_key,
-            "auth_domain": settings.firebase_auth_domain,
-            "project_id": settings.firebase_project_id,
-            "storage_bucket": settings.firebase_storage_bucket,
-            "messaging_sender_id": settings.firebase_messaging_sender_id,
-            "app_id": settings.firebase_app_id,
-            "measurement_id": settings.firebase_measurement_id,
-        }
+    """Public bootstrap config for the SPA login: the auth mode and, in live mode, the Google
+    OAuth WEB client id the Sign-in-with-Google button uses (a public identifier by design —
+    security comes from server-side token VERIFICATION, which fails closed). No Firebase: plain
+    Google Identity Services; no passwords are ever handled or stored."""
+    live = not settings.is_dev_auth
     return {
-        "auth_mode": "dev" if settings.is_dev_auth else "live",
+        "auth_mode": "live" if live else "dev",
         "auth_email_domain": settings.auth_email_domain,
-        "firebase": firebase,
+        "google_client_id": settings.google_client_id if live else None,
     }
 
 

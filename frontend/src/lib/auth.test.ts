@@ -1,7 +1,7 @@
-// The two sign-in regressions that made the login button "dead": a config fetch whose failure
-// was cached forever (poisoned promise), and an auth listener that unsubscribed itself after the
-// first emission (so a session restored a beat later was never seen). Each test re-imports the
-// module fresh — auth.ts keeps module-level state by design.
+// Sign-in regressions guarded here: a config fetch whose failure was cached forever (poisoned
+// promise), and token-session handling for plain Google Identity Services (the ID token IS the
+// session — an expired or garbled token must never pass). Each test re-imports the module fresh —
+// auth.ts keeps module-level state by design. Node test env: sessionStorage is stubbed.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type AuthModule = typeof import('./auth');
@@ -11,8 +11,26 @@ async function freshAuth(): Promise<AuthModule> {
   return import('./auth');
 }
 
+function fakeJwt(exp: number): string {
+  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  return `${b64({ alg: 'RS256' })}.${b64({ exp, email: 'a@zennify.com' })}.sig`;
+}
+
+// Minimal in-memory sessionStorage for the node test environment; persists across freshAuth()
+// (module reloads) within a test, like the real one persists across page refreshes.
+function stubStorage(): void {
+  const m = new Map<string, string>();
+  vi.stubGlobal('sessionStorage', {
+    getItem: (k: string) => m.get(k) ?? null,
+    setItem: (k: string, v: string) => void m.set(k, v),
+    removeItem: (k: string) => void m.delete(k),
+    clear: () => m.clear(),
+  });
+}
+
 beforeEach(() => {
   vi.unstubAllGlobals();
+  stubStorage();
 });
 
 describe('loadConfig', () => {
@@ -22,7 +40,11 @@ describe('loadConfig', () => {
       .mockResolvedValueOnce({ ok: false, status: 503, statusText: 'Service Unavailable' })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ auth_mode: 'dev', auth_email_domain: 'zennify.com', firebase: null }),
+        json: async () => ({
+          auth_mode: 'dev',
+          auth_email_domain: 'zennify.com',
+          google_client_id: null,
+        }),
       });
     vi.stubGlobal('fetch', fetchMock);
     const auth = await freshAuth();
@@ -36,7 +58,11 @@ describe('loadConfig', () => {
   it('caches a successful config (single fetch for repeat callers)', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ auth_mode: 'dev', auth_email_domain: 'zennify.com', firebase: null }),
+      json: async () => ({
+        auth_mode: 'dev',
+        auth_email_domain: 'zennify.com',
+        google_client_id: null,
+      }),
     });
     vi.stubGlobal('fetch', fetchMock);
     const auth = await freshAuth();
@@ -47,53 +73,55 @@ describe('loadConfig', () => {
   });
 });
 
-describe('wireAuthState (live mode)', () => {
-  it('keeps listening after the initial null emission — a late session restore is seen', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          auth_mode: 'live',
-          auth_email_domain: 'zennify.com',
-          firebase: { api_key: 'k', auth_domain: 'd', project_id: 'p' },
-        }),
+describe('token session (live mode)', () => {
+  const liveFetch = () =>
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        auth_mode: 'live',
+        auth_email_domain: 'zennify.com',
+        google_client_id: 'abc.apps.googleusercontent.com',
       }),
-    );
-    const auth = await freshAuth();
-    await auth.loadConfig(); // live mode: signedIn() now depends on the module's user
-
-    type Cb = (u: unknown) => void;
-    let listener: Cb = () => undefined;
-    await auth.wireAuthState({ currentUser: null } as never, (_a, cb) => {
-      listener = cb as Cb;
-      cb(null); // initial emission: restore not finished yet
     });
-    expect(auth.signedIn()).toBe(false);
 
-    listener({ uid: 'u1', email: 'a@zennify.com' }); // Firebase restores the session LATER
-    expect(auth.signedIn()).toBe(true); // the permanent listener saw it
-  });
-
-  it('prefers authStateReady and reports currentUser after the initial restore', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          auth_mode: 'live',
-          auth_email_domain: 'zennify.com',
-          firebase: { api_key: 'k', auth_domain: 'd', project_id: 'p' },
-        }),
-      }),
-    );
+  it('a stored unexpired ID token IS the session; getToken returns it', async () => {
+    vi.stubGlobal('fetch', liveFetch());
     const auth = await freshAuth();
     await auth.loadConfig();
+    expect(auth.signedIn()).toBe(false);
 
-    const user = { uid: 'u2', email: 'b@zennify.com' };
-    const ready = vi.fn().mockResolvedValue(undefined);
-    await auth.wireAuthState({ currentUser: user, authStateReady: ready } as never, () => undefined);
-    expect(ready).toHaveBeenCalled();
-    expect(auth.signedIn()).toBe(true); // restored session visible even with no emission yet
+    const jwt = fakeJwt(Math.floor(Date.now() / 1000) + 3600);
+    auth.storeToken(jwt);
+    expect(auth.signedIn()).toBe(true);
+    expect(await auth.getToken()).toBe(jwt);
+  });
+
+  it('an EXPIRED token never passes (signed out -> the Gate shows Login again)', async () => {
+    vi.stubGlobal('fetch', liveFetch());
+    const auth = await freshAuth();
+    await auth.loadConfig();
+    auth.storeToken(fakeJwt(Math.floor(Date.now() / 1000) - 10));
+    expect(auth.signedIn()).toBe(false);
+    expect(await auth.getToken()).toBeNull();
+  });
+
+  it('a garbled token parses to exp 0 and never passes', async () => {
+    vi.stubGlobal('fetch', liveFetch());
+    const auth = await freshAuth();
+    await auth.loadConfig();
+    expect(auth.tokenExp('not-a-jwt')).toBe(0);
+    auth.storeToken('not-a-jwt');
+    expect(auth.signedIn()).toBe(false);
+  });
+
+  it('the session survives a module reload via sessionStorage (page refresh)', async () => {
+    vi.stubGlobal('fetch', liveFetch());
+    const first = await freshAuth();
+    await first.loadConfig();
+    first.storeToken(fakeJwt(Math.floor(Date.now() / 1000) + 3600));
+
+    const second = await freshAuth(); // simulates a refresh: fresh module, same sessionStorage
+    await second.loadConfig();
+    expect(second.signedIn()).toBe(true);
   });
 });

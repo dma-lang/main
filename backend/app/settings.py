@@ -33,20 +33,16 @@ class Settings(BaseSettings):
 
     # Auth (F2). DELIBERATELY decoupled from LLM_MODE: a hermetic (no-spend) deployment still
     # fails closed unless AUTH_MODE=dev is set explicitly — the cost switch must never be able to
-    # disable authentication. "live" verifies Firebase ID tokens; "dev" is the local identity.
-    auth_mode: str = "live"  # live (Firebase, fails closed) | dev (deterministic local identity)
+    # disable authentication. "live" verifies GOOGLE ID tokens (plain Google Identity Services —
+    # no Firebase, no passwords stored); "dev" is the deterministic local identity.
+    auth_mode: str = "live"  # live (Google ID token, fails closed) | dev (local identity)
 
-    # Firebase WEB config — hardcoded defaults for this deployment (the values below are the
-    # PUBLIC client config Firebase embeds in every browser; they are identifiers, not secrets —
-    # security is server-side token verification, which fails closed). Each is still
-    # env-overridable (FIREBASE_WEB_API_KEY=..., etc.) for rotation without a code change.
-    firebase_project_id: str | None = "digital-maturity-assessor"
-    firebase_web_api_key: str | None = "AIzaSyBIK4npGU-8wuu-BbQqiH4I7ACNKItbCkY"
-    firebase_auth_domain: str = "digital-maturity-assessor.firebaseapp.com"
-    firebase_storage_bucket: str = "digital-maturity-assessor.firebasestorage.app"
-    firebase_messaging_sender_id: str = "306195530103"
-    firebase_app_id: str = "1:306195530103:web:5e924628c5bf54c91b2172"
-    firebase_measurement_id: str = "G-9J4D5RR5D6"
+    # The OAuth 2.0 WEB client id the SPA's "Sign in with Google" button uses and the ONLY
+    # audience the server accepts tokens for. A public identifier, not a secret — security is
+    # server-side verification against Google's certs, which fails closed (503 when unset).
+    # Set GOOGLE_CLIENT_ID on the service; create/copy it in GCP Console → APIs & Services →
+    # Credentials (add the run.app origin as an authorized JavaScript origin).
+    google_client_id: str = ""
 
     auth_email_domain: str = "zennify.com"  # sign-in restricted to this domain; fails closed
     # Break-glass bootstrap admins (always admin; the runtime grant list adds more). NoDecode +

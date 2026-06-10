@@ -1,13 +1,21 @@
-// Login (access) — Firebase Google sign-in, @zennify.com, fails closed. Layout/copy mirror the
-// prototype's Login (brand panel: dark, hero image, logo + promise list; right: sign-in card).
-// Real states the prototype mocks: loading/error on /api/config (with Retry), dev-identity
-// (hermetic dev — no token), Google popup (live), domain-rejected (backend 403s — shown honestly,
-// with sign-out), popup-blocked/closed, unauthorized-domain, db-not-ready, sign-in timeout.
+// Login (access) — plain Google sign-in (Google Identity Services), @zennify.com, fails closed.
+// NO Firebase: Google renders its own official button (no custom popup → no popup-blocked
+// failures); its callback hands us a Google ID token, the backend verifies signature + audience +
+// domain. Layout/copy mirror the prototype's Login (dark brand panel: hero image, logo, promise
+// list; right: sign-in card). Real states: config loading/error (Retry), sign-in not configured
+// (GOOGLE_CLIENT_ID missing — actionable), dev-identity, domain-rejected (server 403 — honest,
+// with sign-out), db-not-ready (503 → run the migration job).
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { api } from '../api/client';
-import { type ClientConfig, loadConfig, signIn, signOutUser } from '../lib/auth';
+import {
+  type ClientConfig,
+  loadConfig,
+  prewarmAuth,
+  renderGoogleButton,
+  signOutUser,
+} from '../lib/auth';
 import { Icon } from '../lib/icons';
 import { APP_VERSION } from '../version';
 
@@ -28,42 +36,9 @@ const PROMISES: [string, string][] = [
   ],
 ];
 
-/** Map a sign-in failure to the phase + actionable message the operator needs. */
-function mapSignInError(e: unknown, host: string): { phase: Phase; detail: string } {
-  const code = (e as { code?: string }).code ?? '';
+/** Map a sign-in/api failure to the phase + actionable message the operator needs. */
+function mapError(e: unknown): { phase: Phase; detail: string } {
   const msg = String((e as Error)?.message ?? e);
-  if (code === 'auth/unauthorized-domain') {
-    return {
-      phase: 'ready',
-      detail:
-        `Sign-in is blocked for this host — in Firebase Console → Authentication → Settings → ` +
-        `Authorized domains, add ${host}, then retry. (Deployment guide, end of step A7.)`,
-    };
-  }
-  if (code === 'auth/popup-blocked' || msg.toLowerCase().includes('popup')) {
-    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-      return { phase: 'ready', detail: '' }; // user dismissed it — silent reset
-    }
-    return {
-      phase: 'ready',
-      detail: 'The sign-in popup was blocked — allow popups for this site and retry.',
-    };
-  }
-  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-    return { phase: 'ready', detail: '' };
-  }
-  if (code === 'auth/network-request-failed') {
-    return {
-      phase: 'error',
-      detail: 'Could not reach Google sign-in — check the network and retry.',
-    };
-  }
-  if (code === 'auth/timeout') {
-    return {
-      phase: 'ready',
-      detail: 'Sign-in timed out — the popup may have been blocked or closed. Retry.',
-    };
-  }
   if (msg.startsWith('503') || msg.startsWith('500')) {
     return {
       phase: 'error',
@@ -75,10 +50,10 @@ function mapSignInError(e: unknown, host: string): { phase: Phase; detail: strin
     return {
       phase: 'error',
       detail:
-        'Google sign-in succeeded but the API rejected the token — verify FIREBASE_PROJECT_ID on the service.',
+        'Google sign-in succeeded but the API rejected the token — verify GOOGLE_CLIENT_ID on the service matches the button’s client id.',
     };
   }
-  return { phase: 'error', detail: msg.slice(0, 160) };
+  return { phase: 'error', detail: msg.slice(0, 200) };
 }
 
 export function Login() {
@@ -86,34 +61,12 @@ export function Login() {
   const [cfg, setCfg] = useState<ClientConfig | null>(null);
   const [phase, setPhase] = useState<Phase>('loading');
   const [detail, setDetail] = useState('');
+  const gsiHost = useRef<HTMLDivElement>(null);
 
-  const load = () => {
-    setPhase('loading');
-    setDetail('');
-    loadConfig()
-      .then((c) => {
-        setCfg(c);
-        setPhase('ready');
-      })
-      .catch(() => {
-        setPhase('error');
-        setDetail('Could not reach the API — check the service, then retry.');
-      });
-  };
-  useEffect(load, []);
-
-  const proceed = async () => {
+  const finish = async () => {
     setPhase('signing');
     setDetail('');
     try {
-      // dev mode resolves immediately; live opens the Google popup. The race keeps the button
-      // from sticking on "Signing in…" forever when a popup silently never returns.
-      await Promise.race([
-        signIn(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'auth/timeout' })), 30_000),
-        ),
-      ]);
       const me = await api.me(); // backend verifies the token + domain — fails closed (403)
       qc.setQueryData(['me'], me); // flips the App gate; the router mounts
       location.hash = '#/mission-control';
@@ -126,14 +79,42 @@ export function Login() {
             (cfg?.auth_email_domain ?? 'zennify.com') +
             ' Google account.',
         );
-        void signOutUser();
+        signOutUser();
         return;
       }
-      const mapped = mapSignInError(e, location.hostname);
+      const mapped = mapError(e);
       setPhase(mapped.phase);
       setDetail(mapped.detail);
     }
   };
+
+  const load = () => {
+    setPhase('loading');
+    setDetail('');
+    loadConfig()
+      .then(async (c) => {
+        setCfg(c);
+        setPhase('ready');
+        if (c.auth_mode === 'live') {
+          // Pre-warm Google's script, then let GOOGLE render the button — Google owns the click,
+          // so there is no custom popup to be blocked and nothing to time out.
+          await prewarmAuth();
+          if (gsiHost.current) {
+            await renderGoogleButton(gsiHost.current, () => void finish());
+          }
+        }
+      })
+      .catch((e) => {
+        setPhase('error');
+        setDetail(
+          String((e as Error)?.message ?? e).includes('config')
+            ? 'Could not reach the API — check the service, then retry.'
+            : String((e as Error)?.message ?? e).slice(0, 220),
+        );
+      });
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, []);
 
   return (
     <div className="loginwrap">
@@ -256,33 +237,33 @@ export function Login() {
                 className="btn primary"
                 style={{ width: '100%', justifyContent: 'center', padding: 12, fontSize: 14 }}
                 disabled={phase === 'signing'}
-                onClick={() => void proceed()}
+                onClick={() => void finish()}
               >
                 Continue to the workbench
               </button>
             </>
           )}
 
-          {cfg?.auth_mode === 'live' && (phase === 'ready' || phase === 'signing') && (
-            <button
-              className="btn ghost"
-              style={{ width: '100%', justifyContent: 'center', padding: 12, fontSize: 14 }}
-              disabled={phase === 'signing'}
-              onClick={() => void proceed()}
-            >
-              {phase === 'signing' ? (
-                <Icon n="refresh" s={16} cls="spin" />
-              ) : (
-                <Icon n="google" s={16} />
+          {cfg?.auth_mode === 'live' && (
+            <>
+              {/* Google renders its official button in here (live mode). */}
+              <div
+                ref={gsiHost}
+                style={{ minHeight: 44, display: phase === 'signing' ? 'none' : 'block' }}
+              />
+              {phase === 'signing' && (
+                <div className="row gap8" style={{ fontSize: 12.5 }}>
+                  <Icon n="refresh" s={15} cls="spin" />
+                  Signing in…
+                </div>
               )}
-              {phase === 'signing' ? 'Signing in…' : 'Continue with Google'}
-            </button>
+            </>
           )}
 
           {phase === 'rejected' && (
             <div
               className="card"
-              style={{ padding: '10px 12px', background: 'var(--state-warn-bg)', marginTop: 4 }}
+              style={{ padding: '10px 12px', background: 'var(--state-warn-bg)', marginTop: 12 }}
             >
               <div className="row gap8">
                 <Icon n="alert" s={14} style={{ color: 'var(--z-orange)', flex: 'none' }} />
@@ -294,6 +275,7 @@ export function Login() {
                 onClick={() => {
                   setPhase('ready');
                   setDetail('');
+                  load();
                 }}
               >
                 Try a different account
@@ -302,7 +284,10 @@ export function Login() {
           )}
 
           {phase === 'error' && (
-            <div className="card" style={{ padding: '10px 12px', marginTop: 4 }}>
+            <div
+              className="card"
+              style={{ padding: '10px 12px', marginTop: 12, background: 'var(--state-warn-bg)' }}
+            >
               <div className="row gap8">
                 <Icon n="alert" s={14} style={{ color: 'var(--z-orange)', flex: 'none' }} />
                 <span style={{ fontSize: 11.5 }}>{detail}</span>
@@ -310,12 +295,6 @@ export function Login() {
               <button className="btn ghost xs" style={{ marginTop: 8 }} onClick={load}>
                 Retry
               </button>
-            </div>
-          )}
-
-          {detail && phase !== 'rejected' && phase !== 'error' && (
-            <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
-              {detail}
             </div>
           )}
 

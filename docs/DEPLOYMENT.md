@@ -12,7 +12,7 @@ recommended). Path B does the same setup by clicking in the Google Cloud Console
 | `cia-migrate` Cloud Run job | creates/updates the database tables (run once) |
 | `cia-pg` Cloud SQL instance | Postgres 16 — all the data lives here, survives everything |
 | 2 secrets | the database connection string + an export-signing key |
-| Firebase sign-in | "Sign in with Google", restricted to `@zennify.com` |
+| Google sign-in | plain Google Identity Services, restricted to `@zennify.com` (no Firebase) |
 
 Three things to know before you start:
 
@@ -21,7 +21,7 @@ Three things to know before you start:
    that caused the earlier `-bash: --flag: command not found` errors).
 2. **Everything is re-runnable.** If a command says something *already exists*, that's fine —
    move on.
-3. **Almost no configuration to type.** The app ships with the Firebase web config and the two
+3. **Almost no configuration to type.** The app ships with its defaults and the two
    administrators (`tom.hedgecoth@zennify.com`, `mishley.otiende@zennify.com`) built in.
 
 ---
@@ -141,35 +141,24 @@ gcloud secrets list --filter='name:cia-' --format='value(name)'
 
 prints `cia-database-url` and `cia-hmac-key`.
 
-## A6. Turn on "Sign in with Google" (Firebase — in the browser, once)
+## A6. Create the "Sign in with Google" client (OAuth — in the browser, once)
 
-This is the only step done by clicking, because Google offers no command for it. Follow exactly:
+The app uses plain Google sign-in (no Firebase, no passwords are ever stored). It needs one
+public identifier: an **OAuth web client ID**. Follow exactly:
 
-1. Open a new browser tab at **[https://console.firebase.google.com](https://console.firebase.google.com)**
-   (sign in with your `@zennify.com` Google account if asked).
-2. **Find the project card named `digital-maturity-assessor`** and click it.
-   - *Don't see it?* Firebase hasn't been attached to the Google Cloud project yet. Click
-     **Create a project** (sometimes labelled **Add project**) → on the first screen, **type**
-     `digital-maturity-assessor` — it appears in the dropdown as an *existing Google Cloud
-     project* with a small cloud icon — select it → click **Continue** → accept the terms →
-     if asked about **Google Analytics**, either choice is fine (Disable is simplest) →
-     **Add Firebase** → wait → **Continue**. You land on the project's overview page.
-3. In the **left sidebar**, find **Authentication**:
-   - It's usually inside the collapsible **Build** group — click **Build** to expand it, then
-     **Authentication**.
-   - *No "Build" group visible?* The sidebar sometimes shows shortcuts only. Click
-     **All products** at the bottom of the sidebar (or the grid icon), then click
-     **Authentication** in the product list.
-4. On the Authentication page, click the blue **Get started** button (only shown the first time).
-5. You're now on the **Sign-in method** tab. Under *Sign-in providers*, click **Google**
-   (if you instead see an **Add new provider** button, click it, then pick **Google**).
-6. Flip the **Enable** toggle on. In **Support email for project**, pick your email from the
-   dropdown. Click **Save**.
+1. Open **[https://console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)**
+   (project `digital-maturity-assessor`, your `@zennify.com` account).
+2. If a blue banner asks you to **Configure consent screen** first: click it → User type
+   **Internal** → fill App name `Capability Intelligence Agent` + your email → **Save and
+   continue** through the steps (no scopes needed) → back to **Credentials**.
+3. Click **+ Create credentials → OAuth client ID** → Application type **Web application** →
+   Name `cia-web`.
+4. Leave **Authorized JavaScript origins** empty for now (you add the run.app address at the end
+   of A7, when you know it) → **Create**.
+5. A dialog shows **Your Client ID** — it looks like
+   `1234567890-abc123.apps.googleusercontent.com`. **Copy it**; A7 passes it to the service.
 
-**Check:** the Sign-in method list now shows **Google — Enabled**.
-
-(Nothing to copy anywhere: the app already contains this project's public Firebase web settings
-and serves them to the browser itself. One more Firebase visit happens at the end of A7.)
+**Check:** the Credentials page lists `cia-web` under *OAuth 2.0 Client IDs*.
 
 ## A7. Build & deploy the app — one command
 
@@ -195,7 +184,7 @@ gcloud run deploy cia \
   --allow-unauthenticated \
   --add-cloudsql-instances "$SQL_CONN" \
   --set-secrets "DATABASE_URL=cia-database-url:latest,HMAC_KEY=cia-hmac-key:latest" \
-  --set-env-vars "LLM_MODE=live" \
+  --set-env-vars "LLM_MODE=live,GOOGLE_CLIENT_ID=PASTE_YOUR_CLIENT_ID_FROM_A6" \
   --min-instances 1 \
   --max-instances 8 \
   --cpu 1 \
@@ -213,8 +202,8 @@ What to expect while it runs:
 - It ends with `Service [cia] revision [cia-00001-xxx] has been deployed` and a **Service URL**.
 
 Why these flags, in one line each: `--allow-unauthenticated` only lets browsers *reach the login
-page* — sign-in itself is enforced inside the app and fails closed; the Firebase settings and the
-two admins are already built in, so `LLM_MODE=live` is the only variable you set.
+page* — sign-in itself is enforced inside the app and fails closed; `GOOGLE_CLIENT_ID` is the
+public OAuth client id from A6 (paste yours in before running); the two admins are built in.
 
 Save and check the URL:
 
@@ -227,9 +216,10 @@ curl -s "$URL/healthz"
 **Check:** the health line shows `"status":"ok"`. (`"db":"down"` is expected right now — the
 tables don't exist until A9.)
 
-Last bit of A7 — allow Google sign-in on the new address: back in the **Firebase Console →
-Authentication → Settings tab → Authorized domains → Add domain** → paste the host part of your
-URL (e.g. `cia-abc123-uc.a.run.app`, without `https://`) → **Add**.
+Last bit of A7 — allow Google sign-in on the new address: back in **GCP Console → APIs &
+Services → Credentials → `cia-web`** → under **Authorized JavaScript origins** click
+**+ Add URI** → paste your full URL (e.g. `https://cia-abc123-uc.a.run.app`, no trailing slash)
+→ **Save**. (Origins take a few minutes to propagate.)
 
 ## A8. Give the app its permissions
 
@@ -330,7 +320,7 @@ pick a green one, then
    `cia-database-url` = one line
    `postgresql+asyncpg://cia:THE_PASSWORD@/cia?host=/cloudsql/THE_CONNECTION_NAME`;
    `cia-hmac-key` = any long random string (40+ characters).
-4. **Firebase sign-in** — follow **A6 above** word for word (it is browser-only in both paths).
+4. **Google sign-in client** — follow **A6 above** word for word (browser-only in both paths).
 5. **Cloud Run → Create service** → choose **“Continuously deploy from a repository”** → *Set up
    with Cloud Build* → provider **GitHub** → authorize → repository **`dma-lang/main`** → branch
    `^main$` → build type **Dockerfile** → Save. Service name `cia`, region `us-central1`,
@@ -340,7 +330,8 @@ pick a green one, then
    **Secrets exposed as environment variables**: `DATABASE_URL` → `cia-database-url:latest`,
    `HMAC_KEY` → `cia-hmac-key:latest`; **Cloud SQL connections → Add connection → `cia-pg`**.
    **Create** — the first build takes 5–8 minutes. Copy the URL and add its host under
-   Firebase → Authentication → Settings → **Authorized domains**. (This path also redeploys
+   GCP Console → APIs & Services → Credentials → `cia-web` → **Authorized JavaScript
+   origins**. (This path also redeploys
    automatically on every push to `main`.)
 6. **IAM** — IAM & Admin → IAM → find `PROJECT_NUMBER-compute@developer.gserviceaccount.com` →
    pencil icon → add roles **Cloud SQL Client**, **Secret Manager Secret Accessor**,
@@ -365,7 +356,7 @@ pick a green one, then
 | `-bash: --some-flag: command not found` while pasting | a comment after a `\` split the command | paste the blocks from this guide verbatim — they contain no inline comments |
 | `jobs create` → `unrecognized arguments: --add-cloudsql-instances` (and then `jobs execute` → NOT_FOUND) | jobs use a different flag family than services | use `--set-cloudsql-instances` on `jobs create` (A9); the NOT_FOUND clears once the job is created |
 | `healthz` shows `"db":"down"` | migration not run yet, wrong secret value, or missing Cloud SQL connection / IAM role | run A9; re-check the A5 secret, the `--add-cloudsql-instances` flag, the A8 roles |
-| sign-in popup: *domain not authorized* | the service URL isn't in Firebase's authorized domains | Firebase → Authentication → Settings → Authorized domains → add the `…run.app` host |
+| sign-in button shows an origin error | the service URL isn't an authorized JavaScript origin on the OAuth client | GCP Console → APIs & Services → Credentials → `cia-web` → add `https://…run.app` under Authorized JavaScript origins |
 | `403 account not permitted` after Google sign-in | not a verified `@zennify.com` account | sign in with a verified `@zennify.com` Google account |
 | Mission control is empty | data not loaded yet | A10: Settings → Catalogue setup → Provision, then Carry stories |
 | a Scan button says "source disabled" | that source is switched off | Settings → Ingestion source registry → toggle it on |
@@ -379,7 +370,7 @@ pick a green one, then
   traffic, `--no-traffic` smoke test, canary, automatic traffic rollback.
   `PROJECT_ID=… REGION=… ./scripts/deploy_cloudrun.sh`
 - **`scripts/qa_walk.py`** — post-deploy validation of every surface (contracts, trust envelope,
-  reasoning links, edge cases): `BASE=$URL TOKEN=<firebase-id-token> python3 scripts/qa_walk.py`
+  reasoning links, edge cases): `BASE=$URL TOKEN=<google-id-token> python3 scripts/qa_walk.py`
 - **`scripts/dev_up.sh`** — full local stack (Docker + Postgres/pgvector + migrations + UI),
   hermetic and free: run with `LLM_MODE=hermetic AUTH_MODE=dev`.
 

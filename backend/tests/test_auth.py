@@ -101,20 +101,22 @@ def test_admin_resolution_unions_bootstrap_and_grants() -> None:
     assert _bootstrap(s) == {"boss@zennify.com"}
 
 
-def test_named_admins_and_firebase_config_are_hardcoded_defaults() -> None:
-    """The deployment's public Firebase web config + the two named admins are baked-in defaults
-    (env still overrides for rotation) — a deploy needs no FIREBASE_*/ADMIN_EMAILS vars at all."""
+def test_named_admins_are_hardcoded_defaults_and_auth_fails_closed_unconfigured() -> None:
+    """The two named admins stay baked-in defaults. Live auth uses plain Google Identity
+    Services: without GOOGLE_CLIENT_ID the verifier must fail CLOSED with an actionable 503 —
+    never accept a token whose audience we can't pin."""
+    from fastapi import HTTPException
+
+    from app.deps import _verify_google
     from app.settings import Settings
 
     s = Settings()
     assert s.admin_emails == ["tom.hedgecoth@zennify.com", "mishley.otiende@zennify.com"]
-    assert s.firebase_project_id == "digital-maturity-assessor"
-    assert s.firebase_web_api_key and s.firebase_web_api_key.startswith("AIza")
-    assert s.firebase_auth_domain == "digital-maturity-assessor.firebaseapp.com"
-    assert s.firebase_storage_bucket == "digital-maturity-assessor.firebasestorage.app"
-    assert s.firebase_messaging_sender_id == "306195530103"
-    assert s.firebase_app_id == "1:306195530103:web:5e924628c5bf54c91b2172"
-    assert s.firebase_measurement_id == "G-9J4D5RR5D6"
+    assert s.google_client_id == ""  # set per-deployment via GOOGLE_CLIENT_ID
+    with pytest.raises(HTTPException) as exc:
+        _verify_google("whatever", Settings(auth_mode="live", google_client_id=""))
+    assert exc.value.status_code == 503
+    assert "GOOGLE_CLIENT_ID" in str(exc.value.detail)
 
 
 def test_admin_emails_env_accepts_plain_lists(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,24 +133,20 @@ def test_admin_emails_env_accepts_plain_lists(monkeypatch: pytest.MonkeyPatch) -
     assert Settings().admin_emails == ["c@zennify.com"]
 
 
-def test_live_config_serves_full_firebase_block() -> None:
-    """GET /api/config in live auth hands the SPA the FULL hardcoded web config."""
+def test_live_config_serves_google_client_id() -> None:
+    """GET /api/config in live auth hands the SPA the Google OAuth client id (a public
+    identifier); dev mode serves none. No Firebase block anywhere."""
     from app.routers.me import client_config
     from app.settings import Settings
 
-    cfg = asyncio.run(client_config(Settings(auth_mode="live")))
-    fb = cfg["firebase"]
-    assert cfg["auth_mode"] == "live" and fb is not None
-    assert set(fb) == {
-        "api_key",
-        "auth_domain",
-        "project_id",
-        "storage_bucket",
-        "messaging_sender_id",
-        "app_id",
-        "measurement_id",
-    }
-    assert fb["project_id"] == "digital-maturity-assessor"
+    cfg = asyncio.run(
+        client_config(Settings(auth_mode="live", google_client_id="abc.apps.googleusercontent.com"))
+    )
+    assert cfg["auth_mode"] == "live"
+    assert cfg["google_client_id"] == "abc.apps.googleusercontent.com"
+    assert "firebase" not in cfg
+    dev = asyncio.run(client_config(Settings(auth_mode="dev")))
+    assert dev["auth_mode"] == "dev" and dev["google_client_id"] is None
 
 
 def test_db_not_ready_is_503_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
