@@ -1,0 +1,26 @@
+# What `gcloud run deploy --source .` uploads to Cloud Build. Explicit so packaging is
+# deterministic (without this file gcloud derives one from .gitignore). Keep sources + the
+# Dockerfile; exclude bulk/dev artifacts the container build regenerates itself.
+.gcloudignore
+.git
+.gitignore
+
+# bulk artifacts (rebuilt inside the container)
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+backend/.venv/
+backend/static/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# local-only
+.env
+.env.*
+build-ca/*
+!build-ca/.gitkeep
+docs/specs/
