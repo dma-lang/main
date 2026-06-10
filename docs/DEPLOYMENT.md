@@ -15,32 +15,21 @@ with pgvector** + Secret Manager + Vertex AI by IAM (no API keys anywhere).
 
 ---
 
-## 1. Step one — pull the GitHub repo in Cloud Shell (always first)
+## 1. Get the repo in Cloud Shell
 
-All deploys run from [Cloud Shell](https://shell.cloud.google.com) (gcloud + docker + git
-preinstalled, acts as your identity, no laptop credentials, no JSON keys). The deploy script
-deploys exactly what is committed — it refuses a dirty tree and stamps images with the git SHA —
-so the pulled clone is the source of truth for every run.
-
-```bash
-# first time on this Cloud Shell home directory:
-gh auth login                                  # or a GitHub PAT via git credential store
-git clone https://github.com/dma-lang/main.git cia
-cd cia
-
-# EVERY subsequent deploy starts exactly here:
-cd ~/cia
-git fetch origin
-git checkout main && git pull --ff-only       # or: git checkout <release-tag>
-```
-
-**Validate:**
+Deploys run from [Cloud Shell](https://shell.cloud.google.com) (gcloud + docker + git preinstalled,
+acts as your identity). **The repo is public**, so no GitHub login or token is needed — Cloud
+Shell clones it for you when you open it via the repo's *"Open in Cloud Shell"* link, and you just
+pull the latest:
 
 ```bash
-git status --porcelain                # MUST print nothing (clean tree)
-git log --oneline -1                  # the exact commit you are about to deploy
-ls scripts/deploy_cloudrun.sh docs/DEPLOYMENT.md && echo REPO-OK
+cd ~/main && git pull --ff-only        # already cloned (Open in Cloud Shell) — just refresh
+# not there yet? one public clone, no auth:
+#   git clone https://github.com/dma-lang/main.git && cd main
 ```
+
+The deploy script deploys exactly what's committed (it refuses a dirty tree and stamps the image
+with the git SHA), so `git log --oneline -1` is the commit you're about to ship.
 
 ---
 
@@ -313,7 +302,7 @@ gcloud scheduler jobs create http cia-news-scan --location "$REGION" \
 
 ## 5. Routine deploy — one run, self-healing
 
-From the repo root pulled in §1 (HUMAN-GATED — paid actions):
+From the repo root in §1 (HUMAN-GATED — paid actions):
 
 ```bash
 PROJECT_ID=$PROJECT_ID REGION=$REGION ./scripts/deploy_cloudrun.sh
