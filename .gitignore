@@ -49,3 +49,7 @@ crash.log
 /tmp/
 *.local
 .cia_local/
+
+# optional extra build CAs (corporate/sandbox TLS proxies) — never commit real certs
+build-ca/*
+!build-ca/.gitkeep

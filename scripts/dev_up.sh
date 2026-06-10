@@ -64,6 +64,6 @@ fi
 log "ready. start the server with:"
 cat <<EOF
   cd $REPO/backend && \\
-    DATABASE_URL=$DB_BASE/cia LLM_MODE=hermetic STATIC_DIR=$REPO/frontend/dist \\
+    DATABASE_URL=$DB_BASE/cia LLM_MODE=hermetic AUTH_MODE=dev STATIC_DIR=$REPO/frontend/dist \\
     uv run uvicorn app.main:app --host 0.0.0.0 --port 8092
 EOF

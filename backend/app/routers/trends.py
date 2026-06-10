@@ -11,6 +11,7 @@ comes from config/schedules.yaml (weekly, after the news scan) — the page neve
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -96,9 +97,9 @@ async def list_trends(
 
 @router.get("/trends/{trend_id}/evidence")
 async def trend_evidence(
-    trend_id: str, _user: dict[str, Any] = Depends(get_current_user)
+    trend_id: UUID, _user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    result = await trends_svc.trend_evidence(trend_id)
+    result = await trends_svc.trend_evidence(str(trend_id))
     if not result.get("found"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="trend not found")
     return result
@@ -115,9 +116,9 @@ async def scan_trends(
 
 @router.post("/trends/{trend_id}/feedback")
 async def trend_feedback(
-    trend_id: str, body: FeedbackIn, user: dict[str, Any] = Depends(get_current_user)
+    trend_id: UUID, body: FeedbackIn, user: dict[str, Any] = Depends(get_current_user)
 ) -> dict[str, Any]:
-    result = await trends_svc.feedback(trend_id, body.verdict, str(user["uid"]))
+    result = await trends_svc.feedback(str(trend_id), body.verdict, str(user["uid"]))
     if result.get("status") == "invalid":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=result.get("reason"))
     return result
@@ -125,9 +126,9 @@ async def trend_feedback(
 
 @router.post("/trends/{trend_id}/loop")
 async def trend_loop(
-    trend_id: str, user: dict[str, Any] = Depends(get_current_user)
+    trend_id: UUID, user: dict[str, Any] = Depends(get_current_user)
 ) -> TrendLoopOut:
-    result = await trends_svc.propose_from_trend(trend_id, str(user["uid"]))
+    result = await trends_svc.propose_from_trend(str(trend_id), str(user["uid"]))
     if result.get("status") == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="trend not found")
     return TrendLoopOut(**result)

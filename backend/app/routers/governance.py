@@ -9,6 +9,7 @@ of every gated mutation.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -229,9 +230,9 @@ async def scan_flags(
 
 @router.post("/change-flags/{flag_id}/approve")
 async def approve_flag(
-    flag_id: str, user: dict[str, Any] = Depends(get_current_user)
+    flag_id: UUID, user: dict[str, Any] = Depends(get_current_user)
 ) -> FlagActionOut:
-    result = await flags_svc.approve(flag_id, str(user["uid"]))
+    result = await flags_svc.approve(str(flag_id), str(user["uid"]))
     if result.status == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="change flag not found")
     return FlagActionOut(**vars(result))
@@ -239,11 +240,11 @@ async def approve_flag(
 
 @router.post("/change-flags/{flag_id}/reject")
 async def reject_flag(
-    flag_id: str, body: FlagRejectBody, user: dict[str, Any] = Depends(get_current_user)
+    flag_id: UUID, body: FlagRejectBody, user: dict[str, Any] = Depends(get_current_user)
 ) -> FlagActionOut:
     if not body.reason.strip():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="a rejection reason is required")
-    result = await flags_svc.reject(flag_id, body.reason, str(user["uid"]))
+    result = await flags_svc.reject(str(flag_id), body.reason, str(user["uid"]))
     if result.status == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="change flag not found")
     return FlagActionOut(**vars(result))
@@ -251,9 +252,9 @@ async def reject_flag(
 
 @router.post("/change-flags/{flag_id}/defer")
 async def defer_flag(
-    flag_id: str, user: dict[str, Any] = Depends(get_current_user)
+    flag_id: UUID, user: dict[str, Any] = Depends(get_current_user)
 ) -> FlagActionOut:
-    result = await flags_svc.defer(flag_id, str(user["uid"]))
+    result = await flags_svc.defer(str(flag_id), str(user["uid"]))
     if result.status == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="change flag not found")
     return FlagActionOut(**vars(result))

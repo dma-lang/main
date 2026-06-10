@@ -4,24 +4,43 @@
 # Build for linux/amd64 and verify it runs locally before any deploy (§16):
 #   docker buildx build --platform linux/amd64 -t cia:dev . && docker run -p 8080:8080 cia:dev
 #
-# NOTE (Stage 0): the app server `app.main:app` lands in Stage 1 (F1). This Dockerfile defines its
-# target shape now; the final image becomes runnable when F1 merges.
+# Base images are ARG-overridable so a Docker Hub rate limit (429) never blocks a build — the
+# deploy script falls back to the GCR/ECR mirrors of the SAME official images, pinned by the
+# same tags (self-healing build, no content change):
+#   --build-arg NODE_IMAGE=mirror.gcr.io/library/node:20-bookworm-slim \
+#   --build-arg PYTHON_IMAGE=mirror.gcr.io/library/python:3.12-slim-bookworm
+ARG NODE_IMAGE=node:20-bookworm-slim
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 
 # ---- Stage 1: build the SPA ----
-FROM node:20-bookworm-slim AS frontend
+FROM ${NODE_IMAGE} AS frontend
 WORKDIR /fe
-RUN corepack enable
+# Optional extra CAs (corporate/sandbox TLS proxies): drop a PEM into build-ca/ and both stages
+# trust it; the committed dir is empty (a missing file is only a node warning, never a failure).
+COPY build-ca/ /tmp/build-ca/
+ENV NODE_EXTRA_CA_CERTS=/tmp/build-ca/extra-ca.crt
+RUN corepack enable   # pnpm version comes from package.json "packageManager" (pinned, reproducible)
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
 RUN pnpm build   # -> /fe/dist
 
 # ---- Stage 2: runtime (FastAPI + static SPA) ----
-FROM python:3.12-slim-bookworm AS runtime
+FROM ${PYTHON_IMAGE} AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PORT=8080 \
     LLM_MODE=live
 WORKDIR /app
+# Same optional CA hook as stage 1 (appended to the system bundle only when a PEM is present).
+# uv/pip are pointed at the SYSTEM store (uv otherwise uses its bundled roots and would ignore
+# the appended CA); these are safe defaults in clean environments — the system store is standard.
+COPY build-ca/ /tmp/build-ca/
+RUN if [ -s /tmp/build-ca/extra-ca.crt ]; then \
+      cat /tmp/build-ca/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt; \
+    fi
+ENV UV_NATIVE_TLS=true \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 RUN pip install --no-cache-dir uv
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev

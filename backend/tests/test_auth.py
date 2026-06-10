@@ -56,6 +56,18 @@ def test_update_preferences_persists(client: TestClient) -> None:
     assert again["preferences"]["lens"] == "pillar"
 
 
+def test_hermetic_llm_mode_does_not_disable_auth() -> None:
+    """The cost switch must never disable authentication: LLM_MODE=hermetic with live auth still
+    fails closed on a missing token (the dev identity needs AUTH_MODE=dev EXPLICITLY)."""
+    from app.deps import get_current_user
+    from app.settings import Settings
+
+    s = Settings(llm_mode="hermetic", auth_mode="live")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(get_current_user(authorization=None, settings=s))
+    assert exc.value.status_code == 401
+
+
 def test_require_admin_blocks_non_admin() -> None:
     with pytest.raises(HTTPException) as exc:
         asyncio.run(require_admin(user={"uid": "u", "is_admin": False}))

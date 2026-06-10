@@ -8,6 +8,7 @@ cat_<v> + appends an immutable audit_log row in one transaction; reject requires
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -64,8 +65,8 @@ async def propose(version: str, _admin: dict[str, Any] = Depends(require_admin))
 
 
 @router.post("/suggestions/{suggestion_id}/apply")
-async def apply(suggestion_id: str, user: dict[str, Any] = Depends(get_current_user)) -> ApplyOut:
-    result = await svc.apply(suggestion_id, str(user["uid"]))
+async def apply(suggestion_id: UUID, user: dict[str, Any] = Depends(get_current_user)) -> ApplyOut:
+    result = await svc.apply(str(suggestion_id), str(user["uid"]))
     if result.status == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="suggestion not found")
     return ApplyOut(**vars(result))
@@ -73,11 +74,11 @@ async def apply(suggestion_id: str, user: dict[str, Any] = Depends(get_current_u
 
 @router.post("/suggestions/{suggestion_id}/reject")
 async def reject(
-    suggestion_id: str, body: RejectBody, user: dict[str, Any] = Depends(get_current_user)
+    suggestion_id: UUID, body: RejectBody, user: dict[str, Any] = Depends(get_current_user)
 ) -> ApplyOut:
     if not body.reason.strip():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="a rejection reason is required")
-    result = await svc.reject(suggestion_id, body.reason, str(user["uid"]))
+    result = await svc.reject(str(suggestion_id), body.reason, str(user["uid"]))
     if result.status == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="suggestion not found")
     return ApplyOut(**vars(result))

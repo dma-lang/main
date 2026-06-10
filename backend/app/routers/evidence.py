@@ -9,6 +9,7 @@ never implies real-time. The consultant loop stages a GATED suggestion only (D3 
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -194,8 +195,8 @@ async def scan_news(
 
 
 @router.post("/evidence/news/{news_id}/loop")
-async def news_loop(news_id: str, user: dict[str, Any] = Depends(get_current_user)) -> LoopOut:
-    result = await evidence_svc.propose_from_news(news_id, str(user["uid"]))
+async def news_loop(news_id: UUID, user: dict[str, Any] = Depends(get_current_user)) -> LoopOut:
+    result = await evidence_svc.propose_from_news(str(news_id), str(user["uid"]))
     if result.get("status") == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="news item not found")
     return LoopOut(**result)
@@ -212,9 +213,9 @@ async def scan_benchmarks(
 
 @router.post("/evidence/benchmark/{benchmark_id}/loop")
 async def benchmark_loop(
-    benchmark_id: str, user: dict[str, Any] = Depends(get_current_user)
+    benchmark_id: UUID, user: dict[str, Any] = Depends(get_current_user)
 ) -> LoopOut:
-    result = await benchmarks_svc.propose_from_benchmark(benchmark_id, str(user["uid"]))
+    result = await benchmarks_svc.propose_from_benchmark(str(benchmark_id), str(user["uid"]))
     if result.get("status") == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="benchmark not found")
     return LoopOut(**result)
@@ -230,8 +231,8 @@ async def scan_vendor(
 
 
 @router.post("/evidence/vendor/{event_id}/loop")
-async def vendor_loop(event_id: str, user: dict[str, Any] = Depends(get_current_user)) -> LoopOut:
-    result = await vendors_svc.propose_from_vendor_event(event_id, str(user["uid"]))
+async def vendor_loop(event_id: UUID, user: dict[str, Any] = Depends(get_current_user)) -> LoopOut:
+    result = await vendors_svc.propose_from_vendor_event(str(event_id), str(user["uid"]))
     if result.get("status") == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="vendor event not found")
     return LoopOut(**result)

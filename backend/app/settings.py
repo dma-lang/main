@@ -30,7 +30,10 @@ class Settings(BaseSettings):
     # Datastore (wired in F3; optional at F1 so the service boots without a DB).
     database_url: str | None = None
 
-    # Auth (F2). Live mode verifies Firebase ID tokens; hermetic mode uses a deterministic dev user.
+    # Auth (F2). DELIBERATELY decoupled from LLM_MODE: a hermetic (no-spend) deployment still
+    # fails closed unless AUTH_MODE=dev is set explicitly — the cost switch must never be able to
+    # disable authentication. "live" verifies Firebase ID tokens; "dev" is the local identity.
+    auth_mode: str = "live"  # live (Firebase, fails closed) | dev (deterministic local identity)
     firebase_project_id: str | None = None
     auth_email_domain: str = "zennify.com"  # sign-in restricted to this domain; fails closed
     admin_emails: list[str] = Field(default_factory=list)  # these verified emails receive is_admin
@@ -44,6 +47,10 @@ class Settings(BaseSettings):
     @property
     def is_hermetic(self) -> bool:
         return self.llm_mode.lower() == "hermetic"
+
+    @property
+    def is_dev_auth(self) -> bool:
+        return self.auth_mode.lower() == "dev"
 
 
 @lru_cache

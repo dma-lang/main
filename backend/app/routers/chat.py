@@ -8,6 +8,7 @@ the evidence rows, and the gate checks the system ran before showing the answer.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -93,7 +94,7 @@ class ReasoningChain(BaseModel):
 
 @router.get("/reasoning/{chain_id}")
 async def reasoning(
-    chain_id: str, _user: dict[str, Any] = Depends(get_current_user)
+    chain_id: UUID, _user: dict[str, Any] = Depends(get_current_user)
 ) -> ReasoningChain:
     engine = db.get_engine()
     if engine is None:
@@ -167,7 +168,7 @@ async def reasoning(
 
     summary = ch["summary"] or ""
     return ReasoningChain(
-        chain_id=chain_id,
+        chain_id=str(chain_id),
         title=ch["subject_ref"] or summary[:80],
         claim_label=ch["claim_label"],
         verdict=gate["verdict"] if gate is not None else None,

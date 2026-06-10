@@ -51,8 +51,9 @@ async def get_current_user(
     authorization: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    """Resolve + upsert the caller. Fails closed for non-@domain identities in live mode."""
-    if settings.is_hermetic:
+    """Resolve + upsert the caller. Fails closed unless AUTH_MODE=dev is set EXPLICITLY — the
+    hermetic cost switch (LLM_MODE) can never disable authentication (defense in depth)."""
+    if settings.is_dev_auth:
         email = settings.hermetic_email.lower()
         is_admin = settings.hermetic_is_admin or email in _admin_set(settings)
         return await users.upsert_user(settings.hermetic_uid, email, is_admin)
