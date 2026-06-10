@@ -6,6 +6,18 @@ import { create } from 'zustand';
 export type Pillar = 'all' | 'P1' | 'P2' | 'P3' | 'P4';
 export type Theme = 'light' | 'dark';
 
+// The durable source of truth for theme is control.users.preferences (server). But index.html runs
+// a pre-paint script that reads localStorage.cia_theme to set data-theme BEFORE React mounts, so we
+// also mirror the active theme there — otherwise every reload flashes light before hydration.
+function mirrorTheme(theme: Theme): Theme {
+  try {
+    localStorage.setItem('cia_theme', JSON.stringify(theme));
+  } catch {
+    /* private mode */
+  }
+  return theme;
+}
+
 interface UiState {
   theme: Theme;
   lens: string;
@@ -32,7 +44,7 @@ export const useUi = create<UiState>((set) => ({
   version: '',
   pillar: 'all',
   sv: 'all',
-  setTheme: (theme) => set({ theme }),
+  setTheme: (theme) => set({ theme: mirrorTheme(theme) }),
   setLens: (lens) => set({ lens }),
   setPersona: (persona) => set({ persona }),
   setAdminView: (adminView) => set({ adminView }),
@@ -41,7 +53,7 @@ export const useUi = create<UiState>((set) => ({
   setSv: (sv) => set({ sv }),
   hydrateFromMe: (prefs, isAdmin) =>
     set({
-      theme: (prefs.theme as Theme) ?? 'light',
+      theme: mirrorTheme((prefs.theme as Theme) ?? 'light'),
       lens: (prefs.lens as string) ?? 'pillar',
       persona: (prefs.persona as string) ?? 'Pillar lead',
       adminView: isAdmin,
