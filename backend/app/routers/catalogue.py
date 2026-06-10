@@ -525,6 +525,144 @@ async def subcap_connections(
     )
 
 
+class KgNode(BaseModel):
+    id: str
+    kind: str  # subcap | platform | offering
+    label: str
+    pillar: str | None = None
+
+
+class KgEdge(BaseModel):
+    source: str
+    target: str
+    kind: str  # uses_platform | maps_to_offering | shares_platform
+    layer: str  # A_deterministic | B_proposed
+
+
+class KgResp(BaseModel):
+    center: str
+    name: str
+    nodes: list[KgNode]
+    edges: list[KgEdge]
+    stats: dict[str, int]
+    pending: list[KgEdge]  # Layer B — AI-proposed, gated in Change Flags (dashed, never fact)
+
+
+@router.get("/{version}/kg")
+async def knowledge_graph(
+    version: str, subcap: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> KgResp:
+    """Knowledge graph neighbourhood for a subcap. Layer A (solid) is a DETERMINISTIC projection of
+    the catalogue's own link tables — platforms it uses, offerings it maps to, and sibling subcaps
+    that share a platform — so every edge traces to a real row (F15, §19 schema-explicit). Layer B
+    (dashed) are AI-proposed `pending_edge`s, never rendered as fact and gated in Change Flags."""
+    v = await resolve_version(version)
+    s = _schema(v)
+    params = {"sid": subcap, "ver": v.version_id}
+    async with _engine().connect() as conn:
+        name = (
+            await conn.execute(
+                text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid"), {"sid": subcap}
+            )
+        ).first()
+        if name is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="subcap not found in this version"
+            )
+        plats = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT l.l3_id AS id, l.name FROM {s}.subcap_platform sp "
+                        f"JOIN {s}.l3_platform l ON l.l3_id = sp.l3_id "
+                        "WHERE sp.subcap_id = :sid ORDER BY l.name LIMIT 10"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        offs = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT o.offering_id AS id, o.name FROM {s}.offering_subcap os "
+                        f"JOIN {s}.offering o ON o.offering_id = os.offering_id "
+                        "WHERE os.subcap_id = :sid ORDER BY o.name LIMIT 8"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        sibs = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT sp2.subcap_id AS id, sc.name, left(sp2.subcap_id, 2) AS pillar, "
+                        "count(*) AS shared "
+                        f"FROM {s}.subcap_platform sp1 "
+                        f"JOIN {s}.subcap_platform sp2 ON sp2.l3_id = sp1.l3_id "
+                        f"JOIN {s}.subcap sc ON sc.subcap_id = sp2.subcap_id "
+                        "WHERE sp1.subcap_id = :sid AND sp2.subcap_id <> :sid "
+                        "GROUP BY sp2.subcap_id, sc.name ORDER BY shared DESC LIMIT 6"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        pend = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT from_node::text AS source, to_node::text AS target, "
+                        "kind::text AS kind "
+                        "FROM control.pending_edge WHERE version_id = :ver "
+                        "AND (from_node::text = :sid OR to_node::text = :sid) "
+                        "AND status = 'pending' LIMIT 10"
+                    ),
+                    params,
+                )
+            )
+            .mappings()
+            .all()
+        )
+    nodes: list[KgNode] = [KgNode(id=subcap, kind="subcap", label=str(name[0]), pillar=subcap[:2])]
+    edges: list[KgEdge] = []
+    for p in plats:
+        nodes.append(KgNode(id=p["id"], kind="platform", label=p["name"]))
+        edges.append(
+            KgEdge(source=subcap, target=p["id"], kind="uses_platform", layer="A_deterministic")
+        )
+    for o in offs:
+        nodes.append(KgNode(id=o["id"], kind="offering", label=o["name"]))
+        edges.append(
+            KgEdge(source=subcap, target=o["id"], kind="maps_to_offering", layer="A_deterministic")
+        )
+    for sb in sibs:
+        nodes.append(KgNode(id=sb["id"], kind="subcap", label=sb["name"], pillar=sb["pillar"]))
+        edges.append(
+            KgEdge(source=subcap, target=sb["id"], kind="shares_platform", layer="A_deterministic")
+        )
+    pending = [
+        KgEdge(source=p["source"], target=p["target"], kind=p["kind"], layer="B_proposed")
+        for p in pend
+    ]
+    stats = {
+        "platforms": len(plats),
+        "offerings": len(offs),
+        "siblings": len(sibs),
+        "pending": len(pending),
+    }
+    return KgResp(
+        center=subcap, name=str(name[0]), nodes=nodes, edges=edges, stats=stats, pending=pending
+    )
+
+
 @router.get("/{version}/summary")
 async def summary(
     version: str, _user: dict[str, Any] = Depends(get_current_user)

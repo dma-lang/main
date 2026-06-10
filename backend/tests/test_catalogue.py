@@ -95,6 +95,26 @@ def test_subcap_timeline_contract(client: TestClient) -> None:
 
 
 @needs_db
+def test_kg_layer_a_projection(client: TestClient) -> None:
+    """Knowledge graph: a subcap with platforms projects a deterministic Layer-A neighbourhood —
+    the centre node plus platform/offering/sibling edges, every edge a real link-table row. Unknown
+    subcap 404s. Pending (Layer B) is a separate list, never mixed into the deterministic edges."""
+    # find a subcap that actually has platforms so the projection is non-trivial
+    sid = next(
+        x["id"]
+        for x in client.get("/api/catalogue/v7/subcaps").json()
+        if client.get(f"/api/catalogue/v7/subcaps/{x['id']}").json()["n_platforms"] > 0
+    )
+    body = client.get(f"/api/catalogue/v7/kg?subcap={sid}").json()
+    assert body["center"] == sid and body["name"]
+    assert any(n["id"] == sid and n["kind"] == "subcap" for n in body["nodes"])
+    assert body["stats"]["platforms"] > 0
+    assert all(e["layer"] == "A_deterministic" for e in body["edges"])  # never proposed in Layer A
+    assert all(e["layer"] == "B_proposed" for e in body["pending"])
+    assert client.get("/api/catalogue/v7/kg?subcap=NOPE.0.0").status_code == 404
+
+
+@needs_db
 def test_subcap_detail(client: TestClient) -> None:
     sid = client.get("/api/catalogue/v7/subcaps").json()[0]["id"]
     r = client.get(f"/api/catalogue/v7/subcaps/{sid}")

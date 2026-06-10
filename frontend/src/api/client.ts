@@ -65,6 +65,29 @@ export interface TimelineResp {
   events: TimelineEvent[];
 }
 
+export interface KgNode {
+  id: string;
+  kind: string;
+  label: string;
+  pillar: string | null;
+}
+
+export interface KgEdge {
+  source: string;
+  target: string;
+  kind: string;
+  layer: string;
+}
+
+export interface KgResp {
+  center: string;
+  name: string;
+  nodes: KgNode[];
+  edges: KgEdge[];
+  stats: Record<string, number>;
+  pending: KgEdge[];
+}
+
 export interface SubcapNode {
   id: string;
   name: string;
@@ -774,6 +797,8 @@ export const api = {
     http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
   timeline: (v: string, id: string): Promise<TimelineResp> =>
     http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
+  kg: (v: string, subcap: string): Promise<KgResp> =>
+    http<KgResp>(`/api/catalogue/${v}/kg?subcap=${encodeURIComponent(subcap)}`),
   subcapEnrichment: (v: string, id: string): Promise<SubcapEnrichment> =>
     http<SubcapEnrichment>(`/api/catalogue/${v}/subcaps/${id}/enrichment`),
   subcapConnections: (v: string, id: string): Promise<SubcapConnections> =>

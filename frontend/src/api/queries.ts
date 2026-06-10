@@ -8,6 +8,7 @@ import {
   type BenchResp,
   type CatalogueSummary,
   type HeatmapResp,
+  type KgResp,
   type TimelineResp,
   type ChangeFlagsResp,
   type ChatResponse,
@@ -70,6 +71,13 @@ export const useTimeline = (version: string, id: string | null) =>
     queryKey: ['timeline', version, id],
     queryFn: () => api.timeline(version, id ?? ''),
     enabled: !!version && !!id,
+  });
+
+export const useKg = (version: string, subcap: string | null) =>
+  useQuery<KgResp>({
+    queryKey: ['kg', version, subcap],
+    queryFn: () => api.kg(version, subcap ?? ''),
+    enabled: !!version && !!subcap,
   });
 
 export const useSubcaps = (version: string) =>
