@@ -12,6 +12,7 @@ import {
   type QaMetrics,
   type Me,
   type NewsResp,
+  type TrendsResp,
   type ReasoningChain,
   type PlatformDetail,
   type PlatformRow,
@@ -147,6 +148,30 @@ export function useNewsActions() {
   const scan = useMutation({ mutationFn: api.scanNews, onSuccess: invalidate });
   const loop = useMutation({ mutationFn: api.newsLoop, onSuccess: invalidate });
   return { scan, loop };
+}
+
+export const useTrends = (status: string, version: string | null) =>
+  useQuery<TrendsResp>({
+    queryKey: ['trends', status, version],
+    queryFn: () => api.trends(status, version ?? undefined),
+    placeholderData: (prev) => prev,
+    enabled: !!version,
+  });
+
+export function useTrendsActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['trends'] });
+    void qc.invalidateQueries({ queryKey: ['suggestions'] });
+    void qc.invalidateQueries({ queryKey: ['change-flags'] });
+  };
+  const scan = useMutation({ mutationFn: api.scanTrends, onSuccess: invalidate });
+  const loop = useMutation({ mutationFn: api.trendLoop, onSuccess: invalidate });
+  const feedback = useMutation({
+    mutationFn: (a: { id: string; verdict: string }) => api.trendFeedback(a.id, a.verdict),
+    onSuccess: invalidate,
+  });
+  return { scan, loop, feedback };
 }
 
 export const useGates = () => useQuery<GatesLog>({ queryKey: ['gates'], queryFn: api.gates });

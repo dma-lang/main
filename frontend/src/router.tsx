@@ -16,6 +16,7 @@ import { StoryLibrary } from './pages/StoryLibrary';
 import { SubcapWorkbench } from './pages/SubcapWorkbench';
 import { Suggestions } from './pages/Suggestions';
 import { Surface } from './pages/Surface';
+import { Trends } from './pages/Trends';
 import { UseCases } from './pages/UseCases';
 import { VersionTimeline } from './pages/VersionTimeline';
 import { NAV } from './shell/nav';
@@ -36,6 +37,7 @@ const LIVE: Record<string, ReactElement> = {
   lifecycle: <Lifecycle />,
   chat: <Chat />,
   news: <News />,
+  trends: <Trends />,
   suggestions: <Suggestions />,
   gates: <Gates />,
   qa: <QA />,

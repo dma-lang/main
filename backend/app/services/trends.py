@@ -277,7 +277,7 @@ async def detect_trends(version: str) -> dict[str, Any]:
             if score < cfg.trend_threshold:
                 filtered += 1
                 continue
-            top_subcap = max(cluster.subcap_scores, key=lambda s: cluster.subcap_scores[s])
+            top_subcap = max(cluster.subcap_scores, key=lambda s: (cluster.subcap_scores[s], s))
             if await _already_decided(conn, v.version_id, top_subcap):
                 # An analyst already promoted/dismissed this cluster — don't resurface it.
                 decided += 1
@@ -418,7 +418,7 @@ async def _persist_trend(
     # Claim label: an emergent (net-new) trend is a HYPOTHESIS; a grounded revision trend an
     # INFERENCE. A HYPOTHESIS never auto-promotes — a human decides (spec §18.4).
     claim_label = "HYPOTHESIS" if emergent else "INFERENCE"
-    top_subcap = max(cluster.subcap_scores, key=lambda s: cluster.subcap_scores[s])
+    top_subcap = max(cluster.subcap_scores, key=lambda s: (cluster.subcap_scores[s], s))
     top_name = cluster.subcap_names[top_subcap]
     theme = "Emerging net-new capability signal" if emergent else "Rising cross-source signal"
     label = f"{theme}: {top_name}"

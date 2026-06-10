@@ -197,6 +197,73 @@ export interface NewsScanStats {
   flagged: number;
 }
 
+export interface TrendSignals {
+  velocity: number;
+  diversity: number;
+  novelty: number;
+  persistence: number;
+}
+
+export interface TrendSubcap {
+  subcap_id: string;
+  name: string;
+  emergent: boolean;
+}
+
+export interface TrendItem {
+  id: string;
+  label: string;
+  status: string;
+  window: string;
+  window_start: string;
+  window_end: string;
+  evidence_count: number;
+  score: number;
+  signals: TrendSignals;
+  affects: TrendSubcap[];
+  emergent: boolean;
+  label_claim: string;
+  tier: string;
+  ers: number;
+  chain: string | null;
+}
+
+export interface TrendsResp {
+  items: TrendItem[];
+  counts: Record<string, number>;
+  scan: NewsScan;
+}
+
+export interface TrendScanStats {
+  version: string;
+  detected: number;
+  staged: number;
+  review: number;
+  filtered: number;
+  decided: number;
+  emergent: number;
+}
+
+export interface TrendEvidenceItem {
+  title: string;
+  url: string;
+  source: string;
+  stype: string;
+  tier: string;
+  date: string;
+  impact: string;
+  ers: number;
+  chain: string | null;
+}
+
+export interface TrendEvidenceResp {
+  found: boolean;
+  label: string;
+  status: string;
+  evidence_count: number;
+  evidence: TrendEvidenceItem[];
+}
+
 export interface ChatCitation {
   subcap_id: string;
   name: string;
@@ -550,6 +617,23 @@ export const api = {
     http<NewsScanStats>(`/api/admin/evidence/scan/news/${version}`, { method: 'POST' }),
   newsLoop: (newsId: string): Promise<NewsLoopOut> =>
     http<NewsLoopOut>(`/api/evidence/news/${newsId}/loop`, { method: 'POST' }),
+  trends: (status?: string, version?: string): Promise<TrendsResp> => {
+    const qs = new URLSearchParams();
+    if (status && status !== 'all') qs.set('status', status);
+    if (version) qs.set('version', version);
+    return http<TrendsResp>(`/api/trends?${qs.toString()}`);
+  },
+  scanTrends: (version: string): Promise<TrendScanStats> =>
+    http<TrendScanStats>(`/api/admin/trends/scan/${version}`, { method: 'POST' }),
+  trendEvidence: (id: string): Promise<TrendEvidenceResp> =>
+    http<TrendEvidenceResp>(`/api/trends/${id}/evidence`),
+  trendFeedback: (id: string, verdict: string): Promise<{ ok: boolean; status: string }> =>
+    http<{ ok: boolean; status: string }>(`/api/trends/${id}/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ verdict }),
+    }),
+  trendLoop: (id: string): Promise<NewsLoopOut> =>
+    http<NewsLoopOut>(`/api/trends/${id}/loop`, { method: 'POST' }),
   gates: (): Promise<GatesLog> => http<GatesLog>('/api/gates'),
   qaMetrics: (): Promise<QaMetrics> => http<QaMetrics>('/api/qa/metrics'),
   auditLog: (): Promise<AuditRow[]> => http<AuditRow[]>('/api/audit-log'),
