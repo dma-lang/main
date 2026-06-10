@@ -22,7 +22,10 @@ class Settings(BaseSettings):
 
     # Server.
     port: int = 8080
-    static_dir: str = "static"  # built SPA; the container copies frontend/dist here
+    # Built SPA dir. The container copies frontend/dist -> <app root>/static; a relative value is
+    # resolved against the app root (the dir holding the `app` package), not the process cwd, so it
+    # serves the same build wherever uvicorn starts. Local dev: STATIC_DIR=<repo>/frontend/dist.
+    static_dir: str = "static"
 
     # Datastore (wired in F3; optional at F1 so the service boots without a DB).
     database_url: str | None = None

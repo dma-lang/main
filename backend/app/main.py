@@ -101,15 +101,30 @@ def create_app() -> FastAPI:
     return app
 
 
+# Anchor the SPA build to the code, not the process working directory. The Dockerfile copies
+# frontend/dist -> <app root>/static and Cloud Run runs from there, so a relative STATIC_DIR must
+# resolve the same way no matter where uvicorn is launched — otherwise a wrong cwd silently serves
+# a stale (or no) build. `_APP_ROOT` is the directory that holds the `app` package.
+_APP_ROOT = Path(__file__).resolve().parent.parent
+
+
 def _mount_spa(app: FastAPI, static_dir: str) -> None:
     """Serve the built SPA at '/'. Mounted last so it never shadows API routes.
 
-    Resilient: if the build is absent (e.g. backend-only dev), log and serve API only.
+    Resilient + observable: a relative dir resolves against the app root (cwd-independent); the
+    resolved path + file count are logged so a stale or wrong build is visible at startup, never
+    silent. An absent dir — or one missing index.html (incomplete build) — serves API-only with a
+    clear warning instead of opaque SPA 404s, so the backend still boots for API-only dev.
     """
     path = Path(static_dir)
-    if not path.is_dir():
-        logger.warning("static dir '%s' not found; serving API only", path)
+    if not path.is_absolute():
+        path = _APP_ROOT / path
+    path = path.resolve()
+    if not (path / "index.html").is_file():
+        logger.warning("SPA build at '%s' absent/incomplete; serving API only", path)
         return
+    file_count = sum(1 for p in path.rglob("*") if p.is_file())
+    logger.info("serving SPA from '%s' (%d files)", path, file_count)
     app.mount("/", StaticFiles(directory=path, html=True), name="spa")
 
 
