@@ -196,8 +196,9 @@ gcloud secrets get-iam-policy cia-database-url --format='value(bindings.members)
 In the console (one-time UI steps, no CLI equivalent): enable **Identity Platform** for the
 project → add the **Google** sign-in provider → restrict the OAuth consent screen to the
 workspace → add the Cloud Run service domain to **Authorized domains** once it exists (3.8).
-Create a **Web app** to obtain the web API key for the SPA login (used by the frontend login
-page when it lands; the backend needs only the project id).
+Create a **Web app** to obtain the web API key for the SPA login page
+(set it as `FIREBASE_WEB_API_KEY`; `GET /api/config` hands it to the SPA — public by design,
+security is server-side token verification).
 
 App-side configuration (set in 3.8): `AUTH_MODE=live` (default — fail-closed),
 `FIREBASE_PROJECT_ID=$PROJECT_ID`, `ADMIN_EMAILS=<comma-separated verified @zennify.com emails>`.
@@ -219,7 +220,7 @@ gcloud run deploy cia \
   --service-account "$RUN_SA" \
   --vpc-connector cia-svpc --vpc-egress private-ranges-only \   # private path to Cloud SQL
   --set-secrets "DATABASE_URL=cia-database-url:latest,HMAC_KEY=cia-hmac-key:latest" \
-  --set-env-vars "LLM_MODE=live,AUTH_MODE=live,FIREBASE_PROJECT_ID=${PROJECT_ID},ADMIN_EMAILS=dma@zennify.com" \
+  --set-env-vars "LLM_MODE=live,AUTH_MODE=live,FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_WEB_API_KEY=<web key>,ADMIN_EMAILS=dma@zennify.com" \
   --min-instances 2 --max-instances 8 \      # min 2 = no cold starts; max = SQL connection budget
   --cpu 1 --memory 1Gi --concurrency 40 --timeout 300 \
   --cpu-boost \                              # faster cold start when scaling
@@ -287,6 +288,8 @@ gcloud scheduler jobs create http cia-news-scan --location "$REGION" \
 | `LLM_MODE` | service env | `hermetic` | `live` | §3.8 | — |
 | `AUTH_MODE` | service env | `dev` (explicit, local only) | `live` (default) | §3.8 | — **never `dev` on anything reachable**; decoupled from LLM_MODE so the cost switch can never disable auth |
 | `FIREBASE_PROJECT_ID` | service env | unset | project id | §3.8 | — |
+| `FIREBASE_WEB_API_KEY` | service env | unset | the PUBLIC web key (login UX; not a secret) | §3.8 | — |
+| `HMAC_KEY` (export signing) | Secret Manager `cia-hmac-key` | fixed dev key (hermetic only) | random 32B — live refuses to sign without it | §3.6 | new version + redeploy |
 | `ADMIN_EMAILS` | service env | unset (dev identity is admin) | comma-separated verified emails | §3.8 | redeploy |
 | `PORT` | injected by Cloud Run | 8092 (manual) | injected | platform | — |
 | `STATIC_DIR` | service env | `<repo>/frontend/dist` | unset → baked `/app/static` (cwd-independent) | — | — |

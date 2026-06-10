@@ -12,6 +12,7 @@ import {
   type LifecycleSummary,
   type QaMetrics,
   type Me,
+  type DigestResp,
   type NewsResp,
   type SourceRow,
   type TrendsResp,
@@ -170,6 +171,21 @@ export function useBenchmarkActions() {
   const scan = useMutation({ mutationFn: api.scanBenchmarks, onSuccess: invalidate });
   const loop = useMutation({ mutationFn: api.benchmarkLoop, onSuccess: invalidate });
   return { scan, loop };
+}
+
+export const useDigest = (quarter: string) =>
+  useQuery<DigestResp>({
+    queryKey: ['digest', quarter],
+    queryFn: () => api.digest(quarter),
+    placeholderData: (prev) => prev,
+  });
+
+export function useDigestActions() {
+  const qc = useQueryClient();
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ['digest'] });
+  const generate = useMutation({ mutationFn: api.generateDigest, onSuccess: invalidate });
+  const exportIt = useMutation({ mutationFn: api.exportDigest, onSuccess: invalidate });
+  return { generate, exportIt };
 }
 
 export const useVendorIntel = (eventType: string) =>

@@ -6,9 +6,11 @@ import { createHashRouter, Navigate } from 'react-router-dom';
 import { Benchmarks } from './pages/Benchmarks';
 import { CapabilityWorkbench } from './pages/CapabilityWorkbench';
 import { ChangeFlags } from './pages/ChangeFlags';
+import { Digest } from './pages/Digest';
 import { Chat } from './pages/Chat';
 import { Gates } from './pages/Gates';
 import { Lifecycle } from './pages/Lifecycle';
+import { Login } from './pages/Login';
 import { MissionControl } from './pages/MissionControl';
 import { News } from './pages/News';
 import { Platforms } from './pages/Platforms';
@@ -43,6 +45,7 @@ const LIVE: Record<string, ReactElement> = {
   trends: <Trends />,
   benchmarks: <Benchmarks />,
   suggestions: <Suggestions />,
+  digest: <Digest />,
   vendors: <Vendors />,
   settings: <Settings />,
   gates: <Gates />,
@@ -50,6 +53,7 @@ const LIVE: Record<string, ReactElement> = {
 };
 
 export const router = createHashRouter([
+  { path: '/login', element: <Login /> },
   {
     path: '/',
     element: <Shell />,

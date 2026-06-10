@@ -359,6 +359,37 @@ export interface VendorScanStats {
   registry_flags: number;
 }
 
+
+export interface DigestPriority {
+  pillar: string;
+  pillar_name: string;
+  title: string;
+  body: string;
+  adversary_verdict: string;
+}
+
+export interface DigestResp {
+  quarter: string;
+  generated: boolean;
+  summary: string;
+  theme: string;
+  claim_label: string;
+  chain: string | null;
+  created_at: string | null;
+  priorities: DigestPriority[];
+  quarters: string[];
+  cadence: { cadence: string; cron: string; next_run: string };
+  export: { export_id: string; signed_at: string; valid: boolean } | null;
+}
+
+export interface DigestExportOut {
+  exported: boolean;
+  export_id?: string;
+  quarter?: string;
+  hmac_sig?: string;
+  reason?: string;
+}
+
 export interface SourceRow {
   key: string;
   name: string;
@@ -636,18 +667,27 @@ export interface StoryLibraryQuery {
   size?: number;
 }
 
+import { getToken, isLiveAuth } from '../lib/auth';
+
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  // Live auth attaches a fresh Firebase ID token; dev mode sends none. A 401 means no/expired
+  // session — route to the login page (the backend fails closed; this is just the UX).
+  const token = await getToken().catch(() => null);
   const res = await fetch(BASE + path, {
     credentials: 'include',
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers as Record<string, string> | undefined),
     },
   });
   if (!res.ok) {
+    if (res.status === 401 && isLiveAuth() && !location.hash.startsWith('#/login')) {
+      location.hash = '#/login';
+    }
     let message = res.statusText;
     try {
       const body = (await res.json()) as { error?: { message?: string } };
@@ -767,6 +807,12 @@ export const api = {
     http<VendorScanStats>(`/api/admin/evidence/scan/vendor/${version}`, { method: 'POST' }),
   vendorLoop: (id: string): Promise<NewsLoopOut> =>
     http<NewsLoopOut>(`/api/evidence/vendor/${id}/loop`, { method: 'POST' }),
+  digest: (quarter?: string): Promise<DigestResp> =>
+    http<DigestResp>('/api/digest' + (quarter && quarter !== 'latest' ? `?quarter=${quarter}` : '')),
+  generateDigest: (quarter?: string): Promise<{ generated: boolean; quarter: string; reason?: string }> =>
+    http('/api/admin/digest/generate', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
+  exportDigest: (quarter?: string): Promise<DigestExportOut> =>
+    http('/api/exports/digest', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
   sources: (): Promise<SourceRow[]> => http<SourceRow[]>('/api/admin/sources'),
   patchSource: (key: string, enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> =>
     http<{ ok: boolean; enabled: boolean }>(`/api/admin/sources/${key}`, {

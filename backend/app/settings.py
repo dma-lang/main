@@ -35,11 +35,16 @@ class Settings(BaseSettings):
     # disable authentication. "live" verifies Firebase ID tokens; "dev" is the local identity.
     auth_mode: str = "live"  # live (Firebase, fails closed) | dev (deterministic local identity)
     firebase_project_id: str | None = None
+    firebase_web_api_key: str | None = None  # the PUBLIC web key the SPA login uses (not a secret)
     auth_email_domain: str = "zennify.com"  # sign-in restricted to this domain; fails closed
     admin_emails: list[str] = Field(default_factory=list)  # these verified emails receive is_admin
     hermetic_uid: str = "dev-user"
     hermetic_email: str = "dev@zennify.com"
     hermetic_is_admin: bool = True
+
+    # Export signing (F12). Live key arrives from Secret Manager; hermetic falls back to a fixed
+    # dev key so signed exports remain verifiable in dev. Live WITHOUT a key refuses to export.
+    hmac_key: str | None = None
 
     # CORS — only needed when the Vite dev server calls the API cross-origin. Same-origin in prod.
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
