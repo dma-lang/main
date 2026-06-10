@@ -5,8 +5,8 @@
 // Ported from the prototype WhatIf.
 import { useState } from 'react';
 
-import { useSubcaps } from '../api/queries';
-import { Dropdown, Empty, Page } from '../components/primitives';
+import { useSubcaps, useWhatIf } from '../api/queries';
+import { Dropdown, Empty, Page, SC } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
@@ -33,6 +33,8 @@ export function WhatIf() {
     l: x.id + ' · ' + x.name.slice(0, 20),
   }));
   const cur = sub || options[0]?.v || '';
+  const wi = useWhatIf(ui.version, cur, action, ran);
+  const d = wi.data;
 
   return (
     <Page
@@ -98,17 +100,91 @@ export function WhatIf() {
                 desc="Pick an action and target, then simulate to preview the cascade. Nothing is committed."
               />
             </div>
+          ) : wi.isLoading ? (
+            <div className="card pad muted" style={{ fontSize: 12 }}>
+              Computing the cascade…
+            </div>
+          ) : d ? (
+            <div className="fade-in" style={{ display: 'grid', gap: 14 }}>
+              <div className="card pad">
+                <div className="row gap8" style={{ marginBottom: 8 }}>
+                  <span className="chip soft">read-only preview</span>
+                  <span className="chip teal">reversible</span>
+                  <span className="muted mono" style={{ fontSize: 11, marginLeft: 'auto' }}>
+                    {d.subcap}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  {d.summary}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8, marginTop: 14 }}>
+                  {(
+                    [
+                      [d.blast, 'rows in blast radius'],
+                      [d.platforms.length, 'platforms'],
+                      [d.offerings.length, 'offerings'],
+                      [d.stories.toLocaleString(), 'stories'],
+                      [d.siblings.length, 'KG siblings'],
+                    ] as [string | number, string][]
+                  ).map((k, i) => (
+                    <div key={i} className="card" style={{ padding: '10px 6px', textAlign: 'center' }}>
+                      <div className="num" style={{ fontSize: 18, fontWeight: 700, color: i === 0 ? 'var(--z-orange)' : 'var(--interactive)' }}>
+                        {k[0]}
+                      </div>
+                      <div className="muted" style={{ fontSize: 9.5 }}>{k[1]}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {(d.offerings.length > 0 || d.siblings.length > 0) && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  <div className="card pad">
+                    <div className="eyebrow" style={{ marginBottom: 8 }}>Offerings affected</div>
+                    {d.offerings.length ? (
+                      d.offerings.map((o) => (
+                        <div key={o.id} style={{ fontSize: 12, marginBottom: 4 }}>
+                          <Icon n="package" s={12} /> {o.name}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="muted" style={{ fontSize: 12 }}>None — this subcap is in no offering.</div>
+                    )}
+                  </div>
+                  <div className="card pad">
+                    <div className="eyebrow" style={{ marginBottom: 8 }}>Shared-platform siblings (KG ripple)</div>
+                    <div className="row wrap gap6">
+                      {d.siblings.slice(0, 10).map((sb) => (
+                        <SC key={sb.id} id={sb.id} />
+                      ))}
+                      {!d.siblings.length && <span className="muted" style={{ fontSize: 12 }}>None</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="card pad" style={{ background: 'var(--surface-raised)' }}>
+                <div className="between">
+                  <div className="muted" style={{ fontSize: 12, maxWidth: 380 }}>
+                    Promote this scenario to a gated suggestion — it runs the consultant loop (G1–G8)
+                    and lands in AI suggestions; nothing commits ungated.
+                  </div>
+                  <button
+                    className="btn primary sm"
+                    onClick={() => {
+                      toast('Scenario captured — open its subcap to stage a gated change');
+                      go('subcap/' + d.subcap);
+                    }}
+                  >
+                    Open subcap to promote <Icon n="arrowR" s={14} />
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : (
-            <div className="banner info">
-              <Icon n="beaker" s={15} />
-              The cascade simulation engine — affected-subcap count, KG orphans, adoption and lifecycle
-              deltas, transitions and benchmark recompute — is not yet wired to a backend endpoint. Once
-              it lands, the read-only preview for the simulated {action} on {cur || 'this subcap'} renders
-              here, ready to promote to a gated change. Explore committed changes in the{' '}
+            <div className="card pad muted" style={{ fontSize: 12 }}>
+              Could not compute the cascade.{' '}
               <a onClick={() => go('change-flags')} style={{ cursor: 'pointer' }}>
-                change flags inbox
+                Change flags
               </a>
-              .
             </div>
           )}
         </div>

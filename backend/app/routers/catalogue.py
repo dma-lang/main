@@ -663,6 +663,138 @@ async def knowledge_graph(
     )
 
 
+class WhatIfRef(BaseModel):
+    id: str
+    name: str
+
+
+class WhatIfResp(BaseModel):
+    subcap: str
+    name: str
+    action: str
+    stories: int  # delivery affected
+    use_cases: int
+    offerings: list[WhatIfRef]  # offerings that lose/change coverage
+    platforms: list[WhatIfRef]
+    siblings: list[WhatIfRef]  # subcaps sharing a platform — potential KG ripples
+    blast: int  # total distinct catalogue rows in the blast radius
+    summary: str
+    reversible: bool = True
+
+
+@router.get("/{version}/whatif")
+async def whatif(
+    version: str,
+    subcap: str,
+    action: str = "toggle",
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> WhatIfResp:
+    """Read-only cascade preview (I1): the deterministic structural blast radius of a change to a
+    subcap — the offerings, delivery stories, platforms, use cases and shared-platform siblings it
+    touches — computed from the catalogue's link tables. Nothing is written; promote stages a gated
+    suggestion. (relation_def cascade rows would extend this; none are defined yet.)"""
+    v = await resolve_version(version)
+    s = _schema(v)
+    p = {"sid": subcap, "ver": v.version_id}
+    async with _engine().connect() as conn:
+        name = (
+            await conn.execute(
+                text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid"), {"sid": subcap}
+            )
+        ).first()
+        if name is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="subcap not found in this version"
+            )
+        offs = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT o.offering_id AS id, o.name FROM {s}.offering_subcap os "
+                        f"JOIN {s}.offering o ON o.offering_id = os.offering_id "
+                        "WHERE os.subcap_id = :sid ORDER BY o.name"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        plats = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT l.l3_id AS id, l.name FROM {s}.subcap_platform sp "
+                        f"JOIN {s}.l3_platform l ON l.l3_id = sp.l3_id "
+                        "WHERE sp.subcap_id = :sid ORDER BY l.name"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        sibs = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT DISTINCT sp2.subcap_id AS id, sc.name "
+                        f"FROM {s}.subcap_platform sp1 "
+                        f"JOIN {s}.subcap_platform sp2 ON sp2.l3_id = sp1.l3_id "
+                        f"JOIN {s}.subcap sc ON sc.subcap_id = sp2.subcap_id "
+                        "WHERE sp1.subcap_id = :sid AND sp2.subcap_id <> :sid "
+                        "ORDER BY sc.name LIMIT 12"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        stories = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) FROM control.story_catalogue_link "
+                    "WHERE version_id = :ver AND subcap_id = :sid"
+                ),
+                p,
+            )
+        ).scalar() or 0
+        use_cases = (
+            await conn.execute(
+                text(f"SELECT count(*) FROM {s}.use_case WHERE subcap_id = :sid"), {"sid": subcap}
+            )
+        ).scalar() or 0
+    blast = len(offs) + len(plats) + len(sibs) + int(stories) + int(use_cases)
+    verb = {
+        "retire": "Retiring",
+        "descriptor": "Editing the maturity descriptor of",
+        "platform": "Remapping the platforms of",
+        "merge": "Merging",
+        "offering": "Re-bundling",
+        "relation": "Adding a relation to",
+        "toggle": "Toggling",
+    }.get(action, "Changing")
+    summary = (
+        f"{verb} {name[0]} touches {blast} catalogue rows: {len(offs)} offering(s), "
+        f"{int(stories):,} delivered stories, {len(plats)} platform link(s), {int(use_cases)} use "
+        f"case(s) and {len(sibs)} shared-platform sibling(s). Read-only — promote to stage a "
+        f"gated change."
+    )
+    return WhatIfResp(
+        subcap=subcap,
+        name=str(name[0]),
+        action=action,
+        stories=int(stories),
+        use_cases=int(use_cases),
+        offerings=[WhatIfRef(id=o["id"], name=o["name"]) for o in offs],
+        platforms=[WhatIfRef(id=pl["id"], name=pl["name"]) for pl in plats],
+        siblings=[WhatIfRef(id=sb["id"], name=sb["name"]) for sb in sibs],
+        blast=blast,
+        summary=summary,
+    )
+
+
 @router.get("/{version}/summary")
 async def summary(
     version: str, _user: dict[str, Any] = Depends(get_current_user)

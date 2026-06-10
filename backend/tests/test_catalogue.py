@@ -115,6 +115,29 @@ def test_kg_layer_a_projection(client: TestClient) -> None:
 
 
 @needs_db
+def test_whatif_cascade_preview(client: TestClient) -> None:
+    """What-if: the read-only blast radius of a change to a subcap sums its offering / platform /
+    story / use-case / sibling links; blast equals that sum and 404s on an unknown subcap."""
+    sid = next(
+        x["id"]
+        for x in client.get("/api/catalogue/v7/subcaps").json()
+        if client.get(f"/api/catalogue/v7/subcaps/{x['id']}").json()["n_platforms"] > 0
+    )
+    d = client.get(f"/api/catalogue/v7/whatif?subcap={sid}&action=retire").json()
+    assert d["subcap"] == sid and d["action"] == "retire" and d["reversible"] is True
+    assert (
+        d["blast"]
+        == len(d["offerings"])
+        + len(d["platforms"])
+        + len(d["siblings"])
+        + d["stories"]
+        + d["use_cases"]
+    )
+    assert d["platforms"] and "Retiring" in d["summary"]
+    assert client.get("/api/catalogue/v7/whatif?subcap=NOPE.0.0").status_code == 404
+
+
+@needs_db
 def test_subcap_detail(client: TestClient) -> None:
     sid = client.get("/api/catalogue/v7/subcaps").json()[0]["id"]
     r = client.get(f"/api/catalogue/v7/subcaps/{sid}")

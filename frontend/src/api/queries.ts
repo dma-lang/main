@@ -10,6 +10,7 @@ import {
   type HeatmapResp,
   type KgResp,
   type TimelineResp,
+  type WhatIfResp,
   type ChangeFlagsResp,
   type ChatResponse,
   type GatesLog,
@@ -78,6 +79,13 @@ export const useKg = (version: string, subcap: string | null) =>
     queryKey: ['kg', version, subcap],
     queryFn: () => api.kg(version, subcap ?? ''),
     enabled: !!version && !!subcap,
+  });
+
+export const useWhatIf = (version: string, subcap: string, action: string, enabled: boolean) =>
+  useQuery<WhatIfResp>({
+    queryKey: ['whatif', version, subcap, action],
+    queryFn: () => api.whatif(version, subcap, action),
+    enabled: enabled && !!version && !!subcap,
   });
 
 export const useSubcaps = (version: string) =>

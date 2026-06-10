@@ -88,6 +88,25 @@ export interface KgResp {
   pending: KgEdge[];
 }
 
+export interface WhatIfRef {
+  id: string;
+  name: string;
+}
+
+export interface WhatIfResp {
+  subcap: string;
+  name: string;
+  action: string;
+  stories: number;
+  use_cases: number;
+  offerings: WhatIfRef[];
+  platforms: WhatIfRef[];
+  siblings: WhatIfRef[];
+  blast: number;
+  summary: string;
+  reversible: boolean;
+}
+
 export interface SubcapNode {
   id: string;
   name: string;
@@ -799,6 +818,10 @@ export const api = {
     http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
   kg: (v: string, subcap: string): Promise<KgResp> =>
     http<KgResp>(`/api/catalogue/${v}/kg?subcap=${encodeURIComponent(subcap)}`),
+  whatif: (v: string, subcap: string, action: string): Promise<WhatIfResp> =>
+    http<WhatIfResp>(
+      `/api/catalogue/${v}/whatif?subcap=${encodeURIComponent(subcap)}&action=${action}`,
+    ),
   subcapEnrichment: (v: string, id: string): Promise<SubcapEnrichment> =>
     http<SubcapEnrichment>(`/api/catalogue/${v}/subcaps/${id}/enrichment`),
   subcapConnections: (v: string, id: string): Promise<SubcapConnections> =>
