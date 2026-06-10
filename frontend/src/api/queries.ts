@@ -19,6 +19,7 @@ import {
   type TrendsResp,
   type VendorIntelResp,
   type ReasoningChain,
+  type ReasoningChainRow,
   type PlatformDetail,
   type PlatformRow,
   type StoryPage,
@@ -128,6 +129,12 @@ export const useReasoning = (chainId: string | null) =>
     queryKey: ['reasoning', chainId],
     queryFn: () => api.reasoning(chainId ?? ''),
     enabled: !!chainId,
+  });
+
+export const useReasoningList = (limit = 50) =>
+  useQuery<ReasoningChainRow[]>({
+    queryKey: ['reasoning-list', limit],
+    queryFn: () => api.reasoningList(limit),
   });
 
 export const useSuggestions = (status: string) =>
@@ -274,8 +281,8 @@ export function useTrendsActions() {
 
 export const useGates = () => useQuery<GatesLog>({ queryKey: ['gates'], queryFn: api.gates });
 
-export const useQaMetrics = () =>
-  useQuery<QaMetrics>({ queryKey: ['qa-metrics'], queryFn: api.qaMetrics });
+export const useQaMetrics = (enabled = true) =>
+  useQuery<QaMetrics>({ queryKey: ['qa-metrics'], queryFn: api.qaMetrics, enabled });
 
 export const useAuditLog = () =>
   useQuery<AuditRow[]>({ queryKey: ['audit-log'], queryFn: api.auditLog });

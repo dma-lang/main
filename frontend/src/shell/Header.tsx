@@ -1,6 +1,6 @@
 // Header — ported from the prototype shell.jsx, wired to live state/APIs.
 // pillar/sv/lens/version are filter+context; theme/lens persist to control.users.preferences.
-import { useChangeFlags, useMe, usePatchPreferences, useVersions } from '../api/queries';
+import { useChangeFlags, useMe, usePatchPreferences, useQaMetrics, useVersions } from '../api/queries';
 import { Dropdown } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { PILLAR_COLORS } from '../lib/helpers';
@@ -50,8 +50,14 @@ export function Header() {
   const versionsQ = useVersions();
   const patch = usePatchPreferences();
   const flagsQ = useChangeFlags('open');
+  const qa = useQaMetrics(ui.adminView);
   const c = flagsQ.data?.counts;
   const flagBadge = c ? (c.BLOCKING ?? 0) + (c.HIGH ?? 0) : 0;
+  // Live monthly LLM spend vs the budget envelope (G8) — admin-only, like the prototype meter.
+  const spend = qa.data?.spend_usd;
+  const envelope = qa.data?.envelope_usd ?? 8000;
+  const costVal = spend != null ? '$' + (spend / 1000).toFixed(2) + 'k' : '$—';
+  const costPct = spend != null ? Math.min(100, (spend / envelope) * 100) : 0;
 
   const persist = (extra: Record<string, unknown>) =>
     patch.mutate({ theme: ui.theme, lens: ui.lens, persona: ui.persona, ...extra });
@@ -100,9 +106,9 @@ export function Header() {
         style={ui.adminView ? { borderColor: 'var(--border-focus)', color: 'var(--interactive)' } : {}}
         onClick={() => {
           ui.setAdminView(!ui.adminView);
-          toast(ui.adminView ? 'admin view off' : 'admin view on');
+          toast(ui.adminView ? 'is_admin off — power-user view' : 'is_admin on — admin view');
         }}
-        title="Toggle admin view"
+        title="Toggle is_admin flag"
       >
         <Icon n={ui.adminView ? 'shield' : 'lock'} s={14} />
         {ui.adminView ? 'Admin' : 'User'}
@@ -119,9 +125,9 @@ export function Header() {
       {ui.adminView && (
         <div className="costmeter" title="Monthly LLM spend vs envelope">
           <span className="lbl">Cost</span>
-          <span className="val">$0.00k</span>
+          <span className="val">{costVal}</span>
           <span className="track">
-            <span className="fill" style={{ width: '0%' }} />
+            <span className="fill" style={{ width: costPct + '%' }} />
           </span>
         </div>
       )}

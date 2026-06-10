@@ -10,7 +10,7 @@ import { useState } from 'react';
 import { type BenchItem } from '../api/client';
 import { useBenchmarkActions, useBenchmarks } from '../api/queries';
 import { Claim, Dropdown, Empty, Page, Tier } from '../components/primitives';
-import { go, openReasoning, toast } from '../lib/events';
+import { go, openLoop, openReasoning, toast } from '../lib/events';
 import { heatBg } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
@@ -125,17 +125,16 @@ function Dist({ b }: { b: BenchItem }) {
 }
 
 function BenchCard({ b }: { b: BenchItem }) {
-  const { loop } = useBenchmarkActions();
   const onLoop = () =>
-    loop.mutate(b.id, {
-      onSuccess: (r) =>
-        toast(
-          r.staged
-            ? `Staged ${r.kind} suggestion for ${r.target} → review in AI suggestions`
-            : r.status === 'duplicate'
-              ? `Already staged for ${r.target} — pending in AI suggestions`
-              : (r.reason ?? `Loop ${r.status}`),
-        ),
+    openLoop({
+      kind: 'benchmark',
+      id: b.id,
+      title: b.metric,
+      claim: b.label,
+      source: b.source?.name,
+      subcap: b.affects?.[0]?.[0],
+      subcapName: b.affects?.[0]?.[2],
+      chain: b.chain,
     });
 
   return (
@@ -273,7 +272,7 @@ function BenchCard({ b }: { b: BenchItem }) {
             {b.source.name} · ERS {b.ers.toFixed(2)}
           </span>
         </div>
-        <button className="btn ghost xs" disabled={loop.isPending} onClick={onLoop}>
+        <button className="btn ghost xs" onClick={onLoop}>
           <Icon n="sparkles" s={13} /> Run consultant loop
         </button>
       </div>

@@ -103,3 +103,21 @@ def test_chat_empty_question_400(client: TestClient) -> None:
 def test_reasoning_unknown_404(client: TestClient) -> None:
     r = client.get("/api/reasoning/00000000-0000-0000-0000-000000000000")
     assert r.status_code == 404
+
+
+@needs_db
+def test_reasoning_list_indexes_new_chains(client: TestClient) -> None:
+    """GET /api/reasoning (H2 index): a chat-created chain appears newest-first with the trust
+    fields the viewer renders (claim label, verdict, model, cost, step count)."""
+    chain_id = client.post(
+        "/api/chat", json={"question": "identity resolution customer profile", "version": "v7"}
+    ).json()["chain_id"]
+    rows = client.get("/api/reasoning").json()
+    assert rows and rows[0]["chain_id"] == chain_id
+    top = rows[0]
+    assert top["title"]
+    assert top["steps"] >= 2
+    assert top["cost"].startswith("$")
+    assert set(top) >= {"chain_id", "title", "claim_label", "verdict", "model", "created_at"}
+    # ?limit= is capped and respected
+    assert len(client.get("/api/reasoning?limit=1").json()) == 1

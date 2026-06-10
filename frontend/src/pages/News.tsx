@@ -8,7 +8,7 @@ import { useState } from 'react';
 
 import { useNews, useNewsActions } from '../api/queries';
 import { Claim, Dropdown, Empty, Mag, Page, Tier } from '../components/primitives';
-import { go, openReasoning, toast } from '../lib/events';
+import { go, openLoop, openReasoning, toast } from '../lib/events';
 import { heatBg } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
@@ -39,23 +39,11 @@ export function News() {
   const [tier, setTier] = useState('all');
   const [impactF, setImpactF] = useState('all');
   const q = useNews(impactF, tier);
-  const { scan, loop } = useNewsActions();
+  const { scan } = useNewsActions();
   const items = q.data?.items ?? [];
   const impacts = q.data?.impacts ?? [];
   const scanInfo = q.data?.scan;
   const filtered = impactF !== 'all' || tier !== 'all';
-
-  const onLoop = (id: string) =>
-    loop.mutate(id, {
-      onSuccess: (r) =>
-        toast(
-          r.staged
-            ? `Staged ${r.kind} suggestion for ${r.target} → review in AI suggestions`
-            : r.status === 'duplicate'
-              ? `Already staged for ${r.target} — pending in AI suggestions`
-              : (r.reason ?? `Loop ${r.status}`),
-        ),
-    });
 
   return (
     <Page
@@ -276,7 +264,21 @@ export function News() {
               ) : (
                 <span />
               )}
-              <button className="btn ghost xs" disabled={loop.isPending} onClick={() => onLoop(n.id)}>
+              <button
+                className="btn ghost xs"
+                onClick={() =>
+                  openLoop({
+                    kind: 'news',
+                    id: n.id,
+                    title: n.title,
+                    claim: n.label,
+                    source: n.source?.name,
+                    subcap: n.affects?.[0]?.[0],
+                    subcapName: n.affects?.[0]?.[2],
+                    chain: n.chain,
+                  })
+                }
+              >
                 <Icon n="sparkles" s={13} /> Run consultant loop
               </button>
             </div>

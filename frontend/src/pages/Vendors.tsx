@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { type VendorHeatCell, type VendorEventItem } from '../api/client';
 import { useVendorActions, useVendorIntel } from '../api/queries';
 import { Claim, Dropdown, Empty, Page, Tier } from '../components/primitives';
-import { go, openReasoning, toast } from '../lib/events';
+import { go, openLoop, openReasoning, toast } from '../lib/events';
 import { heatBg } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
@@ -127,17 +127,16 @@ function HeatMap({ cells }: { cells: VendorHeatCell[] }) {
 }
 
 function EventCard({ e }: { e: VendorEventItem }) {
-  const { loop } = useVendorActions();
   const onLoop = () =>
-    loop.mutate(e.id, {
-      onSuccess: (r) =>
-        toast(
-          r.staged
-            ? `Staged ${r.kind} suggestion for ${r.target} → review in AI suggestions`
-            : r.status === 'duplicate'
-              ? `Already staged for ${r.target} — pending in AI suggestions`
-              : (r.reason ?? `Loop ${r.status}`),
-        ),
+    openLoop({
+      kind: 'vendor',
+      id: e.id,
+      title: e.title,
+      claim: e.label,
+      source: e.vendor,
+      subcap: e.affects?.[0]?.[0],
+      subcapName: e.affects?.[0]?.[2],
+      chain: e.chain,
     });
   return (
     <div className="card pad fade-in">
@@ -208,7 +207,7 @@ function EventCard({ e }: { e: VendorEventItem }) {
             {e.source.name} · ERS {e.reliability.toFixed(2)}
           </span>
         </div>
-        <button className="btn ghost xs" disabled={loop.isPending} onClick={onLoop}>
+        <button className="btn ghost xs" onClick={onLoop}>
           <Icon n="sparkles" s={13} /> Run consultant loop
         </button>
       </div>

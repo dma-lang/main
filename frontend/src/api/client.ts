@@ -465,6 +465,17 @@ export interface ReasoningChain {
   checks: GateCheck[];
 }
 
+export interface ReasoningChainRow {
+  chain_id: string;
+  title: string;
+  claim_label: string | null;
+  verdict: string | null;
+  model: string | null;
+  cost: string;
+  steps: number;
+  created_at: string | null;
+}
+
 export interface SuggestionOut {
   suggestion_id: string;
   target_subcap: string | null;
@@ -737,6 +748,8 @@ export const api = {
     http<ChatResponse>('/api/chat', { method: 'POST', body: JSON.stringify({ question, version }) }),
   reasoning: (chainId: string): Promise<ReasoningChain> =>
     http<ReasoningChain>(`/api/reasoning/${chainId}`),
+  reasoningList: (limit = 50): Promise<ReasoningChainRow[]> =>
+    http<ReasoningChainRow[]>(`/api/reasoning?limit=${limit}`),
   useCases: (v: string, p: UseCaseQuery): Promise<UseCasePage> => {
     const qs = new URLSearchParams();
     if (p.pillar) qs.set('pillar', p.pillar);
