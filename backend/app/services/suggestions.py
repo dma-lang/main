@@ -87,9 +87,7 @@ async def propose(version: str, limit: int = 3) -> dict[str, Any]:
     schema = v.schema_name
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
 
     async with engine.begin() as conn:
         candidates = (
@@ -308,9 +306,7 @@ async def _mutate(
 
 async def apply(suggestion_id: str, actor: str) -> ApplyResult:
     """Re-gate G1-G8 on current state, then mutate cat_<v> + append audit_log, transactionally."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         sug = (
             (
@@ -418,9 +414,7 @@ async def apply(suggestion_id: str, actor: str) -> ApplyResult:
 async def reject(suggestion_id: str, reason: str, actor: str) -> ApplyResult:
     if not reason.strip():
         raise ValueError("a rejection reason is required")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         sug = (
             (

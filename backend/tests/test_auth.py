@@ -151,6 +151,22 @@ def test_live_config_serves_full_firebase_block() -> None:
     assert fb["project_id"] == "digital-maturity-assessor"
 
 
+def test_db_not_ready_is_503_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No engine (DATABASE_URL unset / migration job not run) must surface as an actionable 503
+    `unavailable` envelope, not a generic 500 — the Login page tells the operator to run A9."""
+    from app import db
+
+    monkeypatch.setattr(db, "init_engine", lambda: None)  # lifespan no-op: simulate no DB
+    monkeypatch.setattr(db, "_engine", None)
+    monkeypatch.setattr(db, "_sessionmaker", None)
+    with TestClient(create_app(), raise_server_exceptions=False) as c:
+        r = c.get("/api/me")
+    assert r.status_code == 503
+    body = r.json()["error"]
+    assert body["code"] == "unavailable"
+    assert "migration job" in body["message"]
+
+
 def test_require_admin_blocks_non_admin() -> None:
     with pytest.raises(HTTPException) as exc:
         asyncio.run(require_admin(user={"uid": "u", "is_admin": False}))

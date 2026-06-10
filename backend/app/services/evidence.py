@@ -185,9 +185,7 @@ async def scan_news(version: str) -> dict[str, Any]:
     schema = v.schema_name
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.connect() as conn:
         # Registry guard BEFORE the fetch: a disabled source never pulls (and never spends).
         await sources.ensure_enabled(conn, "news")
@@ -594,9 +592,7 @@ async def propose_from_news(news_id: str, actor: str) -> dict[str, Any]:
     """Stage a pending suggestion from a gated news item: thesis -> cited evidence (the news item
     + the target's catalogue entry) -> G1-G8 -> control.suggestion. Apply stays in D3 and
     RE-GATES server-side; nothing here touches cat_<v>."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         item = (
             (

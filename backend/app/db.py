@@ -26,6 +26,11 @@ _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
+class DatabaseNotReadyError(RuntimeError):
+    """No engine: DATABASE_URL unset or the migration job has not run. Maps to 503 (not 500) so
+    the Login page can tell the operator exactly what to do."""
+
+
 def init_engine() -> AsyncEngine | None:
     """Create the async engine + session factory if DATABASE_URL is set (idempotent)."""
     global _engine, _sessionmaker
@@ -61,10 +66,24 @@ def get_engine() -> AsyncEngine | None:
     return _engine
 
 
+def require_engine() -> AsyncEngine:
+    """The engine, or DatabaseNotReadyError (503) — services use this instead of a bare
+    RuntimeError so a missing/unmigrated database is never reported as a 500."""
+    if _engine is None:
+        raise DatabaseNotReadyError(
+            "database not initialised — set DATABASE_URL and run the migration job "
+            "(docs/DEPLOYMENT.md step A9)"
+        )
+    return _engine
+
+
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency: an async session bound to the request lifecycle."""
     if _sessionmaker is None:
-        raise RuntimeError("database not initialised")
+        raise DatabaseNotReadyError(
+            "database not initialised — set DATABASE_URL and run the migration job "
+            "(docs/DEPLOYMENT.md step A9)"
+        )
     async with _sessionmaker() as session:
         yield session
 

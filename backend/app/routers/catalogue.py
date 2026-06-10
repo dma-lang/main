@@ -324,6 +324,129 @@ async def subcap_stories(
     return StoryPage(total=int(total), page=page, size=size, items=items)
 
 
+class TimelineEvent(BaseModel):
+    kind: str  # news | vendor | suggestion | benchmark | trend
+    date: str | None
+    title: str
+    claim: str | None = None
+    tier: str | None = None
+    mag: str | None = None
+    excerpt: str | None = None
+    chain: str | None = None
+
+
+class TimelineResp(BaseModel):
+    subcap_id: str
+    name: str
+    stories: int  # delivery lane: carried stories (no per-story dates in the corpus)
+    sources: int  # distinct evidence sources across the dated lanes
+    events: list[TimelineEvent]
+
+
+# Project-subcap trace (C3): one subcap, every cross-signal event on a single timeline. A union of
+# the existing impact tables — each row already carries claim/tier/mag/chain, so the trust envelope
+# travels with every event. Stories carry no real delivery dates (ingest-time only) so delivery is a
+# summary count lane, not dated events.
+_TIMELINE_SQL = {
+    "news": (
+        "SELECT 'news' AS kind, ei.published_at::text AS date, ni.headline AS title, "
+        "rc.claim_label::text AS claim, ei.source_tier::text AS tier, i.mag::text AS mag, "
+        "ei.source_name AS excerpt, i.chain_id::text AS chain "
+        "FROM control.news_subcap_impact i "
+        "JOIN control.news_item ni ON ni.news_id = i.news_id "
+        "JOIN control.evidence_item ei ON ei.evidence_id = ni.evidence_id "
+        "LEFT JOIN control.reasoning_chain rc ON rc.chain_id = i.chain_id "
+        "WHERE i.version_id = :ver AND i.subcap_id = :sid"
+    ),
+    "vendor": (
+        "SELECT 'vendor' AS kind, ve.occurred_at::text AS date, ve.headline AS title, "
+        "rc.claim_label::text AS claim, ei.source_tier::text AS tier, i.mag::text AS mag, "
+        "ve.event_type::text AS excerpt, i.chain_id::text AS chain "
+        "FROM control.vendor_subcap_impact i "
+        "JOIN control.vendor_event ve ON ve.event_id = i.event_id "
+        "LEFT JOIN control.evidence_item ei ON ei.evidence_id = ve.evidence_id "
+        "LEFT JOIN control.reasoning_chain rc ON rc.chain_id = i.chain_id "
+        "WHERE i.version_id = :ver AND i.subcap_id = :sid"
+    ),
+    "suggestion": (
+        "SELECT 'suggestion' AS kind, s.created_at::text AS date, "
+        "(s.kind::text || ' · ' || coalesce(s.status::text,'')) AS title, "
+        "s.claim_label::text AS claim, s.source_tier::text AS tier, NULL AS mag, "
+        "s.reason AS excerpt, s.chain_id::text AS chain "
+        "FROM control.suggestion s "
+        "WHERE s.target_version = :ver AND s.target_subcap = :sid"
+    ),
+    "benchmark": (
+        "SELECT 'benchmark' AS kind, b.created_at::text AS date, "
+        "(b.metric || ' (' || b.verdict || ')') AS title, NULL AS claim, "
+        "ei.source_tier::text AS tier, NULL AS mag, b.verdict_note AS excerpt, "
+        "b.chain_id::text AS chain "
+        "FROM control.benchmark b "
+        "LEFT JOIN control.evidence_item ei ON ei.evidence_id = b.evidence_id "
+        "WHERE b.version_id = :ver AND b.subcap_id = :sid"
+    ),
+    "trend": (
+        "SELECT 'trend' AS kind, t.window_end::text AS date, t.label AS title, "
+        "t.claim_label::text AS claim, t.source_tier::text AS tier, NULL AS mag, "
+        "(ts.emergent::text) AS excerpt, t.chain_id::text AS chain "
+        "FROM control.trend_subcap ts JOIN control.trend t ON t.trend_id = ts.trend_id "
+        "WHERE ts.version_id = :ver AND ts.subcap_id = :sid"
+    ),
+    "sow": (
+        "SELECT 'sow' AS kind, d.signed_date::text AS date, "
+        "(d.account_key || ' · ' || d.title) AS title, "
+        "m.claim_label::text AS claim, m.source_tier::text AS tier, NULL AS mag, "
+        "si.clause AS excerpt, m.chain_id::text AS chain "
+        "FROM control.sow_subcap_match m "
+        "JOIN control.sow_scope_item si ON si.scope_id = m.scope_id "
+        "JOIN control.sow_document d ON d.sow_id = si.sow_id "
+        "WHERE m.version_id = :ver AND m.subcap_id = :sid "
+        "AND m.status IN ('confirmed', 'review')"
+    ),
+}
+
+
+@router.get("/{version}/subcaps/{subcap_id}/timeline")
+async def subcap_timeline(
+    version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> TimelineResp:
+    v = await resolve_version(version)
+    s = _schema(v)
+    params = {"ver": v.version_id, "sid": subcap_id}
+    async with _engine().connect() as conn:
+        name_row = (
+            await conn.execute(
+                text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid"), {"sid": subcap_id}
+            )
+        ).first()
+        if name_row is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="subcap not found in this version"
+            )
+        events: list[TimelineEvent] = []
+        for sql in _TIMELINE_SQL.values():
+            rows = (await conn.execute(text(sql), params)).mappings().all()
+            events.extend(TimelineEvent.model_validate(dict(r)) for r in rows)
+        stories = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) FROM control.story_catalogue_link "
+                    "WHERE version_id = :ver AND subcap_id = :sid"
+                ),
+                params,
+            )
+        ).scalar() or 0
+    events.sort(key=lambda e: e.date or "", reverse=True)
+    sources = len({e.excerpt for e in events if e.kind in ("news", "vendor") and e.excerpt})
+    return TimelineResp(
+        subcap_id=subcap_id,
+        name=str(name_row[0]),
+        stories=int(stories),
+        sources=sources,
+        events=events,
+    )
+
+
 @router.get("/{version}/subcaps/{subcap_id}/enrichment")
 async def subcap_enrichment(
     version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
@@ -413,6 +536,276 @@ async def subcap_connections(
     )
 
 
+class KgNode(BaseModel):
+    id: str
+    kind: str  # subcap | platform | offering
+    label: str
+    pillar: str | None = None
+
+
+class KgEdge(BaseModel):
+    source: str
+    target: str
+    kind: str  # uses_platform | maps_to_offering | shares_platform
+    layer: str  # A_deterministic | B_proposed
+
+
+class KgResp(BaseModel):
+    center: str
+    name: str
+    nodes: list[KgNode]
+    edges: list[KgEdge]
+    stats: dict[str, int]
+    pending: list[KgEdge]  # Layer B — AI-proposed, gated in Change Flags (dashed, never fact)
+
+
+@router.get("/{version}/kg")
+async def knowledge_graph(
+    version: str, subcap: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> KgResp:
+    """Knowledge graph neighbourhood for a subcap. Layer A (solid) is a DETERMINISTIC projection of
+    the catalogue's own link tables — platforms it uses, offerings it maps to, and sibling subcaps
+    that share a platform — so every edge traces to a real row (F15, §19 schema-explicit). Layer B
+    (dashed) are AI-proposed `pending_edge`s, never rendered as fact and gated in Change Flags."""
+    v = await resolve_version(version)
+    s = _schema(v)
+    params = {"sid": subcap, "ver": v.version_id}
+    async with _engine().connect() as conn:
+        name = (
+            await conn.execute(
+                text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid"), {"sid": subcap}
+            )
+        ).first()
+        if name is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="subcap not found in this version"
+            )
+        plats = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT l.l3_id AS id, l.name FROM {s}.subcap_platform sp "
+                        f"JOIN {s}.l3_platform l ON l.l3_id = sp.l3_id "
+                        "WHERE sp.subcap_id = :sid ORDER BY l.name LIMIT 10"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        offs = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT o.offering_id AS id, o.name FROM {s}.offering_subcap os "
+                        f"JOIN {s}.offering o ON o.offering_id = os.offering_id "
+                        "WHERE os.subcap_id = :sid ORDER BY o.name LIMIT 8"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        sibs = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT sp2.subcap_id AS id, sc.name, left(sp2.subcap_id, 2) AS pillar, "
+                        "count(*) AS shared "
+                        f"FROM {s}.subcap_platform sp1 "
+                        f"JOIN {s}.subcap_platform sp2 ON sp2.l3_id = sp1.l3_id "
+                        f"JOIN {s}.subcap sc ON sc.subcap_id = sp2.subcap_id "
+                        "WHERE sp1.subcap_id = :sid AND sp2.subcap_id <> :sid "
+                        "GROUP BY sp2.subcap_id, sc.name ORDER BY shared DESC LIMIT 6"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        pend = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT from_node::text AS source, to_node::text AS target, "
+                        "kind::text AS kind "
+                        "FROM control.pending_edge WHERE version_id = :ver "
+                        "AND (from_node::text = :sid OR to_node::text = :sid) "
+                        "AND status = 'pending' LIMIT 10"
+                    ),
+                    params,
+                )
+            )
+            .mappings()
+            .all()
+        )
+    nodes: list[KgNode] = [KgNode(id=subcap, kind="subcap", label=str(name[0]), pillar=subcap[:2])]
+    edges: list[KgEdge] = []
+    for p in plats:
+        nodes.append(KgNode(id=p["id"], kind="platform", label=p["name"]))
+        edges.append(
+            KgEdge(source=subcap, target=p["id"], kind="uses_platform", layer="A_deterministic")
+        )
+    for o in offs:
+        nodes.append(KgNode(id=o["id"], kind="offering", label=o["name"]))
+        edges.append(
+            KgEdge(source=subcap, target=o["id"], kind="maps_to_offering", layer="A_deterministic")
+        )
+    for sb in sibs:
+        nodes.append(KgNode(id=sb["id"], kind="subcap", label=sb["name"], pillar=sb["pillar"]))
+        edges.append(
+            KgEdge(source=subcap, target=sb["id"], kind="shares_platform", layer="A_deterministic")
+        )
+    pending = [
+        KgEdge(source=p["source"], target=p["target"], kind=p["kind"], layer="B_proposed")
+        for p in pend
+    ]
+    stats = {
+        "platforms": len(plats),
+        "offerings": len(offs),
+        "siblings": len(sibs),
+        "pending": len(pending),
+    }
+    return KgResp(
+        center=subcap, name=str(name[0]), nodes=nodes, edges=edges, stats=stats, pending=pending
+    )
+
+
+class WhatIfRef(BaseModel):
+    id: str
+    name: str
+
+
+class WhatIfResp(BaseModel):
+    subcap: str
+    name: str
+    action: str
+    stories: int  # delivery affected
+    use_cases: int
+    offerings: list[WhatIfRef]  # offerings that lose/change coverage
+    platforms: list[WhatIfRef]
+    siblings: list[WhatIfRef]  # subcaps sharing a platform — potential KG ripples
+    blast: int  # total distinct catalogue rows in the blast radius
+    summary: str
+    reversible: bool = True
+
+
+@router.get("/{version}/whatif")
+async def whatif(
+    version: str,
+    subcap: str,
+    action: str = "toggle",
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> WhatIfResp:
+    """Read-only cascade preview (I1): the deterministic structural blast radius of a change to a
+    subcap — the offerings, delivery stories, platforms, use cases and shared-platform siblings it
+    touches — computed from the catalogue's link tables. Nothing is written; promote stages a gated
+    suggestion. (relation_def cascade rows would extend this; none are defined yet.)"""
+    v = await resolve_version(version)
+    s = _schema(v)
+    p = {"sid": subcap, "ver": v.version_id}
+    async with _engine().connect() as conn:
+        name = (
+            await conn.execute(
+                text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid"), {"sid": subcap}
+            )
+        ).first()
+        if name is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="subcap not found in this version"
+            )
+        offs = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT o.offering_id AS id, o.name FROM {s}.offering_subcap os "
+                        f"JOIN {s}.offering o ON o.offering_id = os.offering_id "
+                        "WHERE os.subcap_id = :sid ORDER BY o.name"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        plats = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT l.l3_id AS id, l.name FROM {s}.subcap_platform sp "
+                        f"JOIN {s}.l3_platform l ON l.l3_id = sp.l3_id "
+                        "WHERE sp.subcap_id = :sid ORDER BY l.name"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        sibs = (
+            (
+                await conn.execute(
+                    text(
+                        f"SELECT DISTINCT sp2.subcap_id AS id, sc.name "
+                        f"FROM {s}.subcap_platform sp1 "
+                        f"JOIN {s}.subcap_platform sp2 ON sp2.l3_id = sp1.l3_id "
+                        f"JOIN {s}.subcap sc ON sc.subcap_id = sp2.subcap_id "
+                        "WHERE sp1.subcap_id = :sid AND sp2.subcap_id <> :sid "
+                        "ORDER BY sc.name LIMIT 12"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        stories = (
+            await conn.execute(
+                text(
+                    "SELECT count(*) FROM control.story_catalogue_link "
+                    "WHERE version_id = :ver AND subcap_id = :sid"
+                ),
+                p,
+            )
+        ).scalar() or 0
+        use_cases = (
+            await conn.execute(
+                text(f"SELECT count(*) FROM {s}.use_case WHERE subcap_id = :sid"), {"sid": subcap}
+            )
+        ).scalar() or 0
+    blast = len(offs) + len(plats) + len(sibs) + int(stories) + int(use_cases)
+    verb = {
+        "retire": "Retiring",
+        "descriptor": "Editing the maturity descriptor of",
+        "platform": "Remapping the platforms of",
+        "merge": "Merging",
+        "offering": "Re-bundling",
+        "relation": "Adding a relation to",
+        "toggle": "Toggling",
+    }.get(action, "Changing")
+    summary = (
+        f"{verb} {name[0]} touches {blast} catalogue rows: {len(offs)} offering(s), "
+        f"{int(stories):,} delivered stories, {len(plats)} platform link(s), {int(use_cases)} use "
+        f"case(s) and {len(sibs)} shared-platform sibling(s). Read-only — promote to stage a "
+        f"gated change."
+    )
+    return WhatIfResp(
+        subcap=subcap,
+        name=str(name[0]),
+        action=action,
+        stories=int(stories),
+        use_cases=int(use_cases),
+        offerings=[WhatIfRef(id=o["id"], name=o["name"]) for o in offs],
+        platforms=[WhatIfRef(id=pl["id"], name=pl["name"]) for pl in plats],
+        siblings=[WhatIfRef(id=sb["id"], name=sb["name"]) for sb in sibs],
+        blast=blast,
+        summary=summary,
+    )
+
+
 @router.get("/{version}/summary")
 async def summary(
     version: str, _user: dict[str, Any] = Depends(get_current_user)
@@ -435,6 +828,117 @@ async def summary(
         total = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap"))).scalar()
     pillars = [PillarSummary.model_validate(dict(r)) for r in rows]
     return CatalogueSummary(version_id=v.version_id, total_subcaps=int(total or 0), pillars=pillars)
+
+
+class HeatmapRow(BaseModel):
+    key: str
+    label: str
+    subtitle: str
+    total: int
+    cells: list[int]
+    pillar: str | None = None
+
+
+class HeatmapResp(BaseModel):
+    lens: str
+    axis: list[str]  # the 6 composite-score band labels
+    rows: list[HeatmapRow]
+    max: int  # global max cell, for intensity scaling
+
+
+# Mission control's concentration heatmap (Impl §604). Real delivery volume from the carried story
+# corpus (control.story_catalogue_link → control.story), grouped by the active LENS, with the cell
+# strip bucketing each group's stories across 6 composite-score bands (1.0–5.0). The catalogue lost
+# real Jira dates on ingest (created_at = ingest time), so the truthful ordinal axis is delivery
+# quality, not quarters — same heatmap shape, honest data.
+_LENS_GROUP: dict[str, tuple[str, str, str]] = {
+    # lens -> (group-key expr, label expr, extra FROM/JOIN)
+    "pillar": ("sc.subcap_id", "sc.name", ""),  # rows = most-delivered subcaps
+    "lifecycle": ("sc.lifecycle_state::text", "sc.lifecycle_state::text", ""),
+    "maturity": ("coalesce(sc.tier,'untiered')", "coalesce(sc.tier,'untiered')", ""),
+    "subvertical": (
+        "coalesce(st.story_sv_code,'(unscoped)')",
+        "coalesce(st.story_sv_code,'(unscoped)')",
+        "",
+    ),
+    "vendor": (
+        "ven.name",
+        "ven.name",
+        " JOIN {s}.subcap_platform sp ON sp.subcap_id = sc.subcap_id"
+        " JOIN {s}.l3_platform l3 ON l3.l3_id = sp.l3_id"
+        " JOIN {s}.vendor ven ON ven.vendor_id = l3.vendor_id",
+    ),
+    "value-chain": (
+        "vcc.vcc_id",
+        "vcc.vcc_id",
+        " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id",
+    ),
+}
+_BAND_AXIS = ["1.0–1.7", "1.7–2.3", "2.3–3.0", "3.0–3.7", "3.7–4.3", "4.3–5.0"]
+
+
+@router.get("/{version}/heatmap")
+async def heatmap(
+    version: str,
+    lens: str = Query("pillar"),
+    pillar: str = Query("all"),
+    sv: str = Query("all"),
+    limit: int = Query(14, ge=1, le=40),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> HeatmapResp:
+    """Delivery-concentration heatmap for Mission control, grouped by `lens`, scoped by the active
+    pillar/subvertical filters. Counts dedupe per story so a vendor with many platforms isn't
+    double-counted."""
+    v = await resolve_version(version)
+    s = _schema(v)
+    if lens not in _LENS_GROUP:
+        lens = "pillar"
+    key_expr, label_expr, join_tmpl = _LENS_GROUP[lens]
+    join = join_tmpl.format(s=s)
+    where = ["l.version_id = :ver"]
+    params: dict[str, Any] = {"ver": v.version_id, "lim": limit}
+    if pillar != "all":
+        where.append("left(sc.subcap_id, 2) = :pil")
+        params["pil"] = pillar
+    if sv != "all":
+        where.append("st.story_sv_code = :sv")
+        params["sv"] = sv
+    band = "least(6, greatest(1, width_bucket(st.composite_score, 1, 5, 6)))"
+    cells = ", ".join(
+        f"count(DISTINCT st.story_key) FILTER (WHERE {band} = {k}) AS c{k}" for k in range(1, 7)
+    )
+    # Only the pillar lens (rows = individual subcaps) carries a pillar colour; for the other
+    # lenses a group spans pillars, so pillar is NULL and is not a grouping key.
+    pillar_sel = "left(sc.subcap_id, 2)" if lens == "pillar" else "NULL"
+    group_by = "key, label, pillar" if lens == "pillar" else "key, label"
+    sql = text(
+        f"SELECT {key_expr} AS key, {label_expr} AS label, "
+        f"{pillar_sel} AS pillar, count(DISTINCT st.story_key) AS total, {cells} "
+        f"FROM control.story_catalogue_link l "
+        f"JOIN control.story st ON st.story_key = l.story_key "
+        f"JOIN {s}.subcap sc ON sc.subcap_id = l.subcap_id{join} "
+        f"WHERE {' AND '.join(where)} "
+        f"GROUP BY {group_by} ORDER BY total DESC LIMIT :lim"
+    )
+    async with _engine().connect() as conn:
+        rows = (await conn.execute(sql, params)).mappings().all()
+    out: list[HeatmapRow] = []
+    gmax = 0
+    for r in rows:
+        cs = [int(r[f"c{k}"]) for k in range(1, 7)]
+        gmax = max(gmax, *cs)
+        sub = f"{int(r['total']):,} stories" if lens != "pillar" else r["key"]
+        out.append(
+            HeatmapRow(
+                key=str(r["key"]),
+                label=str(r["label"]),
+                subtitle=sub,
+                total=int(r["total"]),
+                cells=cs,
+                pillar=r["pillar"] if lens == "pillar" else None,
+            )
+        )
+    return HeatmapResp(lens=lens, axis=_BAND_AXIS, rows=out, max=gmax)
 
 
 _PLATFORMS_SQL = (

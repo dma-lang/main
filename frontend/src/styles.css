@@ -2,6 +2,16 @@
    Capability Intelligence Agent  Zennify design system
    Tokens lifted from the UI/UX brief. Light + dark, WCAG AA.
    ============================================================ */
+/* DM Sans — self-hosted variable font, the same face the prototype embeds.
+   Without this the whole app silently fell back to system-ui. */
+@font-face{
+  font-family:'DM Sans';
+  src:url('/fonts/DMSans-VariableFont.ttf') format('truetype-variations');
+  font-weight:100 900;
+  font-style:normal;
+  font-display:swap;
+}
+
 :root{
   --z-dark:#1c4a4d; --z-dark-teal:#185f60; --z-teal:#27bbaf; --z-teal-light:#62d7b8;
   --z-mint:#b0eed3; --z-ice:#e8f7f6; --z-lavender:#f2f4f9; --z-slate:#8094c0;
@@ -366,5 +376,9 @@ a{color:var(--interactive);text-decoration:none;}
 .pilldot{width:8px;height:8px;border-radius:2px;flex:none;}
 
 /* brand mark  real Zennify interlocking mark, recolorable via mask */
-.zmark{display:inline-block;-webkit-mask:none center/contain no-repeat;mask:none center/contain no-repeat;background:currentColor;flex:none;}
-.zwordmark{display:inline-block;height:20px;background:none left center/contain no-repeat;}
+.zmark{display:inline-block;-webkit-mask:url('/brand/logo-mark-teal.png') center/contain no-repeat;mask:url('/brand/logo-mark-teal.png') center/contain no-repeat;background:currentColor;flex:none;}
+.zwordmark{display:inline-block;height:20px;background:url('/brand/zennify-wordmark.png') left center/contain no-repeat;}
+
+/* login  brand-split layout (the media block above stacks it ≤760px) */
+.loginwrap{min-height:100vh;display:grid;grid-template-columns:1.05fr 1fr;background:var(--surface-base);}
+.loginbrand{position:relative;background:var(--z-dark);color:#fff;overflow:hidden;display:flex;flex-direction:column;padding:48px 56px;}

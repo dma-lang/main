@@ -3,8 +3,11 @@
 // HashRouter, so `go()` is the single navigation primitive across every surface.
 
 export function go(route: string): void {
-  if (window.location.hash.slice(2) !== route) {
-    window.location.hash = '#/' + route;
+  // Navigation CARRIES the current filter query (AppFlow §3.1: arrival never resets context).
+  const query = window.location.hash.split('?')[1];
+  const target = '#/' + route + (query ? '?' + query : '');
+  if (window.location.hash !== target) {
+    window.location.hash = target;
   } else {
     window.dispatchEvent(new HashChangeEvent('hashchange'));
   }

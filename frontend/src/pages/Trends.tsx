@@ -10,7 +10,8 @@ import { useState } from 'react';
 import { api, type TrendItem } from '../api/client';
 import { useTrends, useTrendsActions } from '../api/queries';
 import { Bar, Claim, Dropdown, Empty, Page, Tier } from '../components/primitives';
-import { go, openReasoning, toast } from '../lib/events';
+import { go, openLoop, openReasoning, toast } from '../lib/events';
+import { passesTrustFloor } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
@@ -76,19 +77,19 @@ function ClusterEvidence({ trendId }: { trendId: string }) {
 
 function TrendCard({ t }: { t: TrendItem }) {
   const [open, setOpen] = useState(false);
-  const { loop, feedback } = useTrendsActions();
+  const { feedback } = useTrendsActions();
   const actionable = t.status === 'staged' || t.status === 'review';
 
   const onLoop = () =>
-    loop.mutate(t.id, {
-      onSuccess: (r) =>
-        toast(
-          r.staged
-            ? `Staged ${r.kind} suggestion for ${r.target} → review in AI suggestions`
-            : r.status === 'duplicate'
-              ? `Already staged for ${r.target} — pending in AI suggestions`
-              : (r.reason ?? `Loop ${r.status}`),
-        ),
+    openLoop({
+      kind: 'trend',
+      id: t.id,
+      title: t.label,
+      claim: t.label_claim,
+      source: `${t.evidence_count} signals · ${t.window}`,
+      subcap: t.affects?.[0]?.subcap_id,
+      subcapName: t.affects?.[0]?.name,
+      chain: t.chain,
     });
   const onFeedback = (verdict: 'promote' | 'dismiss') =>
     feedback.mutate({ id: t.id, verdict }, { onSuccess: (r) => toast(`Trend ${r.status}`) });
@@ -178,7 +179,7 @@ function TrendCard({ t }: { t: TrendItem }) {
           <span />
         )}
         <div className="row gap8">
-          <button className="btn ghost xs" disabled={loop.isPending} onClick={onLoop}>
+          <button className="btn ghost xs" onClick={onLoop}>
             <Icon n="sparkles" s={13} /> Run consultant loop
           </button>
           {actionable && (
@@ -203,7 +204,11 @@ export function Trends() {
   const [status, setStatus] = useState('all');
   const q = useTrends(status, version);
   const { scan } = useTrendsActions();
-  const items = q.data?.items ?? [];
+  const claimF = useUi((s) => s.claim);
+  const tierF = useUi((s) => s.tier);
+  const items = (q.data?.items ?? []).filter((t) =>
+    passesTrustFloor(t.label_claim, t.tier, claimF, tierF),
+  );
   const counts = q.data?.counts ?? {};
   const scanInfo = q.data?.scan;
 

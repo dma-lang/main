@@ -7,6 +7,16 @@ import {
   type AuditRow,
   type BenchResp,
   type CatalogueSummary,
+  type ClientJourney,
+  type ClientRow,
+  type DiffResp,
+  type HeatmapResp,
+  type MappingResp,
+  type SowDetail,
+  type SowDoc,
+  type KgResp,
+  type TimelineResp,
+  type WhatIfResp,
   type ChangeFlagsResp,
   type ChatResponse,
   type GatesLog,
@@ -19,6 +29,7 @@ import {
   type TrendsResp,
   type VendorIntelResp,
   type ReasoningChain,
+  type ReasoningChainRow,
   type PlatformDetail,
   type PlatformRow,
   type StoryPage,
@@ -53,6 +64,90 @@ export const useSummary = (version: string) =>
     queryKey: ['summary', version],
     queryFn: () => api.summary(version),
     enabled: !!version,
+  });
+
+export const useHeatmap = (version: string, lens: string, pillar: string, sv: string) =>
+  useQuery<HeatmapResp>({
+    queryKey: ['heatmap', version, lens, pillar, sv],
+    queryFn: () => api.heatmap(version, lens, pillar, sv),
+    enabled: !!version,
+  });
+
+export const useTimeline = (version: string, id: string | null) =>
+  useQuery<TimelineResp>({
+    queryKey: ['timeline', version, id],
+    queryFn: () => api.timeline(version, id ?? ''),
+    enabled: !!version && !!id,
+  });
+
+export const useKg = (version: string, subcap: string | null) =>
+  useQuery<KgResp>({
+    queryKey: ['kg', version, subcap],
+    queryFn: () => api.kg(version, subcap ?? ''),
+    enabled: !!version && !!subcap,
+  });
+
+export const useWhatIf = (version: string, subcap: string, action: string, enabled: boolean) =>
+  useQuery<WhatIfResp>({
+    queryKey: ['whatif', version, subcap, action],
+    queryFn: () => api.whatif(version, subcap, action),
+    enabled: enabled && !!version && !!subcap,
+  });
+
+export const useSows = (version: string) =>
+  useQuery<SowDoc[]>({
+    queryKey: ['sows', version],
+    queryFn: () => api.sows(version),
+    enabled: !!version,
+  });
+
+export const useSowDetail = (id: string | null, version: string) =>
+  useQuery<SowDetail>({
+    queryKey: ['sow', id, version],
+    queryFn: () => api.sowDetail(id ?? '', version),
+    enabled: !!id && !!version,
+  });
+
+export function useSowActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['sows'] });
+    void qc.invalidateQueries({ queryKey: ['sow'] });
+    void qc.invalidateQueries({ queryKey: ['clients'] });
+  };
+  const scan = useMutation({ mutationFn: api.scanSows, onSuccess: invalidate });
+  const confirm = useMutation({ mutationFn: api.confirmSowMatch, onSuccess: invalidate });
+  return { scan, confirm };
+}
+
+export const useClients = (version: string) =>
+  useQuery<ClientRow[]>({
+    queryKey: ['clients', version],
+    queryFn: () => api.clients(version),
+    enabled: !!version,
+  });
+
+export const useMapping = (version: string | null) =>
+  useQuery<MappingResp>({
+    queryKey: ['mapping', version],
+    queryFn: () => api.mapping(version ?? ''),
+    enabled: !!version,
+    retry: false, // an unprovisioned version is a designed 404 state
+  });
+
+export const useClientJourney = (key: string | null, version: string) =>
+  useQuery<ClientJourney>({
+    queryKey: ['client-journey', key, version],
+    queryFn: () => api.clientJourney(key ?? '', version),
+    enabled: !!key && !!version,
+  });
+
+export const useDiff = (a: string, b: string) =>
+  useQuery<DiffResp>({
+    queryKey: ['diff', a, b],
+    queryFn: () => api.diff(a, b),
+    enabled: !!a && !!b,
+    retry: false, // an unprovisioned version is a designed 404 state, not a retryable fault
   });
 
 export const useSubcaps = (version: string) =>
@@ -128,6 +223,12 @@ export const useReasoning = (chainId: string | null) =>
     queryKey: ['reasoning', chainId],
     queryFn: () => api.reasoning(chainId ?? ''),
     enabled: !!chainId,
+  });
+
+export const useReasoningList = (limit = 50) =>
+  useQuery<ReasoningChainRow[]>({
+    queryKey: ['reasoning-list', limit],
+    queryFn: () => api.reasoningList(limit),
   });
 
 export const useSuggestions = (status: string) =>
@@ -274,8 +375,8 @@ export function useTrendsActions() {
 
 export const useGates = () => useQuery<GatesLog>({ queryKey: ['gates'], queryFn: api.gates });
 
-export const useQaMetrics = () =>
-  useQuery<QaMetrics>({ queryKey: ['qa-metrics'], queryFn: api.qaMetrics });
+export const useQaMetrics = (enabled = true) =>
+  useQuery<QaMetrics>({ queryKey: ['qa-metrics'], queryFn: api.qaMetrics, enabled });
 
 export const useAuditLog = () =>
   useQuery<AuditRow[]>({ queryKey: ['audit-log'], queryFn: api.auditLog });

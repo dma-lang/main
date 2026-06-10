@@ -2,9 +2,101 @@
 // the extracted stylesheet styles them identically.
 import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react';
 
-import { go } from '../lib/events';
+import { go, openPeek } from '../lib/events';
 import { clamp, LIFE_COLORS, LIFE_LABEL, PILLAR_COLORS } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
+import { useFocusTrap } from '../lib/useFocusTrap';
+
+/** Subcap chip: click peeks (drawer); `nav` jumps straight to the deep dive. */
+export function SC({ id, children, nav }: { id: string; children?: ReactNode; nav?: boolean }) {
+  return (
+    <span
+      className="sclink"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (nav) go('subcap/' + id);
+        else openPeek(id);
+      }}
+    >
+      {children ?? id}
+    </span>
+  );
+}
+
+/** Reusable slide-in drawer (right side). Focus-trapped; Escape closes; focus returns to opener. */
+export function Drawer({
+  open,
+  onClose,
+  title,
+  sub,
+  width = 440,
+  children,
+  foot,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title?: ReactNode;
+  sub?: ReactNode;
+  width?: number;
+  children?: ReactNode;
+  foot?: ReactNode;
+}) {
+  if (!open) return null;
+  return <DrawerInner {...{ onClose, title, sub, width, children, foot }} />;
+}
+
+function DrawerInner({
+  onClose,
+  title,
+  sub,
+  width = 440,
+  children,
+  foot,
+}: {
+  onClose: () => void;
+  title?: ReactNode;
+  sub?: ReactNode;
+  width?: number;
+  children?: ReactNode;
+  foot?: ReactNode;
+}) {
+  const ref = useFocusTrap<HTMLDivElement>(onClose);
+  return (
+    <>
+      <div className="drawer-bg" onClick={onClose} />
+      <div
+        ref={ref}
+        className="drawer"
+        style={{ width }}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+      >
+        <div className="drawer-head">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {sub && (
+              <div className="eyebrow" style={{ marginBottom: 5 }}>
+                {sub}
+              </div>
+            )}
+            <div className="h2" style={{ lineHeight: 1.25 }}>
+              {title}
+            </div>
+          </div>
+          <button className="modal-x" onClick={onClose}>
+            <Icon n="x" s={16} />
+          </button>
+        </div>
+        <div className="drawer-body">{children}</div>
+        {foot && (
+          <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border-subtle)' }}>
+            {foot}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
 
 export function Claim({ label }: { label: string }) {
   const k = (label || '').toLowerCase();

@@ -135,9 +135,7 @@ async def scan_vendors(version: str) -> dict[str, Any]:
     schema = v.schema_name
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.connect() as conn:
         # Registry guard BEFORE the fetch: a disabled source never pulls (and never spends).
         await sources.ensure_enabled(conn, "vendor")
@@ -684,9 +682,7 @@ async def propose_from_vendor_event(event_id: str, actor: str) -> dict[str, Any]
     source-tier floor bites HERE: sub-T3 vendor signal alone is refused (one low-tier source is
     not a basis for a catalogue edit); independent T3+ coverage stages. A deprecation stages a
     lifecycle_demotion; anything else a descriptor_update."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         ev = (
             (

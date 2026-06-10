@@ -3,9 +3,10 @@
 // re-gates the proposed correction G1–G8 server-side and, on pass, mutates cat_<v> + writes an
 // audit row; Reject needs a reason; Defer snoozes. Wired to GET /api/change-flags. Ported from the
 // prototype ChangeFlags.
+import type { ChangeFlag } from '../api/client';
 import { useChangeFlags, useFlagActions } from '../api/queries';
 import { Empty, Page } from '../components/primitives';
-import { go, openReasoning, toast } from '../lib/events';
+import { go, openCommit, openReasoning, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
@@ -25,22 +26,26 @@ export function ChangeFlags() {
   const flags = q.data?.flags ?? [];
   const counts = q.data?.counts ?? { BLOCKING: 0, HIGH: 0, MED: 0, LOW: 0 };
 
-  const onApprove = (id: string) =>
-    approve.mutate(id, {
-      onSuccess: (r) =>
-        toast(
-          r.resolved
-            ? `Corrected ${r.before} → ${r.after} · logged to audit trail`
-            : r.gate_failed
-              ? `Re-gate blocked by ${r.gate_failed} — flag stays open`
-              : `Already ${r.status}`,
-        ),
-    });
   const onReject = (id: string) => {
     const reason = window.prompt('Reason for rejecting this flag?')?.trim();
     if (!reason) return;
     reject.mutate({ id, reason }, { onSuccess: () => toast('Rejected — reason logged to audit') });
   };
+  // Approve a flag through the CommitModal: the modal's run executes the real approve mutation,
+  // which re-gates server-side before correcting the catalogue and writing the audit row. If the
+  // re-gate fails the flag stays open with the failing gate named — surfaced honestly in the modal.
+  const onApprove = (f: ChangeFlag) =>
+    openCommit({
+      title: f.title,
+      kind: f.kind.replace(/_/g, ' '),
+      summary: f.body,
+      target: f.target,
+      onRejectInstead: () => onReject(f.id),
+      run: async () => {
+        const r = await approve.mutateAsync(f.id);
+        return { ok: r.resolved, detail: r.gate_failed };
+      },
+    });
   const onDefer = (id: string) =>
     defer.mutate(id, { onSuccess: () => toast('Deferred — snoozed from the inbox') });
 
@@ -163,7 +168,7 @@ export function ChangeFlags() {
                   <button
                     className="btn primary sm"
                     disabled={approve.isPending}
-                    onClick={() => onApprove(f.id)}
+                    onClick={() => onApprove(f)}
                   >
                     Approve <Icon n="arrowR" s={14} />
                   </button>

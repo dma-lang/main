@@ -143,9 +143,7 @@ async def carry_forward(
     src = source_version or target_version
     if set(target_version) - set("abcdefghijklmnopqrstuvwxyz0123456789_"):
         raise ValueError(f"invalid target_version: {target_version!r}")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     schema = f"cat_{target_version}"
     stories = _load_seed()
 

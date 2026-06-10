@@ -65,6 +65,79 @@ def test_subcaps_tree(client: TestClient) -> None:
 
 
 @needs_db
+def test_heatmap_contract(client: TestClient) -> None:
+    """Mission-control concentration heatmap: valid shape for every lens, a 6-band score axis, and
+    every row's cells length 6. (Rows are empty until carry-forward seeds stories; the data path is
+    exercised against the carried dev DB.) An unknown lens falls back to pillar."""
+    for lens in ("pillar", "lifecycle", "maturity", "subvertical", "vendor", "value-chain"):
+        body = client.get(f"/api/catalogue/v7/heatmap?lens={lens}").json()
+        assert body["lens"] == lens
+        assert len(body["axis"]) == 6
+        assert isinstance(body["rows"], list)
+        for row in body["rows"]:
+            assert len(row["cells"]) == 6
+            assert row["total"] == sum(row["cells"]) or row["total"] >= max(row["cells"])
+    assert client.get("/api/catalogue/v7/heatmap?lens=bogus").json()["lens"] == "pillar"
+
+
+@needs_db
+def test_subcap_timeline_contract(client: TestClient) -> None:
+    """Project-subcap trace: a known subcap returns the timeline shape (events list with the trust
+    envelope per event + a delivery story count); an unknown subcap 404s, never 500s."""
+    sid = client.get("/api/catalogue/v7/subcaps").json()[0]["id"]
+    body = client.get(f"/api/catalogue/v7/subcaps/{sid}/timeline").json()
+    assert body["subcap_id"] == sid and body["name"]
+    assert isinstance(body["events"], list) and isinstance(body["stories"], int)
+    for ev in body["events"]:
+        assert ev["kind"] in {"news", "vendor", "suggestion", "benchmark", "trend", "sow"}
+        assert {"date", "title", "claim", "tier", "chain"} <= set(ev)
+    assert client.get("/api/catalogue/v7/subcaps/NOPE.0.0/timeline").status_code == 404
+
+
+@needs_db
+def test_kg_layer_a_projection(client: TestClient) -> None:
+    """Knowledge graph: a subcap with platforms projects a deterministic Layer-A neighbourhood —
+    the centre node plus platform/offering/sibling edges, every edge a real link-table row. Unknown
+    subcap 404s. Pending (Layer B) is a separate list, never mixed into the deterministic edges."""
+    # find a subcap that actually has platforms so the projection is non-trivial
+    sid = next(
+        x["id"]
+        for x in client.get("/api/catalogue/v7/subcaps").json()
+        if client.get(f"/api/catalogue/v7/subcaps/{x['id']}").json()["n_platforms"] > 0
+    )
+    body = client.get(f"/api/catalogue/v7/kg?subcap={sid}").json()
+    assert body["center"] == sid and body["name"]
+    assert any(n["id"] == sid and n["kind"] == "subcap" for n in body["nodes"])
+    assert body["stats"]["platforms"] > 0
+    assert all(e["layer"] == "A_deterministic" for e in body["edges"])  # never proposed in Layer A
+    assert all(e["layer"] == "B_proposed" for e in body["pending"])
+    assert client.get("/api/catalogue/v7/kg?subcap=NOPE.0.0").status_code == 404
+
+
+@needs_db
+def test_whatif_cascade_preview(client: TestClient) -> None:
+    """What-if: the read-only blast radius of a change to a subcap sums its offering / platform /
+    story / use-case / sibling links; blast equals that sum and 404s on an unknown subcap."""
+    sid = next(
+        x["id"]
+        for x in client.get("/api/catalogue/v7/subcaps").json()
+        if client.get(f"/api/catalogue/v7/subcaps/{x['id']}").json()["n_platforms"] > 0
+    )
+    d = client.get(f"/api/catalogue/v7/whatif?subcap={sid}&action=retire").json()
+    assert d["subcap"] == sid and d["action"] == "retire" and d["reversible"] is True
+    assert (
+        d["blast"]
+        == len(d["offerings"])
+        + len(d["platforms"])
+        + len(d["siblings"])
+        + d["stories"]
+        + d["use_cases"]
+    )
+    assert d["platforms"] and "Retiring" in d["summary"]
+    assert client.get("/api/catalogue/v7/whatif?subcap=NOPE.0.0").status_code == 404
+
+
+@needs_db
 def test_subcap_detail(client: TestClient) -> None:
     sid = client.get("/api/catalogue/v7/subcaps").json()[0]["id"]
     r = client.get(f"/api/catalogue/v7/subcaps/{sid}")
@@ -146,3 +219,19 @@ def test_unknown_version_404(client: TestClient) -> None:
     r = client.get("/api/catalogue/v999/subcaps")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "not_found"
+
+
+@needs_db
+def test_applied_mapping_registry(client: TestClient) -> None:
+    """Schema-mapping studio (F4): provisioning registers the mapping it ACTUALLY applied — every
+    field row traces to a load statement, relations to the FKs/link tables it created. An
+    unprovisioned version is a clear 404."""
+    body = client.get("/api/admin/mapping/v7").json()
+    assert len(body["fields"]) == 16 and len(body["relations"]) == 7
+    f = {x["source_field"]: x for x in body["fields"]}
+    assert f["subcaps.id"]["canonical_entity"] == "subcap"
+    assert all(x["status"] == "confirmed" and x["confidence"] == 1.0 for x in body["fields"])
+    rels = {(r["from_entity"], r["rel_type"], r["to_entity"]) for r in body["relations"]}
+    assert ("subcap", "uses_platform", "l3_platform") in rels
+    assert ("category", "belongs_to", "pillar") in rels
+    assert client.get("/api/admin/mapping/v5").status_code == 404

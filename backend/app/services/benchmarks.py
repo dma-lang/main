@@ -119,9 +119,7 @@ async def scan_benchmarks(version: str) -> dict[str, Any]:
     schema = v.schema_name
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.connect() as conn:
         # Registry guard BEFORE the fetch: a disabled source never pulls (and never spends).
         await sources.ensure_enabled(conn, "benchmarks")
@@ -531,9 +529,7 @@ async def list_benchmarks(segment: str | None = None, version: str | None = None
 async def propose_from_benchmark(benchmark_id: str, actor: str) -> dict[str, Any]:
     """Consultant loop (spec: the loop opens from Benchmarks too): stage a GATED descriptor_update
     on the benchmark's top mapped subcap, citing the benchmark evidence — never a live edit."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         b = (
             (

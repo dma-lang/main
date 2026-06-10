@@ -53,9 +53,7 @@ async def answer(version: str, question: str) -> ChatResult:
     schema = v.schema_name
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
 
     async with engine.begin() as conn:
         hits = await retrieve(conn, schema, question, k=5)

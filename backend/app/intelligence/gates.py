@@ -45,6 +45,18 @@ def evidence_thresholds() -> tuple[float, float]:
     return floor, strong
 
 
+def matching_bands() -> tuple[float, float]:
+    """(auto_confirm_at, review_band_low) for carry-forward / SOW match confidence: >= confirm
+    is auto-confirmed, [review_low, confirm) routes to review, below stays an unmapped proposal
+    (kept, never dropped). Config, not code (R4 recalibrates from the real run)."""
+    section = load_gate_config().get("matching") or {}
+    confirm_at = float(section.get("auto_confirm_at", 0.86))
+    review_low = float(section.get("review_band_low", 0.70))
+    if not 0 < review_low < confirm_at <= 1:
+        raise ValueError("gates.yaml: matching bands must satisfy 0 < review_low < confirm_at")
+    return confirm_at, review_low
+
+
 @dataclass(frozen=True)
 class TrendConfig:
     """Trend signal weights + emergence cutoff + cluster floors (config/gates.yaml: trends.*)."""

@@ -80,10 +80,12 @@ def create_app() -> FastAPI:
     from app.routers import admin as admin_router
     from app.routers import catalogue as catalogue_router
     from app.routers import chat as chat_router
+    from app.routers import clients as clients_router
     from app.routers import digest as digest_router
     from app.routers import evidence as evidence_router
     from app.routers import governance as governance_router
     from app.routers import me as me_router
+    from app.routers import sow as sow_router
     from app.routers import stories as stories_router
     from app.routers import suggestions as suggestions_router
     from app.routers import trends as trends_router
@@ -92,10 +94,12 @@ def create_app() -> FastAPI:
     app.include_router(admin_router.router)
     app.include_router(catalogue_router.router)
     app.include_router(chat_router.router)
+    app.include_router(clients_router.router)
     app.include_router(digest_router.router)
     app.include_router(evidence_router.router)
     app.include_router(governance_router.router)
     app.include_router(me_router.router)
+    app.include_router(sow_router.router)
     app.include_router(stories_router.router)
     app.include_router(suggestions_router.router)
     app.include_router(trends_router.router)

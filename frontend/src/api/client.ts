@@ -16,6 +16,25 @@ export interface VersionInfo {
   created_at: string | null;
 }
 
+export interface DiffRow {
+  id: string;
+  name: string;
+  pillar: string;
+}
+
+export interface DiffModified extends DiffRow {
+  changes: string[];
+}
+
+export interface DiffResp {
+  a: string;
+  b: string;
+  added: DiffRow[];
+  removed: DiffRow[];
+  modified: DiffModified[];
+  unchanged: number;
+}
+
 export interface PillarSummary {
   pillar_id: string;
   name: string;
@@ -28,6 +47,176 @@ export interface CatalogueSummary {
   version_id: string;
   total_subcaps: number;
   pillars: PillarSummary[];
+}
+
+export interface HeatmapRow {
+  key: string;
+  label: string;
+  subtitle: string;
+  total: number;
+  cells: number[];
+  pillar: string | null;
+}
+
+export interface HeatmapResp {
+  lens: string;
+  axis: string[];
+  rows: HeatmapRow[];
+  max: number;
+}
+
+export interface TimelineEvent {
+  kind: string;
+  date: string | null;
+  title: string;
+  claim: string | null;
+  tier: string | null;
+  mag: string | null;
+  excerpt: string | null;
+  chain: string | null;
+}
+
+export interface TimelineResp {
+  subcap_id: string;
+  name: string;
+  stories: number;
+  sources: number;
+  events: TimelineEvent[];
+}
+
+export interface KgNode {
+  id: string;
+  kind: string;
+  label: string;
+  pillar: string | null;
+}
+
+export interface KgEdge {
+  source: string;
+  target: string;
+  kind: string;
+  layer: string;
+}
+
+export interface KgResp {
+  center: string;
+  name: string;
+  nodes: KgNode[];
+  edges: KgEdge[];
+  stats: Record<string, number>;
+  pending: KgEdge[];
+}
+
+export interface SowDoc {
+  sow_id: string;
+  account_key: string;
+  account_name: string;
+  title: string;
+  sv_code: string | null;
+  signed_date: string | null;
+  status: string;
+  redacted: boolean;
+  items: number;
+  confirmed: number;
+  review: number;
+  unmapped: number;
+}
+
+export interface SowItem {
+  scope_id: string;
+  ordinal: number;
+  clause: string;
+  match_id: string | null;
+  subcap_id: string | null;
+  subcap_name: string | null;
+  similarity: number | null;
+  status: string | null;
+  claim_label: string | null;
+  source_tier: string | null;
+  chain_id: string | null;
+  confirmed_by: string | null;
+}
+
+export interface SowDetail {
+  sow_id: string;
+  account_key: string;
+  account_name: string;
+  title: string;
+  sv_code: string | null;
+  signed_date: string | null;
+  status: string;
+  redacted: boolean;
+  items: SowItem[];
+}
+
+export interface ClientRow {
+  key: string;
+  sows: number;
+  scope_items: number;
+  stories: number;
+  subcaps_touched: number;
+  last_sow: string | null;
+}
+
+export interface MappingField {
+  sheet_name: string;
+  source_field: string;
+  canonical_entity: string;
+  canonical_field: string;
+  confidence: number;
+  status: string;
+  is_custom: boolean;
+}
+
+export interface MappingRelation {
+  from_entity: string;
+  rel_type: string;
+  to_entity: string;
+  card: string;
+  via_sheet: string;
+  is_cascade: boolean;
+}
+
+export interface MappingResp {
+  version: string;
+  fields: MappingField[];
+  relations: MappingRelation[];
+}
+
+export interface ClientJourney {
+  key: string;
+  stories: number;
+  sows: { sow_id: string; title: string; sv_code: string | null; signed_date: string | null; status: string }[];
+  matches: {
+    subcap_id: string;
+    subcap_name: string | null;
+    similarity: number;
+    status: string;
+    claim_label: string;
+    chain_id: string | null;
+    date: string | null;
+    clause: string;
+  }[];
+  top_delivery: { subcap_id: string; subcap_name: string | null; stories: number }[];
+}
+
+export interface WhatIfRef {
+  id: string;
+  name: string;
+}
+
+export interface WhatIfResp {
+  subcap: string;
+  name: string;
+  action: string;
+  stories: number;
+  use_cases: number;
+  offerings: WhatIfRef[];
+  platforms: WhatIfRef[];
+  siblings: WhatIfRef[];
+  blast: number;
+  summary: string;
+  reversible: boolean;
 }
 
 export interface SubcapNode {
@@ -465,6 +654,17 @@ export interface ReasoningChain {
   checks: GateCheck[];
 }
 
+export interface ReasoningChainRow {
+  chain_id: string;
+  title: string;
+  claim_label: string | null;
+  verdict: string | null;
+  model: string | null;
+  cost: string;
+  steps: number;
+  created_at: string | null;
+}
+
 export interface SuggestionOut {
   suggestion_id: string;
   target_subcap: string | null;
@@ -714,14 +914,40 @@ export const api = {
   patchPreferences: (preferences: Record<string, unknown>): Promise<Me> =>
     http<Me>('/api/me/preferences', { method: 'PATCH', body: JSON.stringify({ preferences }) }),
   versions: (): Promise<VersionInfo[]> => http<VersionInfo[]>('/api/versions'),
+  diff: (a: string, b: string): Promise<DiffResp> => http<DiffResp>(`/api/diff/${a}/${b}`),
+  sows: (version: string): Promise<SowDoc[]> => http<SowDoc[]>(`/api/sow?version=${version}`),
+  sowDetail: (id: string, version: string): Promise<SowDetail> =>
+    http<SowDetail>(`/api/sow/${id}?version=${version}`),
+  scanSows: (version: string): Promise<Record<string, number | string>> =>
+    http(`/api/admin/sow/scan/${version}`, { method: 'POST' }),
+  confirmSowMatch: (matchId: string): Promise<{ ok: boolean; status: string }> =>
+    http(`/api/sow/matches/${matchId}/confirm`, { method: 'POST' }),
+  clients: (version: string): Promise<ClientRow[]> =>
+    http<ClientRow[]>(`/api/clients?version=${version}`),
+  mapping: (version: string): Promise<MappingResp> =>
+    http<MappingResp>(`/api/admin/mapping/${version}`),
+  clientJourney: (key: string, version: string): Promise<ClientJourney> =>
+    http<ClientJourney>(`/api/clients/${encodeURIComponent(key)}/journey?version=${version}`),
   summary: (v: string): Promise<CatalogueSummary> =>
     http<CatalogueSummary>(`/api/catalogue/${v}/summary`),
+  heatmap: (v: string, lens: string, pillar: string, sv: string): Promise<HeatmapResp> => {
+    const qs = new URLSearchParams({ lens, pillar, sv });
+    return http<HeatmapResp>(`/api/catalogue/${v}/heatmap?${qs.toString()}`);
+  },
   subcaps: (v: string): Promise<SubcapNode[]> =>
     http<SubcapNode[]>(`/api/catalogue/${v}/subcaps`),
   subcap: (v: string, id: string): Promise<SubcapDetail> =>
     http<SubcapDetail>(`/api/catalogue/${v}/subcaps/${id}`),
   subcapStories: (v: string, id: string, page = 1, size = 8): Promise<StoryPage> =>
     http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
+  timeline: (v: string, id: string): Promise<TimelineResp> =>
+    http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
+  kg: (v: string, subcap: string): Promise<KgResp> =>
+    http<KgResp>(`/api/catalogue/${v}/kg?subcap=${encodeURIComponent(subcap)}`),
+  whatif: (v: string, subcap: string, action: string): Promise<WhatIfResp> =>
+    http<WhatIfResp>(
+      `/api/catalogue/${v}/whatif?subcap=${encodeURIComponent(subcap)}&action=${action}`,
+    ),
   subcapEnrichment: (v: string, id: string): Promise<SubcapEnrichment> =>
     http<SubcapEnrichment>(`/api/catalogue/${v}/subcaps/${id}/enrichment`),
   subcapConnections: (v: string, id: string): Promise<SubcapConnections> =>
@@ -737,6 +963,8 @@ export const api = {
     http<ChatResponse>('/api/chat', { method: 'POST', body: JSON.stringify({ question, version }) }),
   reasoning: (chainId: string): Promise<ReasoningChain> =>
     http<ReasoningChain>(`/api/reasoning/${chainId}`),
+  reasoningList: (limit = 50): Promise<ReasoningChainRow[]> =>
+    http<ReasoningChainRow[]>(`/api/reasoning?limit=${limit}`),
   useCases: (v: string, p: UseCaseQuery): Promise<UseCasePage> => {
     const qs = new URLSearchParams();
     if (p.pillar) qs.set('pillar', p.pillar);

@@ -92,6 +92,62 @@ class ReasoningChain(BaseModel):
     checks: list[GateCheck]
 
 
+class ReasoningChainRow(BaseModel):
+    chain_id: str
+    title: str
+    claim_label: str | None = None
+    verdict: str | None = None
+    model: str | None = None
+    cost: str
+    steps: int
+    created_at: str | None = None
+
+
+@router.get("/reasoning")
+async def reasoning_list(
+    limit: int = 50, _user: dict[str, Any] = Depends(get_current_user)
+) -> list[ReasoningChainRow]:
+    """Recent reasoning chains, newest first — the H2 viewer's index. Every AI value links into
+    one of these; the list is the audit entry point when you don't arrive from a backlink."""
+    engine = db.require_engine()
+    capped = max(1, min(limit, 200))
+    async with engine.connect() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT rc.chain_id::text AS chain_id, rc.subject_ref, rc.summary, "
+                        "rc.claim_label::text AS claim_label, rc.model, "
+                        "rc.cost_usd::float AS cost_usd, rc.created_at::text AS created_at, "
+                        "(SELECT count(*) FROM control.reasoning_step rs "
+                        " WHERE rs.chain_id = rc.chain_id) AS n_steps, "
+                        "(SELECT v.verdict::text FROM control.validation_gate_run v "
+                        " WHERE v.chain_id = rc.chain_id "
+                        " ORDER BY v.created_at DESC LIMIT 1) AS verdict "
+                        "FROM control.reasoning_chain rc "
+                        "ORDER BY rc.created_at DESC LIMIT :lim"
+                    ),
+                    {"lim": capped},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        ReasoningChainRow(
+            chain_id=r["chain_id"],
+            title=r["subject_ref"] or (r["summary"] or "")[:80],
+            claim_label=r["claim_label"],
+            verdict=r["verdict"],
+            model=r["model"],
+            cost=f"${r['cost_usd'] or 0:.3f}",
+            steps=int(r["n_steps"] or 0),
+            created_at=r["created_at"],
+        )
+        for r in rows
+    ]
+
+
 @router.get("/reasoning/{chain_id}")
 async def reasoning(
     chain_id: UUID, _user: dict[str, Any] = Depends(get_current_user)

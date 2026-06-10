@@ -43,6 +43,13 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _source_disabled(request: Request, exc: SourceDisabledError) -> JSONResponse:
         return JSONResponse(status_code=409, content=_envelope("conflict", str(exc)))
 
+    # A missing/unmigrated database is deploy-sequencing, not a server fault: actionable 503.
+    from app.db import DatabaseNotReadyError
+
+    @app.exception_handler(DatabaseNotReadyError)
+    async def _db_not_ready(request: Request, exc: DatabaseNotReadyError) -> JSONResponse:
+        return JSONResponse(status_code=503, content=_envelope("unavailable", str(exc)))
+
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
