@@ -1,11 +1,14 @@
-// App entry: query provider + auth gate. /api/me drives identity (is_admin, preferences); on 401 the
-// Login screen shows (hermetic dev auto-authenticates). Preferences hydrate the UI store on load.
+// App entry: query provider + auth gate. /api/me drives identity (is_admin, preferences); while it
+// errors (no/expired session in live auth, service unavailable) the REAL brand-split Login page
+// renders — its sign-in writes the fresh identity into the ['me'] cache, which flips this gate.
+// Hermetic dev auto-authenticates. Nothing but /api/config and /api/me is called pre-auth.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { RouterProvider } from 'react-router-dom';
 
+import type { Me } from './api/client';
 import { useMe, useVersions } from './api/queries';
-import { Login } from './Login';
+import { Login } from './pages/Login';
 import { router } from './router';
 import { useUi } from './state/store';
 
@@ -13,8 +16,7 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: false } },
 });
 
-function Gate() {
-  const me = useMe();
+function Authed({ me }: { me: Me }) {
   const versions = useVersions();
   const hydrate = useUi((s) => s.hydrateFromMe);
   const version = useUi((s) => s.version);
@@ -22,19 +24,25 @@ function Gate() {
   const hydrated = useRef(false);
 
   // Seed the store from server preferences exactly once, on the first successful /api/me load.
-  // Re-running on every me.data change (e.g. a PATCH response) would clobber the user's in-session
+  // Re-running on every me change (e.g. a PATCH response) would clobber the user's in-session
   // theme/lens/persona changes, so we guard with a ref.
   useEffect(() => {
-    if (me.data && !hydrated.current) {
+    if (!hydrated.current) {
       hydrated.current = true;
-      hydrate(me.data.preferences, me.data.is_admin);
+      hydrate(me.preferences, me.is_admin);
     }
-  }, [me.data, hydrate]);
+  }, [me, hydrate]);
 
   useEffect(() => {
     const vs = versions.data;
     if (vs && vs.length > 0 && !version) setVersion(vs[0].version_id);
   }, [versions.data, version, setVersion]);
+
+  return <RouterProvider router={router} />;
+}
+
+function Gate() {
+  const me = useMe();
 
   if (me.isLoading) {
     return (
@@ -44,9 +52,9 @@ function Gate() {
     );
   }
   if (me.isError || !me.data) {
-    return <Login onRetry={() => void me.refetch()} />;
+    return <Login />;
   }
-  return <RouterProvider router={router} />;
+  return <Authed me={me.data} />;
 }
 
 export default function App() {

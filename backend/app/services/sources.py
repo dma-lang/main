@@ -98,9 +98,7 @@ async def _last_run(conn: AsyncConnection, key: str) -> dict[str, Any] | None:
 async def list_sources() -> list[SourceRow]:
     """The Settings source registry: every ingestion point with its active origin (database
     fixture vs online), cadence, last poll and staleness — nothing hidden."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     hermetic = get_settings().is_hermetic
     now = datetime.now(UTC)
 
@@ -165,9 +163,7 @@ async def list_sources() -> list[SourceRow]:
 async def set_enabled(key: str, enabled: bool, actor: str) -> dict[str, Any]:
     """Persist the per-source switch (+ append-only audit row). The scan jobs enforce it via
     ``ensure_enabled`` — disabling a source here actually stops its ingest."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         updated = (
             await conn.execute(

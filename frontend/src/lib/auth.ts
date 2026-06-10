@@ -20,13 +20,45 @@ export interface ClientConfig {
 
 let config: ClientConfig | null = null;
 let user: User | null = null;
+let configPromise: Promise<ClientConfig> | null = null;
 let ready: Promise<void> | null = null;
 
 export async function loadConfig(): Promise<ClientConfig> {
-  if (config) return config;
-  const r = await fetch('/api/config');
-  config = (await r.json()) as ClientConfig;
-  return config;
+  // Failures are NOT cached: a transient /api/config error must stay retryable, otherwise one
+  // blip poisons every later getToken()/signIn() for the whole session.
+  configPromise ??= fetch('/api/config').then(async (r) => {
+    if (!r.ok) throw new Error(`config ${r.status}: ${r.statusText}`);
+    config = (await r.json()) as ClientConfig;
+    return config;
+  });
+  try {
+    return await configPromise;
+  } catch (e) {
+    configPromise = null;
+    throw e;
+  }
+}
+
+/** Test seam: subscribes the module's user to an auth-like object and resolves once the
+ * initial restore settles. The subscription is PERMANENT — session restore, token refresh
+ * and sign-out-in-another-tab all keep flowing into `user`. */
+export async function wireAuthState(auth: {
+  currentUser: User | null;
+  authStateReady?: () => Promise<void>;
+}, onAuthStateChanged: (a: typeof auth, cb: (u: User | null) => void) => unknown): Promise<void> {
+  let settle: (() => void) | null = null;
+  const first = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  onAuthStateChanged(auth, (u) => {
+    user = u;
+    settle?.();
+    settle = null;
+  });
+  // authStateReady (firebase ^10.7) resolves after the initial restore; the first listener
+  // emission is the fallback for fakes/tests that don't implement it.
+  await (auth.authStateReady ? auth.authStateReady() : first);
+  user = auth.currentUser ?? user;
 }
 
 async function initFirebase(cfg: ClientConfig): Promise<void> {
@@ -51,19 +83,17 @@ async function initFirebase(cfg: ClientConfig): Promise<void> {
       isSupported().then((ok) => ok && getAnalytics(app)).catch(() => undefined),
     );
   }
-  await new Promise<void>((resolve) => {
-    const off = onAuthStateChanged(getAuth(app), (u) => {
-      user = u;
-      off();
-      resolve();
-    });
-  });
+  await wireAuthState(getAuth(app), (a, cb) => onAuthStateChanged(a as ReturnType<typeof getAuth>, cb));
 }
 
-/** Idempotent auth init; awaited once by the API layer before the first request. */
+/** Idempotent auth init; awaited once by the API layer before the first request.
+ * Like loadConfig, a rejected init resets so the Login page's Retry actually retries. */
 export function ensureAuth(): Promise<void> {
   ready ??= loadConfig().then((cfg) => (cfg.auth_mode === 'live' ? initFirebase(cfg) : undefined));
-  return ready;
+  return ready.catch((e) => {
+    ready = null;
+    throw e;
+  });
 }
 
 export function isLiveAuth(): boolean {
@@ -88,7 +118,7 @@ export async function signIn(): Promise<string> {
   await ensureAuth();
   const { getAuth, GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
   const cred = await signInWithPopup(getAuth(), new GoogleAuthProvider());
-  user = cred.user;
+  user = cred.user; // the permanent listener also fires; this just removes any gap
   return user.email ?? '';
 }
 

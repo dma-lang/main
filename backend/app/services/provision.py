@@ -128,9 +128,7 @@ async def bring_version_online(
     """Drop+rebuild cat_<version> and seed the catalogue, transactionally; register the version."""
     if not version_id or set(version_id) - set("abcdefghijklmnopqrstuvwxyz0123456789_"):
         raise ValueError(f"invalid version_id: {version_id!r}")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     cat = _load_catalogue()
     pillars, categories, caps, subcaps = _derive(cat)
     enrich = _load_enrichment()

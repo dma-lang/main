@@ -211,9 +211,7 @@ async def detect_trends(version: str) -> dict[str, Any]:
     schema = v.schema_name
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
 
     cfg = gates.trends_config()
     now = datetime.now(UTC)
@@ -699,9 +697,7 @@ async def list_trends(status: str | None = None, version: str | None = None) -> 
 async def trend_evidence(trend_id: str) -> dict[str, Any]:
     """The evidence-cluster drilldown (GET /trends/{id}/evidence): the gated evidence items behind
     a trend, each with its source sub-object, tier, claim label, ERS and reasoning backlink."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.connect() as conn:
         head = (
             (
@@ -761,9 +757,7 @@ async def feedback(trend_id: str, verdict: str, actor: str) -> dict[str, Any]:
     if verdict not in ("promote", "dismiss"):
         return {"ok": False, "status": "invalid", "reason": "verdict must be promote | dismiss"}
     new_status = "promoted" if verdict == "promote" else "dismissed"
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         updated = (
             await conn.execute(
@@ -801,9 +795,7 @@ async def propose_from_trend(trend_id: str, actor: str) -> dict[str, Any]:
     live edit (D3 applies it, re-gating server-side). Targets the trend's top NON-emergent subcap
     (a real catalogue entry to revise); an all-emergent trend is a net-new candidate and is refused
     here — net-new subcaps run through the mapping studio so the taxonomy stays MECE."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         tr = (
             (

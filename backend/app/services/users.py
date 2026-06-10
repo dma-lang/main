@@ -19,9 +19,7 @@ _RETURNING = "RETURNING uid, email, is_admin, preferences"
 
 async def upsert_user(uid: str, email: str, is_admin: bool) -> dict[str, Any]:
     """Insert or update a user; returns {uid, email, is_admin, preferences}."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         result = await conn.execute(
             text(
@@ -39,9 +37,7 @@ async def upsert_user(uid: str, email: str, is_admin: bool) -> dict[str, Any]:
 
 async def update_preferences(uid: str, preferences: dict[str, Any]) -> dict[str, Any]:
     """Replace a user's preferences jsonb; raises KeyError if the user does not exist."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         result = await conn.execute(
             text("UPDATE control.users SET preferences = :prefs WHERE uid = :uid " + _RETURNING),

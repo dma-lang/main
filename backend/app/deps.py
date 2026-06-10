@@ -17,6 +17,10 @@ from app.settings import Settings, get_settings
 
 logger = logging.getLogger("cia.auth")
 
+# Shared google-auth transport: one HTTP session caches Google's signing certs across requests
+# instead of refetching them on every token verification. Created lazily (hermetic never imports).
+_google_request: Any = None
+
 
 def _bearer_token(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -31,9 +35,13 @@ def _verify_firebase(token: str, settings: Settings) -> dict[str, Any]:
     from google.auth.transport import requests as google_requests
     from google.oauth2 import id_token
 
+    global _google_request
+    if _google_request is None:
+        _google_request = google_requests.Request()
+
     try:
         raw = id_token.verify_firebase_token(  # type: ignore[no-untyped-call]
-            token, google_requests.Request(), audience=settings.firebase_project_id
+            token, _google_request, audience=settings.firebase_project_id
         )
     except Exception as exc:
         logger.warning("firebase token verification failed: %s", exc)

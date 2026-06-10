@@ -105,9 +105,7 @@ async def scan(version: str, min_stories: int = 25) -> dict[str, Any]:
     schema = v.schema_name
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
 
     states = ", ".join(f"'{s}'" for s in _CONTRADICTED_STATES)
     async with engine.begin() as conn:
@@ -324,9 +322,7 @@ async def _audit(
 
 async def approve(flag_id: str, actor: str) -> FlagResult:
     """Re-gate the proposed correction; if G1-G8 pass, apply to cat_<v> + audit, all-or-nothing."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         flag = await _flag_for_update(conn, flag_id)
         if flag is None:
@@ -441,9 +437,7 @@ async def _flag_for_update(conn: AsyncConnection, flag_id: str) -> Any:
 async def reject(flag_id: str, reason: str, actor: str) -> FlagResult:
     if not reason.strip():
         raise ValueError("a rejection reason is required")
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         flag = await _flag_for_update(conn, flag_id)
         if flag is None:
@@ -468,9 +462,7 @@ async def reject(flag_id: str, reason: str, actor: str) -> FlagResult:
 
 
 async def defer(flag_id: str, actor: str) -> FlagResult:
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         flag = await _flag_for_update(conn, flag_id)
         if flag is None:

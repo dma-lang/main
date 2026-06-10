@@ -102,9 +102,7 @@ async def grant_admin(email: str, actor: str, note: str = "") -> dict[str, Any]:
         }
     if e in _bootstrap(settings):
         return {"ok": True, "status": "bootstrap", "email": e}  # already a config admin, no-op
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         await conn.execute(
             text(
@@ -134,9 +132,7 @@ async def revoke_admin(email: str, actor: str) -> dict[str, Any]:
             "status": "rejected",
             "reason": "this admin is a config (ADMIN_EMAILS) bootstrap and cannot be removed here",
         }
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         deleted = (
             await conn.execute(

@@ -258,9 +258,7 @@ async def generate(quarter: str | None, actor: str) -> dict[str, Any]:
         raise ValueError("invalid version schema")
     q = quarter or current_quarter()
     start, end = _quarter_bounds(q)
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
 
     async with engine.begin() as conn:
         g = await _gather(conn, schema, v.version_id, start, end)
@@ -490,9 +488,7 @@ async def read(quarter: str | None = None, version: str | None = None) -> Digest
     quarterly cadence + the latest export's verification state."""
     if version:  # version is not digest-scoped, but validate the ref when provided
         await resolve_version(version)
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     sched = schedule.describe("quarterly_digest")
     cadence = {"cadence": "quarterly", "cron": sched["cron"], "next_run": sched["next_run"]}
     async with engine.connect() as conn:
@@ -568,9 +564,7 @@ async def read(quarter: str | None = None, version: str | None = None) -> Digest
 
 async def export(quarter: str | None, actor: str) -> dict[str, Any]:
     """Sign the digest's canonical JSON into the append-only export manifest (F12)."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.begin() as conn:
         d = await _load(conn, quarter)
         if d is None:
@@ -606,9 +600,7 @@ async def export(quarter: str | None, actor: str) -> dict[str, Any]:
 async def verify(export_id: str) -> dict[str, Any]:
     """Recompute the signature from the CURRENT stored digest. A digest regenerated or altered
     after signing fails verification — tamper-evident by construction."""
-    engine = db.get_engine()
-    if engine is None:
-        raise RuntimeError("database not initialised")
+    engine = db.require_engine()
     async with engine.connect() as conn:
         m = (
             (

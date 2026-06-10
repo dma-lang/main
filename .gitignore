@@ -53,3 +53,7 @@ crash.log
 # optional extra build CAs (corporate/sandbox TLS proxies) — never commit real certs
 build-ca/*
 !build-ca/.gitkeep
+
+# prototype extraction + QA artifacts (regenerate: scripts/extract_prototype.py, scripts/qa_visual.mjs)
+.prototype/
+.qa/
