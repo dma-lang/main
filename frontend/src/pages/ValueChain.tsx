@@ -13,6 +13,62 @@ import { heatBg } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
+// Radial view of the 8 clusters — wedge radius ∝ subcap count, ported from the prototype's
+// RadialWheel (ui.jsx:2765). Replaces the old toggle that only reflowed grid columns.
+function RadialWheel() {
+  const cx = 200;
+  const cy = 200;
+  const segs = VALUE_CHAIN;
+  const max = Math.max(...segs.map((s) => s.count));
+  const total = segs.reduce((a, s) => a + s.count, 0);
+  return (
+    <div className="card pad" style={{ display: 'flex', justifyContent: 'center' }}>
+      <svg width={440} height={400} viewBox="0 0 400 400">
+        {segs.map((s, i) => {
+          const a0 = (i / segs.length) * 2 * Math.PI - Math.PI / 2;
+          const a1 = ((i + 1) / segs.length) * 2 * Math.PI - Math.PI / 2;
+          const rr = 60 + (s.count / max) * 90;
+          const x0 = cx + Math.cos(a0) * rr;
+          const y0 = cy + Math.sin(a0) * rr;
+          const x1 = cx + Math.cos(a1) * rr;
+          const y1 = cy + Math.sin(a1) * rr;
+          const mid = (a0 + a1) / 2;
+          const lx = cx + Math.cos(mid) * (rr + 18);
+          const ly = cy + Math.sin(mid) * (rr + 18);
+          return (
+            <g key={s.code}>
+              <path
+                d={`M${cx} ${cy} L${x0} ${y0} A${rr} ${rr} 0 0 1 ${x1} ${y1} Z`}
+                fill={heatBg(s.count / max)}
+                stroke="var(--surface-base)"
+                strokeWidth="2"
+              />
+              <text
+                x={lx}
+                y={ly}
+                fontSize="9"
+                fontWeight="700"
+                fill="var(--text-tertiary)"
+                textAnchor="middle"
+                dominantBaseline="middle"
+              >
+                {s.code}
+              </text>
+            </g>
+          );
+        })}
+        <circle cx={cx} cy={cy} r={50} fill="var(--surface-base)" stroke="var(--border-subtle)" />
+        <text x={cx} y={cy - 6} fontSize="20" fontWeight="700" fill="var(--text-primary)" textAnchor="middle">
+          {total}
+        </text>
+        <text x={cx} y={cy + 12} fontSize="9" fill="var(--text-tertiary)" textAnchor="middle">
+          subcaps mapped
+        </text>
+      </svg>
+    </div>
+  );
+}
+
 export function ValueChain() {
   const ui = useUi();
   const version = ui.version;
@@ -60,10 +116,11 @@ export function ValueChain() {
           8 clusters, left to right. Counts are subcaps mapped to each cluster for the selected
           subvertical.
         </div>
+        {radial && <RadialWheel />}
         <div
           style={{
-            display: 'grid',
-            gridTemplateColumns: radial ? 'repeat(4,1fr)' : 'repeat(8,1fr)',
+            display: radial ? 'none' : 'grid',
+            gridTemplateColumns: 'repeat(8,1fr)',
             gap: 8,
           }}
         >
