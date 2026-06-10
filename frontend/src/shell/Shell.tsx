@@ -102,7 +102,7 @@ export function Shell() {
       <div className="main">
         <Outlet />
       </div>
-      <div className="toasts">
+      <div className="toasts" role="status" aria-live="polite" aria-atomic="true">
         {toasts.map((t) => (
           <div key={t.id} className="toast">
             <span className="tdot" />
