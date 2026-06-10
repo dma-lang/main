@@ -68,6 +68,39 @@ def test_hermetic_llm_mode_does_not_disable_auth() -> None:
     assert exc.value.status_code == 401
 
 
+@needs_db
+def test_admin_grant_list_is_runtime_editable(client: TestClient) -> None:
+    """The admin config space: the two named admins are seeded; grants/revokes persist, are
+    domain-restricted, audited, and a bootstrap (env) admin cannot be revoked here."""
+    seeded = {a["email"] for a in client.get("/api/admin/admins").json()}
+    assert "tom.hedgecoth@zennify.com" in seeded
+    assert "mishley.otiende@zennify.com" in seeded
+
+    # grant -> persisted and listed as a removable runtime grant
+    assert client.post("/api/admin/admins", json={"email": "qa.lead@zennify.com"}).json()["ok"]
+    row = next(
+        a for a in client.get("/api/admin/admins").json() if a["email"] == "qa.lead@zennify.com"
+    )
+    assert row["source"] == "grant" and row["removable"] is True
+
+    # non-domain is rejected (admins must be @zennify.com, like sign-in)
+    assert client.post("/api/admin/admins", json={"email": "x@gmail.com"}).status_code == 400
+
+    # revoke a runtime grant; revoking a non-grant 404s
+    assert client.request("DELETE", "/api/admin/admins/qa.lead@zennify.com").json()["ok"]
+    assert client.request("DELETE", "/api/admin/admins/nobody@zennify.com").status_code == 404
+
+
+def test_admin_resolution_unions_bootstrap_and_grants() -> None:
+    """ADMIN_EMAILS (env bootstrap) is admin immediately, before any DB grant — defense in depth
+    so an operator can never lock everyone out."""
+    from app.services.admins import _bootstrap
+    from app.settings import Settings
+
+    s = Settings(admin_emails=["boss@zennify.com"])
+    assert _bootstrap(s) == {"boss@zennify.com"}
+
+
 def test_require_admin_blocks_non_admin() -> None:
     with pytest.raises(HTTPException) as exc:
         asyncio.run(require_admin(user={"uid": "u", "is_admin": False}))

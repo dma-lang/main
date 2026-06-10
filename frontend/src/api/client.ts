@@ -390,6 +390,15 @@ export interface DigestExportOut {
   reason?: string;
 }
 
+export interface AdminRow {
+  email: string;
+  source: string; // bootstrap (env) | grant (runtime)
+  removable: boolean;
+  granted_by: string;
+  note?: string;
+  created_at?: string;
+}
+
 export interface SourceRow {
   key: string;
   name: string;
@@ -813,6 +822,11 @@ export const api = {
     http('/api/admin/digest/generate', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
   exportDigest: (quarter?: string): Promise<DigestExportOut> =>
     http('/api/exports/digest', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
+  admins: (): Promise<AdminRow[]> => http<AdminRow[]>('/api/admin/admins'),
+  grantAdmin: (email: string, note?: string): Promise<{ ok: boolean; status: string }> =>
+    http('/api/admin/admins', { method: 'POST', body: JSON.stringify({ email, note: note ?? '' }) }),
+  revokeAdmin: (email: string): Promise<{ ok: boolean; status: string }> =>
+    http(`/api/admin/admins/${encodeURIComponent(email)}`, { method: 'DELETE' }),
   sources: (): Promise<SourceRow[]> => http<SourceRow[]>('/api/admin/sources'),
   patchSource: (key: string, enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> =>
     http<{ ok: boolean; enabled: boolean }>(`/api/admin/sources/${key}`, {

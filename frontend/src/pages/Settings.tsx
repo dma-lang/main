@@ -3,12 +3,118 @@
 // pipelines pull from, with the ACTIVE origin (database fixture vs online, per LLM_MODE), tier,
 // cadence, last poll and health — a stale or erroring source is warned, never hidden — plus the
 // persisted enable switch the scan jobs enforce. Upload entry routes into onboarding (F4).
+import { useState } from 'react';
+
 import { type SourceRow } from '../api/client';
-import { usePatchPreferences, useSourceActions, useSources } from '../api/queries';
+import {
+  useAdminActions,
+  useAdmins,
+  usePatchPreferences,
+  useSourceActions,
+  useSources,
+} from '../api/queries';
 import { Dropdown, Page, Switch, Tier } from '../components/primitives';
 import { toast } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
+
+function Administrators() {
+  const admins = useAdmins(true);
+  const { grant, revoke } = useAdminActions();
+  const [email, setEmail] = useState('');
+  const rows = admins.data ?? [];
+
+  const add = () => {
+    const e = email.trim().toLowerCase();
+    if (!e) return;
+    grant.mutate(
+      { email: e },
+      {
+        onSuccess: (r) => {
+          toast(r.status === 'granted' ? `${e} is now an admin` : `${e} (${r.status})`);
+          setEmail('');
+        },
+        onError: (err) => toast(String(err).replace(/^Error:\s*\d+:\s*/, '')),
+      },
+    );
+  };
+
+  return (
+    <>
+      <div className="row gap8" style={{ marginBottom: 8 }}>
+        <span className="eyebrow" style={{ margin: 0 }}>
+          Administrators
+        </span>
+        <span className="chip orange" style={{ fontSize: 9 }}>
+          admin
+        </span>
+        <span className="muted" style={{ fontSize: 10.5, marginLeft: 'auto' }}>
+          grants persist and take effect on the member's next request — no redeploy
+        </span>
+      </div>
+      <div className="card pad" style={{ marginBottom: 18 }}>
+        <div className="row gap8" style={{ marginBottom: 12 }}>
+          <input
+            className="input"
+            style={{ flex: 1, fontSize: 12.5, padding: '7px 10px' }}
+            placeholder="name@zennify.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && add()}
+          />
+          <button className="btn primary sm" disabled={grant.isPending} onClick={add}>
+            <Icon n="plus" s={13} /> Add admin
+          </button>
+        </div>
+        <div style={{ display: 'grid', gap: 6 }}>
+          {rows.map((a) => (
+            <div
+              key={a.email}
+              className="row gap8 card"
+              style={{ padding: '7px 11px', alignItems: 'center' }}
+            >
+              <Icon n="lock" s={12} style={{ color: 'var(--interactive)' }} />
+              <b style={{ fontSize: 12 }}>{a.email}</b>
+              <span
+                className={'chip ' + (a.source === 'bootstrap' ? 'slate' : 'blue')}
+                style={{ fontSize: 9 }}
+              >
+                {a.source === 'bootstrap' ? 'env bootstrap' : 'granted'}
+              </span>
+              {a.note ? (
+                <span className="muted" style={{ fontSize: 10.5 }}>
+                  {a.note}
+                </span>
+              ) : null}
+              <span style={{ marginLeft: 'auto' }}>
+                {a.removable ? (
+                  <button
+                    className="btn ghost xs"
+                    disabled={revoke.isPending}
+                    onClick={() =>
+                      revoke.mutate(a.email, { onSuccess: () => toast(`${a.email} revoked`) })
+                    }
+                  >
+                    <Icon n="x" s={12} /> Revoke
+                  </button>
+                ) : (
+                  <span className="muted" style={{ fontSize: 10 }}>
+                    config — not removable here
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+          {!rows.length && (
+            <div className="muted" style={{ fontSize: 11.5 }}>
+              No administrators resolved — set ADMIN_EMAILS to bootstrap the first one.
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
 
 const LENSES = [
   { v: 'pillar', l: 'Pillar' },
@@ -167,6 +273,7 @@ export function Settings() {
 
       {isAdmin && (
         <>
+          <Administrators />
           <div className="row gap8" style={{ marginBottom: 8 }}>
             <span className="eyebrow" style={{ margin: 0 }}>
               Ingestion source registry

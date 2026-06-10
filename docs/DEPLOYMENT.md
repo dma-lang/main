@@ -201,7 +201,16 @@ Create a **Web app** to obtain the web API key for the SPA login page
 security is server-side token verification).
 
 App-side configuration (set in 3.8): `AUTH_MODE=live` (default — fail-closed),
-`FIREBASE_PROJECT_ID=$PROJECT_ID`, `ADMIN_EMAILS=<comma-separated verified @zennify.com emails>`.
+`FIREBASE_PROJECT_ID=$PROJECT_ID`, `FIREBASE_WEB_API_KEY=<public web key>`,
+`ADMIN_EMAILS=<comma-separated verified @zennify.com emails>`.
+
+**Administrator model (two sources, union).** `ADMIN_EMAILS` is the **break-glass bootstrap** —
+always admin, cannot be revoked from the UI (so you can never lock everyone out). Everyone else is
+managed at runtime in **Settings → Administrators** (`GET/POST/DELETE /api/admin/admins`, persisted
+in `control.admin_grant`, domain-restricted, audited) — no redeploy to add or remove an admin. The
+named app administrators (`tom.hedgecoth@zennify.com`, `mishley.otiende@zennify.com`) are seeded
+into the grant list by migration `0009` and are admins on first login; set them in `ADMIN_EMAILS`
+too if you want them as un-revocable bootstrap admins.
 
 **Validate:**
 
@@ -220,7 +229,7 @@ gcloud run deploy cia \
   --service-account "$RUN_SA" \
   --vpc-connector cia-svpc --vpc-egress private-ranges-only \   # private path to Cloud SQL
   --set-secrets "DATABASE_URL=cia-database-url:latest,HMAC_KEY=cia-hmac-key:latest" \
-  --set-env-vars "LLM_MODE=live,AUTH_MODE=live,FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_WEB_API_KEY=<web key>,ADMIN_EMAILS=dma@zennify.com" \
+  --set-env-vars "LLM_MODE=live,AUTH_MODE=live,FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_WEB_API_KEY=<web key>,ADMIN_EMAILS=tom.hedgecoth@zennify.com,mishley.otiende@zennify.com" \
   --min-instances 2 --max-instances 8 \      # min 2 = no cold starts; max = SQL connection budget
   --cpu 1 --memory 1Gi --concurrency 40 --timeout 300 \
   --cpu-boost \                              # faster cold start when scaling
@@ -290,7 +299,8 @@ gcloud scheduler jobs create http cia-news-scan --location "$REGION" \
 | `FIREBASE_PROJECT_ID` | service env | unset | project id | §3.8 | — |
 | `FIREBASE_WEB_API_KEY` | service env | unset | the PUBLIC web key (login UX; not a secret) | §3.8 | — |
 | `HMAC_KEY` (export signing) | Secret Manager `cia-hmac-key` | fixed dev key (hermetic only) | random 32B — live refuses to sign without it | §3.6 | new version + redeploy |
-| `ADMIN_EMAILS` | service env | unset (dev identity is admin) | comma-separated verified emails | §3.8 | redeploy |
+| `ADMIN_EMAILS` | service env | unset (dev identity is admin) | break-glass BOOTSTRAP admins (comma list) — always admin, not revocable from the UI | §3.8 | redeploy |
+| Runtime admins | `control.admin_grant` (DB) | — | added/removed in **Settings → Administrators** (persisted, audited, no redeploy); seeded with the named app admins | admins, runtime | live |
 | `PORT` | injected by Cloud Run | 8092 (manual) | injected | platform | — |
 | `STATIC_DIR` | service env | `<repo>/frontend/dist` | unset → baked `/app/static` (cwd-independent) | — | — |
 | Model pins | `config/models.yaml` (in image) | hermetic stubs | pinned versions, never `-latest` | commit | PR + deploy |

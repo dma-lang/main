@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   api,
+  type AdminRow,
   type AuditRow,
   type BenchResp,
   type CatalogueSummary,
@@ -205,6 +206,20 @@ export function useVendorActions() {
   const scan = useMutation({ mutationFn: api.scanVendors, onSuccess: invalidate });
   const loop = useMutation({ mutationFn: api.vendorLoop, onSuccess: invalidate });
   return { scan, loop };
+}
+
+export const useAdmins = (enabled: boolean) =>
+  useQuery<AdminRow[]>({ queryKey: ['admins'], queryFn: api.admins, enabled });
+
+export function useAdminActions() {
+  const qc = useQueryClient();
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ['admins'] });
+  const grant = useMutation({
+    mutationFn: (a: { email: string; note?: string }) => api.grantAdmin(a.email, a.note),
+    onSuccess: invalidate,
+  });
+  const revoke = useMutation({ mutationFn: (email: string) => api.revokeAdmin(email), onSuccess: invalidate });
+  return { grant, revoke };
 }
 
 export const useSources = (enabled: boolean) =>

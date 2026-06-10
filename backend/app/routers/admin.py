@@ -14,9 +14,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.deps import require_admin
-from app.services import provision, sources, stories
+from app.services import admins, provision, sources, stories
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+class AdminGrantIn(BaseModel):
+    email: str
+    note: str = ""
 
 
 class SourceOut(BaseModel):
@@ -74,4 +79,35 @@ async def patch_source(
     result = await sources.set_enabled(key, body.enabled, str(admin["uid"]))
     if result.get("status") == "not_found":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"unknown source '{key}'")
+    return result
+
+
+@router.get("/admins")
+async def list_admins(_admin: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
+    """The administrator config space: every admin with its source (bootstrap env vs runtime
+    grant). Bootstrap admins are shown but not removable from the UI."""
+    return await admins.list_admins()
+
+
+@router.post("/admins")
+async def grant_admin(
+    body: AdminGrantIn, admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Grant an administrator at runtime (persisted + audited). Domain-restricted."""
+    result = await admins.grant_admin(body.email, str(admin["uid"]), body.note)
+    if result.get("status") in ("invalid", "rejected"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=result.get("reason"))
+    return result
+
+
+@router.delete("/admins/{email}")
+async def revoke_admin(
+    email: str, admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Revoke a granted administrator (persisted + audited). Bootstrap admins cannot be removed."""
+    result = await admins.revoke_admin(email, str(admin["uid"]))
+    if result.get("status") == "not_found":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"'{email}' is not a granted admin")
+    if result.get("status") == "rejected":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=result.get("reason"))
     return result

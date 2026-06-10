@@ -12,14 +12,10 @@ from typing import Any
 
 from fastapi import Depends, Header, HTTPException, status
 
-from app.services import users
+from app.services import admins, users
 from app.settings import Settings, get_settings
 
 logger = logging.getLogger("cia.auth")
-
-
-def _admin_set(settings: Settings) -> set[str]:
-    return {e.lower() for e in settings.admin_emails}
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -55,7 +51,7 @@ async def get_current_user(
     hermetic cost switch (LLM_MODE) can never disable authentication (defense in depth)."""
     if settings.is_dev_auth:
         email = settings.hermetic_email.lower()
-        is_admin = settings.hermetic_is_admin or email in _admin_set(settings)
+        is_admin = settings.hermetic_is_admin or await admins.resolve_is_admin(email, settings)
         return await users.upsert_user(settings.hermetic_uid, email, is_admin)
 
     claims = _verify_firebase(_bearer_token(authorization), settings)
@@ -66,7 +62,7 @@ async def get_current_user(
     uid = str(claims.get("user_id") or claims.get("sub") or "")
     if not uid:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="invalid token")
-    return await users.upsert_user(uid, email, email in _admin_set(settings))
+    return await users.upsert_user(uid, email, await admins.resolve_is_admin(email, settings))
 
 
 async def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
