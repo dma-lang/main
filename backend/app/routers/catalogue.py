@@ -437,6 +437,117 @@ async def summary(
     return CatalogueSummary(version_id=v.version_id, total_subcaps=int(total or 0), pillars=pillars)
 
 
+class HeatmapRow(BaseModel):
+    key: str
+    label: str
+    subtitle: str
+    total: int
+    cells: list[int]
+    pillar: str | None = None
+
+
+class HeatmapResp(BaseModel):
+    lens: str
+    axis: list[str]  # the 6 composite-score band labels
+    rows: list[HeatmapRow]
+    max: int  # global max cell, for intensity scaling
+
+
+# Mission control's concentration heatmap (Impl §604). Real delivery volume from the carried story
+# corpus (control.story_catalogue_link → control.story), grouped by the active LENS, with the cell
+# strip bucketing each group's stories across 6 composite-score bands (1.0–5.0). The catalogue lost
+# real Jira dates on ingest (created_at = ingest time), so the truthful ordinal axis is delivery
+# quality, not quarters — same heatmap shape, honest data.
+_LENS_GROUP: dict[str, tuple[str, str, str]] = {
+    # lens -> (group-key expr, label expr, extra FROM/JOIN)
+    "pillar": ("sc.subcap_id", "sc.name", ""),  # rows = most-delivered subcaps
+    "lifecycle": ("sc.lifecycle_state::text", "sc.lifecycle_state::text", ""),
+    "maturity": ("coalesce(sc.tier,'untiered')", "coalesce(sc.tier,'untiered')", ""),
+    "subvertical": (
+        "coalesce(st.story_sv_code,'(unscoped)')",
+        "coalesce(st.story_sv_code,'(unscoped)')",
+        "",
+    ),
+    "vendor": (
+        "ven.name",
+        "ven.name",
+        " JOIN {s}.subcap_platform sp ON sp.subcap_id = sc.subcap_id"
+        " JOIN {s}.l3_platform l3 ON l3.l3_id = sp.l3_id"
+        " JOIN {s}.vendor ven ON ven.vendor_id = l3.vendor_id",
+    ),
+    "value-chain": (
+        "vcc.vcc_id",
+        "vcc.vcc_id",
+        " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id",
+    ),
+}
+_BAND_AXIS = ["1.0–1.7", "1.7–2.3", "2.3–3.0", "3.0–3.7", "3.7–4.3", "4.3–5.0"]
+
+
+@router.get("/{version}/heatmap")
+async def heatmap(
+    version: str,
+    lens: str = Query("pillar"),
+    pillar: str = Query("all"),
+    sv: str = Query("all"),
+    limit: int = Query(14, ge=1, le=40),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> HeatmapResp:
+    """Delivery-concentration heatmap for Mission control, grouped by `lens`, scoped by the active
+    pillar/subvertical filters. Counts dedupe per story so a vendor with many platforms isn't
+    double-counted."""
+    v = await resolve_version(version)
+    s = _schema(v)
+    if lens not in _LENS_GROUP:
+        lens = "pillar"
+    key_expr, label_expr, join_tmpl = _LENS_GROUP[lens]
+    join = join_tmpl.format(s=s)
+    where = ["l.version_id = :ver"]
+    params: dict[str, Any] = {"ver": v.version_id, "lim": limit}
+    if pillar != "all":
+        where.append("left(sc.subcap_id, 2) = :pil")
+        params["pil"] = pillar
+    if sv != "all":
+        where.append("st.story_sv_code = :sv")
+        params["sv"] = sv
+    band = "least(6, greatest(1, width_bucket(st.composite_score, 1, 5, 6)))"
+    cells = ", ".join(
+        f"count(DISTINCT st.story_key) FILTER (WHERE {band} = {k}) AS c{k}" for k in range(1, 7)
+    )
+    # Only the pillar lens (rows = individual subcaps) carries a pillar colour; for the other
+    # lenses a group spans pillars, so pillar is NULL and is not a grouping key.
+    pillar_sel = "left(sc.subcap_id, 2)" if lens == "pillar" else "NULL"
+    group_by = "key, label, pillar" if lens == "pillar" else "key, label"
+    sql = text(
+        f"SELECT {key_expr} AS key, {label_expr} AS label, "
+        f"{pillar_sel} AS pillar, count(DISTINCT st.story_key) AS total, {cells} "
+        f"FROM control.story_catalogue_link l "
+        f"JOIN control.story st ON st.story_key = l.story_key "
+        f"JOIN {s}.subcap sc ON sc.subcap_id = l.subcap_id{join} "
+        f"WHERE {' AND '.join(where)} "
+        f"GROUP BY {group_by} ORDER BY total DESC LIMIT :lim"
+    )
+    async with _engine().connect() as conn:
+        rows = (await conn.execute(sql, params)).mappings().all()
+    out: list[HeatmapRow] = []
+    gmax = 0
+    for r in rows:
+        cs = [int(r[f"c{k}"]) for k in range(1, 7)]
+        gmax = max(gmax, *cs)
+        sub = f"{int(r['total']):,} stories" if lens != "pillar" else r["key"]
+        out.append(
+            HeatmapRow(
+                key=str(r["key"]),
+                label=str(r["label"]),
+                subtitle=sub,
+                total=int(r["total"]),
+                cells=cs,
+                pillar=r["pillar"] if lens == "pillar" else None,
+            )
+        )
+    return HeatmapResp(lens=lens, axis=_BAND_AXIS, rows=out, max=gmax)
+
+
 _PLATFORMS_SQL = (
     "SELECT l.l3_id, l.name, v.name AS vendor, l.category, "
     "count(DISTINCT sp.subcap_id) AS subcap_count, "

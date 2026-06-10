@@ -30,6 +30,22 @@ export interface CatalogueSummary {
   pillars: PillarSummary[];
 }
 
+export interface HeatmapRow {
+  key: string;
+  label: string;
+  subtitle: string;
+  total: number;
+  cells: number[];
+  pillar: string | null;
+}
+
+export interface HeatmapResp {
+  lens: string;
+  axis: string[];
+  rows: HeatmapRow[];
+  max: number;
+}
+
 export interface SubcapNode {
   id: string;
   name: string;
@@ -727,6 +743,10 @@ export const api = {
   versions: (): Promise<VersionInfo[]> => http<VersionInfo[]>('/api/versions'),
   summary: (v: string): Promise<CatalogueSummary> =>
     http<CatalogueSummary>(`/api/catalogue/${v}/summary`),
+  heatmap: (v: string, lens: string, pillar: string, sv: string): Promise<HeatmapResp> => {
+    const qs = new URLSearchParams({ lens, pillar, sv });
+    return http<HeatmapResp>(`/api/catalogue/${v}/heatmap?${qs.toString()}`);
+  },
   subcaps: (v: string): Promise<SubcapNode[]> =>
     http<SubcapNode[]>(`/api/catalogue/${v}/subcaps`),
   subcap: (v: string, id: string): Promise<SubcapDetail> =>

@@ -1,10 +1,10 @@
 // Mission control (A1) — ported from the prototype, wired to /api/catalogue/{v}/summary.
 // Pillar tiles render real counts/completeness/decay; the concentration heatmap + flag/suggestion
 // KPIs light up once their data lands (F5 stories / F7 evidence).
-import { useChangeFlags, useSuggestions, useSummary } from '../api/queries';
-import { Bar, Empty, Page, PillarDot } from '../components/primitives';
+import { useChangeFlags, useHeatmap, useSuggestions, useSummary } from '../api/queries';
+import { Bar, Empty, Page, PillarDot, SC } from '../components/primitives';
 import { go, toast } from '../lib/events';
-import { PILLAR_COLORS } from '../lib/helpers';
+import { heatBg, PILLAR_COLORS } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
 import { type Pillar, useUi } from '../state/store';
 
@@ -15,11 +15,23 @@ const QUICK: [string, string, IconName][] = [
   ['versions', 'Version timeline', 'clock'],
 ];
 
+const LENS_TITLE: Record<string, string> = {
+  pillar: 'most-delivered subcaps',
+  'value-chain': 'value-chain clusters',
+  subvertical: 'subverticals',
+  vendor: 'platform vendors',
+  maturity: 'leverage tiers',
+  lifecycle: 'lifecycle states',
+};
+
 export function MissionControl() {
   const version = useUi((s) => s.version);
   const pillar = useUi((s) => s.pillar);
+  const sv = useUi((s) => s.sv);
+  const lens = useUi((s) => s.lens);
   const setPillar = useUi((s) => s.setPillar);
   const summary = useSummary(version);
+  const heat = useHeatmap(version, lens, pillar, sv);
   const flagsQ = useChangeFlags('open');
   const pendingQ = useSuggestions('pending');
   const pillars = summary.data?.pillars ?? [];
@@ -96,20 +108,77 @@ export function MissionControl() {
       >
         <div className="card pad">
           <div className="between" style={{ marginBottom: 4 }}>
-            <div className="h2">Concentration · subcaps</div>
+            <div className="h2">Concentration · {LENS_TITLE[lens] ?? 'subcaps'}</div>
             <span className="chip soft">
               <Icon n="book" s={12} />
               {version || '—'} catalog
             </span>
           </div>
           <div className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
-            Cell intensity = real delivery volume per quarter, grouped by the active lens.
+            Cell intensity = delivered stories by quality band (composite score), grouped by the
+            active lens — change the Lens in the header to regroup. Click a row to explore.
           </div>
-          <Empty
-            icon="trend"
-            title="Delivery heatmap lands with the story corpus"
-            desc="Carry-forward (F5) links the Jira delivery corpus to subcaps; the per-quarter concentration heatmap lights up then."
-          />
+          {heat.isLoading && <div className="muted" style={{ fontSize: 12 }}>Loading delivery concentration…</div>}
+          {heat.data && heat.data.rows.length === 0 && (
+            <Empty
+              icon="trend"
+              title="No delivery mapped yet"
+              desc="Once the Jira story corpus is carried onto this version, the concentration heatmap lights up here."
+              cta="Run carry-forward"
+              onCta={() => go('onboarding')}
+            />
+          )}
+          {heat.data && heat.data.rows.length > 0 && (
+            <table className="tbl" style={{ tableLayout: 'fixed' }}>
+              <thead>
+                <tr>
+                  <th style={{ width: '38%' }}>{lens === 'pillar' ? 'Subcap' : LENS_TITLE[lens]}</th>
+                  {heat.data.axis.map((q) => (
+                    <th key={q} title={q + ' composite'} style={{ textAlign: 'center', padding: '9px 2px', fontSize: 10 }}>
+                      {q.split('–')[0]}
+                    </th>
+                  ))}
+                  <th style={{ width: 64, textAlign: 'right' }}>Stories</th>
+                </tr>
+              </thead>
+              <tbody>
+                {heat.data.rows.map((r) => (
+                  <tr key={r.key}>
+                    <td>
+                      <div className="row gap8">
+                        {r.pillar && <PillarDot p={r.pillar} s={7} />}
+                        <div style={{ minWidth: 0 }}>
+                          {lens === 'pillar' ? (
+                            <SC id={r.key}>{r.label}</SC>
+                          ) : (
+                            <div
+                              className="sclink"
+                              style={{ fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                              onClick={() => go('explorer')}
+                            >
+                              {r.label}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    {r.cells.map((c, i) => (
+                      <td key={i} style={{ padding: '6px 3px' }}>
+                        <div
+                          className="heatcell"
+                          title={`${c} stories · ${heat.data!.axis[i]}`}
+                          style={{ height: 26, background: heatBg(c / (heat.data!.max || 1)) }}
+                        />
+                      </td>
+                    ))}
+                    <td className="num" style={{ textAlign: 'right', fontSize: 12, fontWeight: 600 }}>
+                      {r.total.toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
         <div style={{ display: 'grid', gap: 14 }}>

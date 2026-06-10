@@ -7,6 +7,7 @@ import {
   type AuditRow,
   type BenchResp,
   type CatalogueSummary,
+  type HeatmapResp,
   type ChangeFlagsResp,
   type ChatResponse,
   type GatesLog,
@@ -53,6 +54,13 @@ export const useSummary = (version: string) =>
   useQuery<CatalogueSummary>({
     queryKey: ['summary', version],
     queryFn: () => api.summary(version),
+    enabled: !!version,
+  });
+
+export const useHeatmap = (version: string, lens: string, pillar: string, sv: string) =>
+  useQuery<HeatmapResp>({
+    queryKey: ['heatmap', version, lens, pillar, sv],
+    queryFn: () => api.heatmap(version, lens, pillar, sv),
     enabled: !!version,
   });
 
