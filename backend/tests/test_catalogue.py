@@ -219,3 +219,19 @@ def test_unknown_version_404(client: TestClient) -> None:
     r = client.get("/api/catalogue/v999/subcaps")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "not_found"
+
+
+@needs_db
+def test_applied_mapping_registry(client: TestClient) -> None:
+    """Schema-mapping studio (F4): provisioning registers the mapping it ACTUALLY applied — every
+    field row traces to a load statement, relations to the FKs/link tables it created. An
+    unprovisioned version is a clear 404."""
+    body = client.get("/api/admin/mapping/v7").json()
+    assert len(body["fields"]) == 16 and len(body["relations"]) == 7
+    f = {x["source_field"]: x for x in body["fields"]}
+    assert f["subcaps.id"]["canonical_entity"] == "subcap"
+    assert all(x["status"] == "confirmed" and x["confidence"] == 1.0 for x in body["fields"])
+    rels = {(r["from_entity"], r["rel_type"], r["to_entity"]) for r in body["relations"]}
+    assert ("subcap", "uses_platform", "l3_platform") in rels
+    assert ("category", "belongs_to", "pillar") in rels
+    assert client.get("/api/admin/mapping/v5").status_code == 404

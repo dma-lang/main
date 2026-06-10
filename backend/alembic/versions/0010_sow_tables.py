@@ -27,6 +27,33 @@ def upgrade() -> None:
     # The public-source enum gains the internal-document origin (SOW chunks are evidence too).
     # Additive on PG16; enum values cannot be dropped, so downgrade leaves it (harmless).
     op.execute("ALTER TYPE source_type ADD VALUE IF NOT EXISTS 'internal'")
+    # The schema-mapping registry (catalogue_sheet / source_field_mapping / relation_def) is
+    # PER-VERSION metadata: provisioning re-registers it and deleting a version must take its
+    # registry with it. The baseline FKs lacked ON DELETE CASCADE; tighten them here.
+    op.execute(
+        "ALTER TABLE control.catalogue_sheet "
+        "DROP CONSTRAINT IF EXISTS catalogue_sheet_version_id_fkey, "
+        "ADD CONSTRAINT catalogue_sheet_version_id_fkey FOREIGN KEY (version_id) "
+        "REFERENCES control.catalogue_version(version_id) ON DELETE CASCADE"
+    )
+    op.execute(
+        "ALTER TABLE control.source_field_mapping "
+        "DROP CONSTRAINT IF EXISTS source_field_mapping_version_id_fkey, "
+        "ADD CONSTRAINT source_field_mapping_version_id_fkey FOREIGN KEY (version_id) "
+        "REFERENCES control.catalogue_version(version_id) ON DELETE CASCADE"
+    )
+    op.execute(
+        "ALTER TABLE control.source_field_mapping "
+        "DROP CONSTRAINT IF EXISTS source_field_mapping_sheet_id_fkey, "
+        "ADD CONSTRAINT source_field_mapping_sheet_id_fkey FOREIGN KEY (sheet_id) "
+        "REFERENCES control.catalogue_sheet(sheet_id) ON DELETE CASCADE"
+    )
+    op.execute(
+        "ALTER TABLE control.relation_def "
+        "DROP CONSTRAINT IF EXISTS relation_def_version_id_fkey, "
+        "ADD CONSTRAINT relation_def_version_id_fkey FOREIGN KEY (version_id) "
+        "REFERENCES control.catalogue_version(version_id) ON DELETE CASCADE"
+    )
     op.execute("""
         CREATE TABLE IF NOT EXISTS control.sow_document (
             sow_id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),

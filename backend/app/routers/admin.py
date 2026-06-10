@@ -12,7 +12,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import text
 
+from app import db
 from app.deps import require_admin
 from app.services import admins, provision, sources, stories
 
@@ -62,6 +64,57 @@ async def carry_forward(
 ) -> dict[str, Any]:
     """Ingest the canonical story corpus and carry it onto cat_<version> (F5, admin only)."""
     return await stories.carry_forward(version)
+
+
+@router.get("/mapping/{version}")
+async def get_mapping(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """The APPLIED schema mapping for a version (F4): every source-field -> canonical-field row
+    the provisioner wrote, plus the relations it materialized as FKs/link tables — the studio
+    renders these, so what it shows IS what ran. A version with no rows hasn't been provisioned."""
+    from app.versioning import resolve_version
+
+    v = await resolve_version(version)
+    engine = db.require_engine()
+    async with engine.connect() as conn:
+        fields = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT cs.sheet_name, m.source_field, m.canonical_entity, "
+                        "m.canonical_field, m.confidence::float AS confidence, m.status, "
+                        "m.is_custom "
+                        "FROM control.source_field_mapping m "
+                        "JOIN control.catalogue_sheet cs ON cs.sheet_id = m.sheet_id "
+                        "WHERE m.version_id = :v ORDER BY cs.sheet_name, m.source_field"
+                    ),
+                    {"v": v.version_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        relations = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT from_entity, rel_type::text AS rel_type, to_entity, "
+                        "card::text AS card, via_sheet, is_cascade "
+                        "FROM control.relation_def WHERE version_id = :v "
+                        "ORDER BY from_entity, rel_type"
+                    ),
+                    {"v": v.version_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    return {
+        "version": v.version_id,
+        "fields": [dict(r) for r in fields],
+        "relations": [dict(r) for r in relations],
+    }
 
 
 @router.get("/sources")

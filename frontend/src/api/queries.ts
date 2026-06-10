@@ -11,6 +11,7 @@ import {
   type ClientRow,
   type DiffResp,
   type HeatmapResp,
+  type MappingResp,
   type SowDetail,
   type SowDoc,
   type KgResp,
@@ -124,6 +125,14 @@ export const useClients = (version: string) =>
     queryKey: ['clients', version],
     queryFn: () => api.clients(version),
     enabled: !!version,
+  });
+
+export const useMapping = (version: string | null) =>
+  useQuery<MappingResp>({
+    queryKey: ['mapping', version],
+    queryFn: () => api.mapping(version ?? ''),
+    enabled: !!version,
+    retry: false, // an unprovisioned version is a designed 404 state
   });
 
 export const useClientJourney = (key: string | null, version: string) =>

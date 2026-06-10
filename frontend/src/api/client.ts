@@ -158,6 +158,31 @@ export interface ClientRow {
   last_sow: string | null;
 }
 
+export interface MappingField {
+  sheet_name: string;
+  source_field: string;
+  canonical_entity: string;
+  canonical_field: string;
+  confidence: number;
+  status: string;
+  is_custom: boolean;
+}
+
+export interface MappingRelation {
+  from_entity: string;
+  rel_type: string;
+  to_entity: string;
+  card: string;
+  via_sheet: string;
+  is_cascade: boolean;
+}
+
+export interface MappingResp {
+  version: string;
+  fields: MappingField[];
+  relations: MappingRelation[];
+}
+
 export interface ClientJourney {
   key: string;
   stories: number;
@@ -899,6 +924,8 @@ export const api = {
     http(`/api/sow/matches/${matchId}/confirm`, { method: 'POST' }),
   clients: (version: string): Promise<ClientRow[]> =>
     http<ClientRow[]>(`/api/clients?version=${version}`),
+  mapping: (version: string): Promise<MappingResp> =>
+    http<MappingResp>(`/api/admin/mapping/${version}`),
   clientJourney: (key: string, version: string): Promise<ClientJourney> =>
     http<ClientJourney>(`/api/clients/${encodeURIComponent(key)}/journey?version=${version}`),
   summary: (v: string): Promise<CatalogueSummary> =>
