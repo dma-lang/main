@@ -208,6 +208,16 @@ export function useVendorActions() {
   return { scan, loop };
 }
 
+export function useProvisionActions() {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    void qc.invalidateQueries();
+  };
+  const provision = useMutation({ mutationFn: (v: string) => api.provisionVersion(v), onSuccess: invalidate });
+  const carry = useMutation({ mutationFn: (v: string) => api.carryForward(v), onSuccess: invalidate });
+  return { provision, carry };
+}
+
 export const useAdmins = (enabled: boolean) =>
   useQuery<AdminRow[]>({ queryKey: ['admins'], queryFn: api.admins, enabled });
 

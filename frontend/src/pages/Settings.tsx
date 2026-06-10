@@ -10,13 +10,86 @@ import {
   useAdminActions,
   useAdmins,
   usePatchPreferences,
+  useProvisionActions,
   useSourceActions,
   useSources,
+  useVersions,
 } from '../api/queries';
 import { Dropdown, Page, Switch, Tier } from '../components/primitives';
 import { toast } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
+
+// First-run catalogue setup — one-click provisioning so a fresh deployment needs no CLI. Both
+// actions are admin-only and idempotent; the version comes from the active version selector.
+function CatalogueSetup() {
+  const version = useUi((s) => s.version);
+  const versions = useVersions();
+  const { provision, carry } = useProvisionActions();
+  const provisioned = (versions.data ?? []).some((v) => v.version_id === version);
+
+  return (
+    <>
+      <div className="row gap8" style={{ marginBottom: 8 }}>
+        <span className="eyebrow" style={{ margin: 0 }}>
+          Catalogue setup
+        </span>
+        <span className="chip orange" style={{ fontSize: 9 }}>
+          admin
+        </span>
+        <span className="muted" style={{ fontSize: 10.5, marginLeft: 'auto' }}>
+          first-run, idempotent — re-running is safe
+        </span>
+      </div>
+      <div className="card pad" style={{ marginBottom: 18 }}>
+        <div className="row gap8" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
+          <span
+            className={'chip ' + (provisioned ? 'teal' : 'slate')}
+            style={{ fontSize: 9.5 }}
+          >
+            {provisioned ? `${version} provisioned` : `${version} not provisioned`}
+          </span>
+          <span className="muted" style={{ fontSize: 11.5, flex: 1 }}>
+            Seed the catalogue ({version}: ~851 subcaps + enrichment) then carry the canonical
+            14,406-story delivery corpus onto it.
+          </span>
+          <button
+            className="btn ghost sm"
+            disabled={provision.isPending}
+            onClick={() =>
+              provision.mutate(version, {
+                onSuccess: (r) =>
+                  toast(`Provisioned ${version}: ${r.subcaps} subcaps, ${r.use_cases} use cases`),
+                onError: (e) => toast(String(e).replace(/^Error:\s*\d+:\s*/, '')),
+              })
+            }
+          >
+            <Icon n="database" s={14} /> {provision.isPending ? 'Provisioning…' : '1 · Provision'}
+          </button>
+          <button
+            className="btn primary sm"
+            disabled={carry.isPending || !provisioned}
+            onClick={() =>
+              carry.mutate(version, {
+                onSuccess: (r) =>
+                  toast(
+                    `Carried ${r.stories_ingested} stories · ${r.confirmed} confirmed · ${r.distinct_subcaps} subcaps`,
+                  ),
+                onError: (e) => toast(String(e).replace(/^Error:\s*\d+:\s*/, '')),
+              })
+            }
+          >
+            <Icon n="route" s={14} /> {carry.isPending ? 'Carrying…' : '2 · Carry stories'}
+          </button>
+        </div>
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 8 }}>
+          After this, run each intelligence surface's “Scan now”, or let the weekly/monthly
+          schedulers fill News, Trends, Benchmarks and Vendor automatically.
+        </div>
+      </div>
+    </>
+  );
+}
 
 function Administrators() {
   const admins = useAdmins(true);
@@ -273,6 +346,7 @@ export function Settings() {
 
       {isAdmin && (
         <>
+          <CatalogueSetup />
           <Administrators />
           <div className="row gap8" style={{ marginBottom: 8 }}>
             <span className="eyebrow" style={{ margin: 0 }}>

@@ -822,6 +822,10 @@ export const api = {
     http('/api/admin/digest/generate', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
   exportDigest: (quarter?: string): Promise<DigestExportOut> =>
     http('/api/exports/digest', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
+  provisionVersion: (version: string): Promise<Record<string, number | string>> =>
+    http(`/api/admin/provision/${version}`, { method: 'POST' }),
+  carryForward: (version: string): Promise<Record<string, number | string>> =>
+    http(`/api/admin/carry-forward/${version}`, { method: 'POST' }),
   admins: (): Promise<AdminRow[]> => http<AdminRow[]>('/api/admin/admins'),
   grantAdmin: (email: string, note?: string): Promise<{ ok: boolean; status: string }> =>
     http('/api/admin/admins', { method: 'POST', body: JSON.stringify({ email, note: note ?? '' }) }),
