@@ -2,10 +2,11 @@
 // opens it passes `run`: its OWN existing mutation (apply suggestion / approve flag / promote).
 // The server re-gates G1–G8 inside that call and writes the snapshot + audit row; this modal is
 // the human friction + honest result surface, not the security boundary.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { go, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
+import { useFocusTrap } from '../lib/useFocusTrap';
 
 export interface CommitResult {
   ok: boolean;
@@ -34,13 +35,7 @@ export function CommitModal({ payload, onClose }: { payload: CommitPayload; onCl
   const [done, setDone] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  const ref = useFocusTrap<HTMLDivElement>(onClose);
 
   const commit = async () => {
     setCommitting(true);
@@ -63,11 +58,13 @@ export function CommitModal({ payload, onClose }: { payload: CommitPayload; onCl
   return (
     <div className="modal-bg" onClick={onClose}>
       <div
+        ref={ref}
         className="modal"
         onClick={(e) => e.stopPropagation()}
         style={{ maxWidth: 540 }}
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
       >
         <div className="modal-head">
           <div style={{ flex: 1 }}>

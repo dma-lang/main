@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { useNews, useNewsActions } from '../api/queries';
 import { Claim, Dropdown, Empty, Mag, Page, Tier } from '../components/primitives';
 import { go, openLoop, openReasoning, toast } from '../lib/events';
-import { heatBg } from '../lib/helpers';
+import { heatBg, passesTrustFloor } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
@@ -40,7 +40,11 @@ export function News() {
   const [impactF, setImpactF] = useState('all');
   const q = useNews(impactF, tier);
   const { scan } = useNewsActions();
-  const items = q.data?.items ?? [];
+  const claimF = useUi((s) => s.claim);
+  const tierF = useUi((s) => s.tier);
+  const items = (q.data?.items ?? []).filter((n) =>
+    passesTrustFloor(n.label, n.tier, claimF, tierF),
+  );
   const impacts = q.data?.impacts ?? [];
   const scanInfo = q.data?.scan;
   const filtered = impactF !== 'all' || tier !== 'all';

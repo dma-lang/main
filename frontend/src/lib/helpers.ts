@@ -53,3 +53,19 @@ export function heatBg(t: number): string {
   const c = a.map((v, i) => Math.round(v + (b[i] - v) * x));
   return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 }
+
+// The global trust filters (AppFlow §3): claim-label filter shows only matching AI assertions;
+// the source-tier floor hides evidence below the chosen reliability tier (T1 strongest).
+const TIER_ORDER = ['T1', 'T2', 'T3', 'T4', 'T5'];
+export function passesTrustFloor(
+  label: string | null | undefined,
+  tier: string | null | undefined,
+  claimFilter: string,
+  tierFloor: string,
+): boolean {
+  if (claimFilter !== 'all' && (label ?? '').toUpperCase() !== claimFilter) return false;
+  if (tierFloor !== 'all' && tier) {
+    if (TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(tierFloor)) return false;
+  }
+  return true;
+}

@@ -15,12 +15,14 @@ export function Diff() {
   // v5 stays offered (the prototype's pairing) so picking it surfaces the honest unprovisioned state.
   const haveV5 = opts.some((o) => o.v === 'v5');
   const selOpts = haveV5 ? opts : [...opts, { v: 'v5', l: 'v5 · legacy (not provisioned)' }];
+  // Default to PROVISIONED versions (oldest -> newest); with a single version that is an honest
+  // self-compare. Picking v5 explicitly surfaces the not-provisioned designed state.
   const first = opts[0]?.v ?? '';
-  const second = opts[1]?.v ?? 'v5';
+  const second = opts[1]?.v ?? first;
   const [a, setA] = useState('');
   const [b, setB] = useState('');
-  const av = a || second; // prototype defaults: legacy → active
-  const bv = b || first;
+  const av = a || first;
+  const bv = b || second;
   const diff = useDiff(av, bv);
   const d = diff.data;
 

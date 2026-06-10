@@ -5,6 +5,7 @@ import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react';
 import { go, openPeek } from '../lib/events';
 import { clamp, LIFE_COLORS, LIFE_LABEL, PILLAR_COLORS } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
+import { useFocusTrap } from '../lib/useFocusTrap';
 
 /** Subcap chip: click peeks (drawer); `nav` jumps straight to the deep dive. */
 export function SC({ id, children, nav }: { id: string; children?: ReactNode; nav?: boolean }) {
@@ -22,7 +23,7 @@ export function SC({ id, children, nav }: { id: string; children?: ReactNode; na
   );
 }
 
-/** Reusable slide-in drawer (right side), Escape closes. */
+/** Reusable slide-in drawer (right side). Focus-trapped; Escape closes; focus returns to opener. */
 export function Drawer({
   open,
   onClose,
@@ -40,19 +41,37 @@ export function Drawer({
   children?: ReactNode;
   foot?: ReactNode;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [open, onClose]);
   if (!open) return null;
+  return <DrawerInner {...{ onClose, title, sub, width, children, foot }} />;
+}
+
+function DrawerInner({
+  onClose,
+  title,
+  sub,
+  width = 440,
+  children,
+  foot,
+}: {
+  onClose: () => void;
+  title?: ReactNode;
+  sub?: ReactNode;
+  width?: number;
+  children?: ReactNode;
+  foot?: ReactNode;
+}) {
+  const ref = useFocusTrap<HTMLDivElement>(onClose);
   return (
     <>
       <div className="drawer-bg" onClick={onClose} />
-      <div className="drawer" style={{ width }}>
+      <div
+        ref={ref}
+        className="drawer"
+        style={{ width }}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+      >
         <div className="drawer-head">
           <div style={{ flex: 1, minWidth: 0 }}>
             {sub && (

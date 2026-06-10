@@ -9,7 +9,7 @@ import { ConsultantLoop, type LoopPayload } from '../components/ConsultantLoop';
 import { ReasoningModal } from '../components/ReasoningModal';
 import { SubcapPeek } from '../components/SubcapPeek';
 import { Icon } from '../lib/icons';
-import { useUi } from '../state/store';
+import { syncFiltersToUrl, useUi } from '../state/store';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 
@@ -60,6 +60,13 @@ export function Shell() {
   useEffect(() => {
     document.querySelector('.main')?.scrollTo(0, 0);
   }, [loc.pathname]);
+
+  // The six filter objects serialize into the URL on every change — a deep link reproduces the
+  // exact filtered view, and navigation carries the filters (AppFlow §3.1).
+  const ui = useUi();
+  useEffect(() => {
+    syncFiltersToUrl(ui);
+  }, [ui, loc.pathname]);
 
   // cia-reason carries a reasoning chain_id (string); the modal is the universal audit window.
   useCiaEvent<unknown>('cia-reason', (d) => {

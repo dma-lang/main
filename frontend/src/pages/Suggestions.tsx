@@ -5,6 +5,7 @@ import type { SuggestionOut } from '../api/client';
 import { useSuggestionActions, useSuggestions } from '../api/queries';
 import { Claim, Empty, Page, Tier } from '../components/primitives';
 import { go, openCommit, openReasoning, toast } from '../lib/events';
+import { passesTrustFloor } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
@@ -15,7 +16,11 @@ export function Suggestions() {
   const applied = useSuggestions('applied');
   const rejected = useSuggestions('rejected');
   const { propose, apply, reject } = useSuggestionActions();
-  const live = pending.data ?? [];
+  const claimF = useUi((s) => s.claim);
+  const tierF = useUi((s) => s.tier);
+  const live = (pending.data ?? []).filter((s) =>
+    passesTrustFloor(s.claim_label, s.source_tier, claimF, tierF),
+  );
 
   const onReject = (id: string) => {
     const reason = window.prompt('Reason for rejecting this suggestion?')?.trim();

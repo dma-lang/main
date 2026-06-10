@@ -4,11 +4,12 @@
 // survives — nothing is written live from here. The result (status, failed gate, chain) is shown
 // honestly; the consultant thesis stays part of the human flow.
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { api, type NewsLoopOut } from '../api/client';
 import { go, openReasoning, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
+import { useFocusTrap } from '../lib/useFocusTrap';
 import { Claim } from './primitives';
 
 export interface LoopPayload {
@@ -48,14 +49,7 @@ export function ConsultantLoop({ payload, onClose }: { payload: LoopPayload; onC
     },
   });
 
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
-
+  const ref = useFocusTrap<HTMLDivElement>(onClose);
   const out = loop.data;
   const gateRes: [string, string, string][] = [
     ['G2', 'Source quality', out ? 'pass' : 'pending'],
@@ -66,7 +60,14 @@ export function ConsultantLoop({ payload, onClose }: { payload: LoopPayload; onC
 
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal wide" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div
+        ref={ref}
+        className="modal wide"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+      >
         <div className="modal-head">
           <div style={{ flex: 1 }}>
             <div className="row gap8" style={{ marginBottom: 7 }}>

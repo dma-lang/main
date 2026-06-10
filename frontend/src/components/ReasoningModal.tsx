@@ -1,31 +1,26 @@
 // Reasoning chain viewer (H2) — the universal audit window. Mounted by the Shell on the `cia-reason`
 // event; fetches GET /api/reasoning/{id} and shows the ordered steps, evidence rows, and the gate
-// checks the system ran before showing the answer. Ported from the prototype's ReasoningModal.
-import { useEffect } from 'react';
-
+// checks the system ran before showing the answer. Focus-trapped (UIUX: the core trust surface is
+// "a focus-trapped modal"); Escape closes; focus returns to the opening element.
 import { useReasoning } from '../api/queries';
 import { Icon } from '../lib/icons';
+import { useFocusTrap } from '../lib/useFocusTrap';
 import { Claim } from './primitives';
 
 export function ReasoningModal({ chainId, onClose }: { chainId: string; onClose: () => void }) {
   const q = useReasoning(chainId);
   const ch = q.data;
-
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  const ref = useFocusTrap<HTMLDivElement>(onClose);
 
   return (
     <div className="modal-bg" onClick={onClose}>
       <div
+        ref={ref}
         className="modal wide"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
       >
         <div className="modal-head">
           <div style={{ flex: 1 }}>

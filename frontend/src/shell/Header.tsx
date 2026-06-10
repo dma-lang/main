@@ -91,6 +91,30 @@ export function Header() {
           persist({ lens: l });
         }}
       />
+      <Dropdown
+        label="Claims"
+        value={ui.claim}
+        options={[
+          { v: 'all', l: 'All claims' },
+          { v: 'FACT', l: 'FACT' },
+          { v: 'INFERENCE', l: 'INFERENCE' },
+          { v: 'HYPOTHESIS', l: 'HYPOTHESIS' },
+          { v: 'CEILING_ESTIMATE', l: 'CEILING EST.' },
+        ]}
+        onChange={ui.setClaim}
+      />
+      <Dropdown
+        label="Tier"
+        value={ui.tier}
+        options={[
+          { v: 'all', l: 'All tiers' },
+          { v: 'T1', l: '≥ T1 regulator' },
+          { v: 'T2', l: '≥ T2 analyst' },
+          { v: 'T3', l: '≥ T3 press' },
+          { v: 'T4', l: '≥ T4 community' },
+        ]}
+        onChange={ui.setTier}
+      />
       <span className="spring" />
       <Dropdown
         value={ui.version}

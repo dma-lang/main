@@ -11,6 +11,7 @@ import { api, type TrendItem } from '../api/client';
 import { useTrends, useTrendsActions } from '../api/queries';
 import { Bar, Claim, Dropdown, Empty, Page, Tier } from '../components/primitives';
 import { go, openLoop, openReasoning, toast } from '../lib/events';
+import { passesTrustFloor } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
@@ -203,7 +204,11 @@ export function Trends() {
   const [status, setStatus] = useState('all');
   const q = useTrends(status, version);
   const { scan } = useTrendsActions();
-  const items = q.data?.items ?? [];
+  const claimF = useUi((s) => s.claim);
+  const tierF = useUi((s) => s.tier);
+  const items = (q.data?.items ?? []).filter((t) =>
+    passesTrustFloor(t.label_claim, t.tier, claimF, tierF),
+  );
   const counts = q.data?.counts ?? {};
   const scanInfo = q.data?.scan;
 
