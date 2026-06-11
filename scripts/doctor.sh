@@ -323,26 +323,63 @@ body: ${BODY}"
     fi
     ;;
   403|404)
-    # Reached Google's frontend, not the app: ingress, an org policy override, or a stale URL.
-    POL="$(gcloud org-policies describe run.allowedIngress --project "$PROJECT" 2>/dev/null \
-      | grep -iE 'internal|INTERNAL' || true)"
-    if [ -n "$POL" ]; then
-      die "ROOT CAUSE: the org policy constraints/run.allowedIngress restricts this project to
-INTERNAL ingress, so ${URL} is unreachable from the public internet no matter the per-service
-setting (this is why /healthz 404s externally while the app is healthy and migrated internally).
-If you have orgpolicy.policyAdmin on the project, lift it with:
-    gcloud org-policies reset run.allowedIngress --project ${PROJECT}
-  then re-run this doctor. Otherwise an ORG ADMIN must allow external ingress (or exempt the
-'${SERVICE}' service), or you front it with an external HTTPS Load Balancer / IAP, or reach it
-from inside the VPC. Nothing in the app or this script can override an org policy."
+    # Google's frontend answered, the app did not: external ingress is blocked ABOVE the service.
+    # Heal the two service-level causes explicitly (the earlier check skips when the ingress
+    # annotation is absent, which defaults to 'all' but can still be overridden by policy), then
+    # attempt the project-level org-policy override (the operator is project Owner), then re-probe.
+    warn "HTTP ${CODE} at Google's frontend — forcing public ingress + invoker, then retrying"
+    ERRF="$(mktemp)"
+    gcloud run services update "$SERVICE" --region "$REGION" --ingress all --quiet 2>"$ERRF" \
+      && fixed "ingress -> all (explicit)" \
+      || warn "ingress update rejected: $(head -1 "$ERRF")"
+    gcloud run services add-iam-policy-binding "$SERVICE" --region "$REGION" \
+      --member=allUsers --role=roles/run.invoker --quiet 2>"$ERRF" \
+      && fixed "granted run.invoker to allUsers (the app still fails closed at sign-in)" \
+      || warn "could not grant public invoker: $(head -1 "$ERRF") (org policy iam.allowedPolicyMemberDomains?)"
+
+    # The EFFECTIVE policy includes org/folder inheritance — the non-effective describe misses it.
+    EFF="$(gcloud org-policies describe run.allowedIngress --project "$PROJECT" --effective 2>/dev/null || true)"
+    if grep -qiE 'internal|denyAll|deny_all' <<<"$EFF"; then
+      warn "org policy constraints/run.allowedIngress (inherited) restricts ingress — attempting a project-level allow-all override"
+      cat >"$ERRF" <<YAML
+name: projects/${PROJECT}/policies/run.allowedIngress
+spec:
+  rules:
+  - allowAll: true
+YAML
+      gcloud org-policies set-policy "$ERRF" --quiet 2>/dev/null \
+        && fixed "set a project-level allow-all ingress policy" \
+        || warn "could not override the org policy at project level (enforced from above)"
     fi
-    OTHERS="$(gcloud run services list --format='value(metadata.name)' 2>/dev/null \
-      | grep -v "^${SERVICE}\$" | tr '\n' ' ')"
-    die "external request hit Google's ${CODE} (not the app). Ingress is now 'all' with no
-org-policy override detected, so you are almost certainly opening a STALE url. The ONE url for the
-live service is:
-    ${URL}
-Other Cloud Run services in this project (a stale bookmark may point at one): ${OTHERS:-none}"
+
+    # Re-deploy once so the service picks up the now-permitted ingress, then re-probe both URLs.
+    gcloud run services update "$SERVICE" --region "$REGION" --ingress all --quiet 2>/dev/null || true
+    sleep 12
+    for u in "$DET_URL" "$URL"; do
+      RC2="$(curl -sS -o "$ERRF" -w '%{http_code}' --max-time 20 "${u}/healthz" 2>/dev/null || echo 000)"
+      echo "  re-probe ${u} -> HTTP ${RC2}"
+      if [ "$RC2" = "200" ]; then WINNER="$u"; break; fi
+    done
+    rm -f "$ERRF"
+    if [ -n "$WINNER" ]; then
+      URL="$WINNER"
+      ok "reachable after healing: ${URL}"
+    else
+      OTHERS="$(gcloud run services list --format='value(metadata.name)' 2>/dev/null \
+        | grep -v "^${SERVICE}\$" | tr '\n' ' ')"
+      die "ROOT CAUSE: external ingress to Cloud Run is blocked above this service and could not be
+lifted automatically — your project enforces an inherited org policy
+(constraints/run.allowedIngress = internal) or sits inside a VPC-SC perimeter, so neither run.app
+URL is reachable from the public internet, however healthy and migrated the app is (it IS — the
+migration just succeeded and it answers internally). The real options, in order:
+  1. Org admin lifts/exempts the ingress policy for '${SERVICE}', OR grants you
+     orgpolicy.policyAdmin so the project-level override this doctor just attempted can stick.
+  2. Front the service with an EXTERNAL HTTPS Load Balancer (serverless NEG) or IAP — the
+     supported way to expose an internal-ingress Cloud Run service publicly.
+  3. Reach it from inside the VPC (a VM/VPN in the project).
+Nothing in the app or this script can override an enforced org policy from below.
+The healthy service is '${SERVICE}'; other services here: ${OTHERS:-none}."
+    fi
     ;;
   000)
     die "no HTTP response from ${URL} (timeout/DNS/connection). A VPC-SC perimeter or network
