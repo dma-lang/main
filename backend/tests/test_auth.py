@@ -122,6 +122,40 @@ def test_named_admins_are_hardcoded_defaults_and_login_fails_closed_unconfigured
     assert "GOOGLE_OAUTH_CLIENT" in str(exc.value.detail)
 
 
+def test_redirect_uri_is_pinned_to_the_canonical_url() -> None:
+    """REGRESSION (the operator's own probe caught this): Cloud Run serves the same app on TWO
+    hostnames, and a host-derived redirect_uri was a MOVING TARGET — whichever URL a user opened
+    dictated the redirect_uri sent, so the OAuth client's registered list could never match for
+    everyone. With PUBLIC_BASE_URL set, the flow is pinned: a login on a non-canonical host hops
+    to the canonical one first (cookies are per-host), and the canonical host sends ONE stable
+    redirect_uri — the single value to register."""
+    from urllib.parse import parse_qs, urlparse
+
+    from app.main import create_app
+    from app.settings import Settings, get_settings
+
+    canonical = "https://cia-306195530103.us-central1.run.app"
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        auth_mode="live",
+        google_client_id="cid.apps.googleusercontent.com",
+        google_client_secret="GOCSPX-test",
+        public_base_url=canonical,
+    )
+    # arriving on a NON-canonical host (e.g. the legacy hash url) -> hop to the canonical host
+    with TestClient(app, base_url="https://cia-dukrne5v4a-uc.a.run.app") as c:
+        r = c.get("/api/auth/login", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == f"{canonical}/api/auth/login"
+        assert "cia_oauth_state" not in r.cookies  # state must be set on the canonical host only
+    # arriving on the canonical host -> straight to Google with the PINNED redirect_uri
+    with TestClient(app, base_url=canonical) as c:
+        r = c.get("/api/auth/login", follow_redirects=False)
+        assert r.status_code == 302 and "accounts.google.com" in r.headers["location"]
+        qs = parse_qs(urlparse(r.headers["location"]).query)
+        assert qs["redirect_uri"] == [f"{canonical}/api/auth/callback"]
+
+
 def test_oauth_env_aliases_are_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     """The deployment uses Accelerate's GOOGLE_OAUTH_* names; GOOGLE_CLIENT_ID stays a legacy
     alias. Both must populate the same settings, and GOOGLE_OAUTH_HOSTED_DOMAIN sets the domain."""

@@ -193,8 +193,11 @@ except Exception:
   print("")')"
 fi
 # OAuth Authorization-Code flow: the SPA needs the client id (env) and the service needs the
-# client secret (Secret Manager). The secret stays out of env vars.
-ENVS="LLM_MODE=live"
+# client secret (Secret Manager). The secret stays out of env vars. PUBLIC_BASE_URL pins the
+# OAuth round-trip to the ONE canonical url — Cloud Run answers on two hostnames, and a
+# host-derived redirect_uri was a moving target no registration could reliably match.
+CANON_URL="https://${SERVICE}-${PN}.${REGION}.run.app"
+ENVS="LLM_MODE=live,PUBLIC_BASE_URL=${CANON_URL}"
 SECRETS="DATABASE_URL=${DB_SECRET}:latest,HMAC_KEY=${HMAC_SECRET}:latest"
 if [ -n "$CLIENT_ID" ]; then
   ENVS="${ENVS},GOOGLE_OAUTH_CLIENT_ID=${CLIENT_ID}"
@@ -434,6 +437,7 @@ OTHERS="$(gcloud run services list --format='value(metadata.name)' 2>/dev/null |
 echo ""
 echo "  ONE Console step the API cannot do — register the OAuth redirect URI (NOT a JS origin):"
 echo "    Console -> APIs & Services -> Credentials -> your Web client -> Authorized redirect URIs"
-echo "    -> + Add URI -> EXACTLY:   ${URL}/api/auth/callback"
-echo "  (The Authorization-Code flow uses redirect URIs, so it works on the plain run.app URL."
-echo "   No 'Authorized JavaScript origins' are needed.) Then open ${URL} and Continue with Google."
+echo "    -> + Add URI -> EXACTLY:   ${CANON_URL}/api/auth/callback"
+echo "  The redirect uri is PINNED (PUBLIC_BASE_URL): whichever url a user opens, the app always"
+echo "  sends this ONE value — this single registration is sufficient, forever."
+echo "  No 'Authorized JavaScript origins' are needed. Then open ${CANON_URL} and Continue with Google."

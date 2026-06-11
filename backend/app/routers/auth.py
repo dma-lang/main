@@ -34,15 +34,23 @@ SESSION_COOKIE = "cia_session"
 _STATE_COOKIE = "cia_oauth_state"
 
 
-def _redirect_uri(request: Request) -> str:
-    """This service's callback URL, derived from the incoming request so it is correct on any
-    host (run.app, the load balancer, localhost). Must match an Authorized redirect URI on the
-    OAuth client. Honours X-Forwarded-Proto so it stays https behind the load balancer."""
+def _base_url(request: Request, settings: Settings) -> str:
+    """The base for the OAuth round-trip. PINNED to settings.public_base_url when set — Cloud Run
+    serves the same app on two hostnames, and a host-derived redirect_uri was a moving target that
+    could never reliably match the OAuth client's registered list. Falls back to the incoming
+    request (honouring X-Forwarded-Proto) for local dev/tests."""
+    if settings.public_base_url:
+        return settings.public_base_url.rstrip("/")
     base = str(request.base_url).rstrip("/")
     proto = request.headers.get("x-forwarded-proto")
     if proto == "https" and base.startswith("http://"):
         base = "https://" + base[len("http://") :]
-    return f"{base}/api/auth/callback"
+    return base
+
+
+def _redirect_uri(request: Request, settings: Settings) -> str:
+    """This service's callback URL — ONE stable value to register on the OAuth client."""
+    return f"{_base_url(request, settings)}/api/auth/callback"
 
 
 def _secure(request: Request) -> bool:
@@ -60,10 +68,17 @@ async def auth_login(
             detail="sign-in is not configured — set GOOGLE_OAUTH_CLIENT_ID and "
             "GOOGLE_OAUTH_CLIENT_SECRET on the service",
         )
+    # Cookies are per-host: when the user arrives on a non-canonical hostname (Cloud Run serves
+    # two), hop to the canonical one FIRST so the state cookie, Google's redirect, and the session
+    # cookie all live on the same host — users end up unified on one origin.
+    canonical = _base_url(request, settings)
+    incoming = str(request.base_url).rstrip("/").replace("http://", "https://", 1)
+    if settings.public_base_url and incoming != canonical:
+        return RedirectResponse(f"{canonical}/api/auth/login", status_code=302)
     state = secrets.token_urlsafe(24)
     params = {
         "client_id": settings.google_client_id,
-        "redirect_uri": _redirect_uri(request),
+        "redirect_uri": _redirect_uri(request, settings),
         "response_type": "code",
         "scope": "openid email profile",
         "hd": settings.auth_email_domain,  # pre-filter the account picker to the domain
@@ -110,7 +125,7 @@ async def auth_callback(
                 "code": code,
                 "client_id": settings.google_client_id,
                 "client_secret": settings.google_client_secret,
-                "redirect_uri": _redirect_uri(request),
+                "redirect_uri": _redirect_uri(request, settings),
                 "grant_type": "authorization_code",
             },
             timeout=10,

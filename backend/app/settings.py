@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     )
     session_ttl_hours: int = 12  # session cookie lifetime (matches Accelerate's JWT_TTL_HOURS)
 
+    # THE canonical public URL of this service (e.g. https://cia-<project#>.us-central1.run.app).
+    # Cloud Run answers on TWO hostnames (deterministic + legacy hash); deriving the OAuth
+    # redirect_uri from the incoming Host made it a MOVING TARGET — whichever URL a user opened
+    # dictated the redirect_uri sent, so Google's "registered redirect URI" check could never be
+    # satisfied for everyone. When set, the entire OAuth round-trip is pinned to this base: login
+    # hops here first, Google redirects here, the session cookie lives here. Empty => derive from
+    # the request (local dev / tests).
+    public_base_url: str = ""
+
     auth_email_domain: str = Field(
         default="zennify.com",  # sign-in restricted to this hosted domain; fails closed
         validation_alias=AliasChoices("google_oauth_hosted_domain", "auth_email_domain"),
