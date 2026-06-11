@@ -7,6 +7,17 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Fixed
+- **Migration job failed against a cold database (self-healing)**: in a Cloud Run **Job** the
+  Cloud SQL Auth Proxy sidecar has no startup-ordering guarantee, so `app.migrate` opened the
+  socket before the proxy finished its tunnel and got `server closed the connection unexpectedly`
+  / connection timeouts — the job exited 1 with nothing migrated. The runner now **waits for the
+  database before migrating**: bounded exponential backoff + jitter retries transient connection
+  failures (proxy/instance not ready) until the DB accepts a connection, while a permanent error
+  (bad password, missing database/role — by SQLSTATE *and* message) is raised immediately so it
+  never burns the window. Every connection is bounded by `connect_timeout`; the total wait is
+  bounded by `MIGRATE_DB_WAIT_SECONDS` (default 180s) and exhaustion raises an actionable
+  `TimeoutError`. Covered by `tests/test_migrate.py` (proxy-race classification, fail-fast on
+  permanent errors, reachable-returns-fast, and a real refused-port timeout).
 - **Sign-in completed but never redirected**: when Google's popup closed, the window-focus
   refetch re-fired the errored `/api/me` query WITHOUT the token; its stale 401 landing after the
   fresh identity bounced the gate straight back to the Login page (and the API layer's 401

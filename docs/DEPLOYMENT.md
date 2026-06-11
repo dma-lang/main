@@ -265,6 +265,17 @@ curl -s "$URL/healthz"
 
 shows `"db":"ok"`.
 
+> **The job waits for the database by design.** A Cloud Run Job starts the Cloud SQL Auth Proxy
+> as a sidecar with no ordering guarantee, so the runner retries the first connections (proxy not
+> ready yet → `server closed the connection unexpectedly` / timeout) with bounded backoff before
+> migrating. It still **fails fast** on a permanent error — a wrong password or a missing
+> database/role — so those don't hide behind the wait. Two things to confirm if it ever *does*
+> time out (default 180s, tunable with `--set-env-vars MIGRATE_DB_WAIT_SECONDS=...`): the instance
+> is `RUNNABLE` (`gcloud sql instances describe cia-pg --format='value(state)'`) and the job
+> actually carries the instance (`gcloud run jobs describe cia-migrate --region "$REGION" \
+> --format=yaml | grep cloudsql` must not be empty — set it with the `--set-cloudsql-instances`
+> flag above, with a non-empty `$SQL_CONN`).
+
 ## A10. Load the data (in the app — two clicks)
 
 1. Open the Service URL in your browser. You see the sign-in screen.
