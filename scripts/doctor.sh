@@ -88,37 +88,20 @@ SQL_CONN="$(gcloud sql instances describe "$SQL_INSTANCE" --format='value(connec
 [ -n "$SQL_CONN" ] || die "could not resolve the instance connection name"
 ok "RUNNABLE — ${SQL_CONN}"
 
-# Reachability from Cloud Run's built-in Cloud SQL Auth Proxy. With --add/--set-cloudsql-instances
-# the proxy reaches the instance over its PUBLIC IP by default; a private-IP-only instance with no
-# VPC egress is unreachable, so the proxy drops the connection ("server closed the connection
-# unexpectedly") however correct the secret/roles/password are. This was the residual blocker that
-# survived every other fix because it is a NETWORK fact, not a config string. Proven by simulation:
-# the migration runner applies all migrations against a reachable empty DB with exit 0, so a job
-# that still fails to connect can only be failing the network path. Heal it by enabling the public
-# IP — the proxy stays IAM-gated and, with no authorized networks, the instance is not internet-
-# exposed (for a private-IP posture instead, attach a Serverless VPC connector to the job/service).
+# Reachability from Cloud Run's built-in Cloud SQL Auth Proxy. With --add-cloudsql-instances the
+# proxy reaches the instance over its PUBLIC IP; if the instance has no public IP the proxy drops
+# the connection ("server closed the connection unexpectedly") however correct everything else is.
+# Heal it by enabling the public IP — the proxy stays IAM-gated and, with no authorized networks,
+# the instance is not internet-exposed. (No VPC / load balancer needed.)
 PUBLIC_IP="$(gcloud sql instances describe "$SQL_INSTANCE" \
   --format='value(settings.ipConfiguration.ipv4Enabled)')"
-JOB_VPC="$(gcloud run jobs describe "$JOB" --region "$REGION" \
-  --format='value(spec.template.metadata.annotations."run.googleapis.com/vpc-access-connector")' \
-  2>/dev/null || true)"
 if [ "$PUBLIC_IP" = "True" ]; then
   ok "instance has a public IP — the Cloud SQL Auth Proxy can reach it"
-elif [ -n "$JOB_VPC" ]; then
-  ok "instance is private-IP, but the migrate job egresses via VPC connector ${JOB_VPC}"
 else
-  warn "instance has NO public IP and the migrate job has no VPC egress — the Cloud SQL proxy"
-  warn "cannot reach it; THIS is the 'server closed the connection unexpectedly' failure"
-  if gcloud sql instances patch "$SQL_INSTANCE" --assign-ip --quiet; then
-    fixed "enabled the instance public IP (IAM-gated proxy; no authorized networks = not exposed)"
-  else
-    die "could not enable the public IP (org policy?). Private-IP alternative — create a
-Serverless VPC connector once and attach it to both the job and the service:
-  gcloud compute networks vpc-access connectors create cia-conn --region ${REGION} --range 10.8.0.0/28
-  gcloud run jobs update ${JOB} --region ${REGION} --vpc-connector cia-conn --vpc-egress private-ranges-only
-  gcloud run services update ${SERVICE} --region ${REGION} --vpc-connector cia-conn --vpc-egress private-ranges-only
-then re-run this doctor."
-  fi
+  warn "instance has NO public IP — enabling it so the Cloud SQL proxy can reach it"
+  gcloud sql instances patch "$SQL_INSTANCE" --assign-ip --quiet \
+    && fixed "enabled the instance public IP (IAM-gated proxy; no authorized networks = not exposed)" \
+    || die "could not enable the public IP (org policy?) — ask an admin to allow it, then re-run"
 fi
 
 step "3. database '${DB_NAME}'"
@@ -413,29 +396,21 @@ YAML
     else
       OTHERS="$(gcloud run services list --format='value(metadata.name)' 2>/dev/null \
         | grep -v "^${SERVICE}\$" | tr '\n' ' ')"
-      die "ROOT CAUSE: external ingress to Cloud Run is blocked above this service and could not be
-lifted automatically. The app itself is healthy and fully migrated; the block sits in Google's
-frontend. The 'effective run.allowedIngress' line printed above is decisive: if it shows
-internal-only values, an inherited org policy is the cause; if it shows an ERROR reading the
-policy, enable the API (gcloud services enable orgpolicy.googleapis.com) and re-run; if it shows
-allowAll, the block is a VPC-SC perimeter around this project.
+      die "ROOT CAUSE: external ingress to the run.app URL is blocked above this service. The app
+itself is healthy and migrated; the block sits in Google's frontend. The 'effective
+run.allowedIngress' line printed above is decisive: internal-only values => an inherited org
+policy (ask an admin to allow external ingress, or grant you orgpolicy.policyAdmin so this
+doctor's project-level override sticks); an ERROR => enable orgpolicy.googleapis.com and re-run.
 
-VERIFY THE APP YOURSELF RIGHT NOW (bypasses ingress via your own IAM, no admin needed):
+VERIFY THE APP RIGHT NOW (your own IAM, no admin, no load balancer):
     gcloud run services proxy ${SERVICE} --region ${REGION} --port 8080
   then open Cloud Shell's Web Preview on port 8080 — you will see the app and /healthz.
-
-The real fixes, in order:
-  1. Org admin lifts/exempts the ingress policy for '${SERVICE}' (or grants you
-     orgpolicy.policyAdmin so this doctor's project-level override sticks).
-  2. Front the service with an EXTERNAL HTTPS Load Balancer (serverless NEG) or IAP — the
-     supported way to publish an ingress-restricted Cloud Run service.
-  3. Use it from inside the VPC (VM/VPN), or via the proxy above for day-to-day work.
 The healthy service is '${SERVICE}'; other services here: ${OTHERS:-none}."
     fi
     ;;
   000)
-    die "no HTTP response from ${URL} (timeout/DNS/connection). A VPC-SC perimeter or network
-policy in front of Cloud Run can block the run.app URL externally — otherwise retry in a minute."
+    die "no HTTP response from ${URL} (timeout/DNS/connection) — retry in a minute, or verify via
+'gcloud run services proxy ${SERVICE} --region ${REGION} --port 8080' + Cloud Shell Web Preview."
     ;;
   *)
     die "unexpected HTTP ${CODE} from ${URL}/healthz — body: ${BODY:-<empty>}"
@@ -460,5 +435,5 @@ echo ""
 echo "  ONE Console step the API cannot do — register the OAuth redirect URI (NOT a JS origin):"
 echo "    Console -> APIs & Services -> Credentials -> your Web client -> Authorized redirect URIs"
 echo "    -> + Add URI -> EXACTLY:   ${URL}/api/auth/callback"
-echo "  (The Authorization-Code flow uses redirect URIs, so it works on any origin / behind the LB."
+echo "  (The Authorization-Code flow uses redirect URIs, so it works on the plain run.app URL."
 echo "   No 'Authorized JavaScript origins' are needed.) Then open ${URL} and Continue with Google."
