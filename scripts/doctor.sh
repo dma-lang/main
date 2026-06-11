@@ -85,6 +85,31 @@ SQL_CONN="$(gcloud sql instances describe "$SQL_INSTANCE" --format='value(connec
 [ -n "$SQL_CONN" ] || die "could not resolve the instance connection name"
 ok "RUNNABLE — ${SQL_CONN}"
 
+# Reachability from Cloud Run's built-in Cloud SQL Auth Proxy. With --add/--set-cloudsql-instances
+# the proxy reaches the instance over its PUBLIC IP by default; a private-IP-only instance with no
+# VPC egress is unreachable, so the proxy drops the connection ("server closed the connection
+# unexpectedly") however correct the secret/roles/password are. This was the residual blocker that
+# survived every other fix because it is a NETWORK fact, not a config string. Proven by simulation:
+# the migration runner applies all migrations against a reachable empty DB with exit 0, so a job
+# that still fails to connect can only be failing the network path. Heal it by enabling the public
+# IP — the proxy stays IAM-gated and, with no authorized networks, the instance is not internet-
+# exposed (for a private-IP posture instead, attach a Serverless VPC connector to the job/service).
+PUBLIC_IP="$(gcloud sql instances describe "$SQL_INSTANCE" \
+  --format='value(settings.ipConfiguration.ipv4Enabled)')"
+JOB_VPC="$(gcloud run jobs describe "$JOB" --region "$REGION" \
+  --format='value(spec.template.metadata.annotations."run.googleapis.com/vpc-access-connector")' \
+  2>/dev/null || true)"
+if [ "$PUBLIC_IP" = "True" ]; then
+  ok "instance has a public IP — the Cloud SQL Auth Proxy can reach it"
+elif [ -n "$JOB_VPC" ]; then
+  ok "instance is private-IP, but the migrate job egresses via VPC connector ${JOB_VPC}"
+else
+  warn "instance has NO public IP and the migrate job has no VPC egress — the Cloud SQL proxy"
+  warn "cannot reach it; THIS is the 'server closed the connection unexpectedly' failure"
+  gcloud sql instances patch "$SQL_INSTANCE" --assign-ip --quiet
+  fixed "enabled the instance public IP (IAM-gated proxy; no authorized networks = not exposed)"
+fi
+
 step "3. database '${DB_NAME}'"
 if gcloud sql databases describe "$DB_NAME" --instance="$SQL_INSTANCE" >/dev/null 2>&1; then
   ok "exists"
@@ -205,6 +230,9 @@ for attempt in 1 2 3; do
   fi
   MIGRATED=0
   LOGS="$(migrate_logs)"
+  printf '  --- migration error (attempt %s) — the migrate job log lines ---\n' "$attempt"
+  grep -E '^(psycopg|sqlalchemy|alembic|RuntimeError|TimeoutError|FileNotFoundError|FATAL)' \
+    <<<"$LOGS" | sort -u | head -6 | sed 's/^/    /'
   if grep -qiE 'password authentication failed|role "'"$DB_USER"'" does not exist|28P01' <<<"$LOGS"; then
     warn "attempt ${attempt}: credentials disagree — healing user+password+secret"
     heal_db_credentials

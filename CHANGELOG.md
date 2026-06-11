@@ -21,6 +21,18 @@ All notable changes to this project are documented here. The format is based on
   `--client-id` to set the OAuth client id. Documented as the recommended path in DEPLOYMENT A11.
 
 ### Fixed
+- **Migration kept failing on a connectivity cause no config string could fix — diagnosed by
+  simulation, healed by the doctor.** Running the exact job entrypoint
+  (`uv run python -m app.migrate`) against a fresh empty database applies all 11 migrations with
+  exit 0 — proving the runner and migrations are sound, so a job that still can't connect is
+  failing the *network path*, not the code. With `--add-cloudsql-instances` Cloud Run's Auth Proxy
+  reaches the instance over its **public IP** by default; a private-IP-only instance with no VPC
+  egress is unreachable and the proxy drops the connection ("server closed the connection
+  unexpectedly") however correct the secret/roles/password are. The doctor now detects this
+  (instance `ipv4Enabled` + the job's VPC connector) and heals it by enabling the instance public
+  IP (IAM-gated proxy; with no authorized networks the instance is not internet-exposed) — and it
+  prints the migrate job's own error lines on every failed attempt, so a connectivity failure can
+  never again hide behind an opaque exit code.
 - **Migration job failed against a cold database (self-healing)**: in a Cloud Run **Job** the
   Cloud SQL Auth Proxy sidecar has no startup-ordering guarantee, so `app.migrate` opened the
   socket before the proxy finished its tunnel and got `server closed the connection unexpectedly`
