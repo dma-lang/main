@@ -69,6 +69,9 @@ def two_versions() -> Iterator[None]:
                 text(f"DELETE FROM cat_{SCRATCH}.offering_subcap WHERE subcap_id = 'P1C1.1.2'")
             )
             await conn.execute(
+                text(f"DELETE FROM cat_{SCRATCH}.subcap_vcc WHERE subcap_id = 'P1C1.1.2'")
+            )
+            await conn.execute(
                 text(f"DELETE FROM cat_{SCRATCH}.subcap WHERE subcap_id = 'P1C1.1.2'")
             )
         await db.dispose_engine()

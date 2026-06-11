@@ -241,16 +241,17 @@ export interface ValueChainSubcap {
 }
 export interface ValueChainCluster {
   code: string;
-  name: string;
-  pillar: string;
+  name: string; // the REAL stage name (the code is only an id)
+  pillar: string | null;
   count: number;
   subcaps: ValueChainSubcap[];
-  stages: { name: string; count: number }[];
+  stages?: { name: string; count: number }[]; // present only in the derived fallback
   merged_from: string[];
 }
 export interface ValueChainResp {
   version: string;
   sv: string;
+  source?: string; // catalogue_vc_mapping (real per-SV stages) | derived_from_clusters
   clusters: ValueChainCluster[];
   raw_clusters: number;
   deduped: number;
@@ -1052,8 +1053,8 @@ export const api = {
     http<MappingResp>(`/api/admin/mapping/${version}`),
   clientJourney: (key: string, version: string): Promise<ClientJourney> =>
     http<ClientJourney>(`/api/clients/${encodeURIComponent(key)}/journey?version=${version}`),
-  summary: (v: string): Promise<CatalogueSummary> =>
-    http<CatalogueSummary>(`/api/catalogue/${v}/summary`),
+  summary: (v: string, sv = 'all'): Promise<CatalogueSummary> =>
+    http<CatalogueSummary>(`/api/catalogue/${v}/summary?sv=${sv}`),
   heatmap: (v: string, lens: string, pillar: string, sv: string): Promise<HeatmapResp> => {
     const qs = new URLSearchParams({ lens, pillar, sv });
     return http<HeatmapResp>(`/api/catalogue/${v}/heatmap?${qs.toString()}`);

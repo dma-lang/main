@@ -1035,31 +1035,105 @@ async def value_chain(
     sv: str = "",
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """The value-chain atlas, DERIVED LIVE from the version's own capability clusters (A3) —
-    dynamic, deduped, and smart-clustered (services/value_chain). Works for v5 and v7 alike from
-    each one's data. ``pillar`` filters; ``sv`` is accepted for the UI lens but the segments are
-    catalogue-wide."""
+    """The value-chain atlas (A3) on the catalogue's REAL per-subvertical stage mapping
+    (cat_<v>.value_chain_cluster + subcap_vcc, from the v7 workbooks' VC-mapping sheet; cascaded
+    v7 -> v5 at provision). Segments carry the actual stage NAMES — the VCC code is only an id.
+    ``sv`` picks one subvertical's chain (stage order preserved); 'all' aggregates the distinct
+    stages across subverticals. ``pillar`` filters membership. Falls back to the live derivation
+    from capability clusters only when a version has no mapping at all."""
     from app.services.value_chain import derive_value_chain
 
     s = _schema(await resolve_version(version))
-    where = " WHERE cat.pillar_id = :p" if pillar and pillar != "all" else ""
-    # Segment at the CATEGORY grain (the natural value-chain stage, ~16) — capabilities (135) are
-    # too granular to be a chain. The smart dedupe/cluster then merges near-duplicate categories.
-    sql = text(
-        "SELECT s.subcap_id, s.name, cat.pillar_id AS pillar, cat.name AS cluster, "
-        "cap.name AS category " + _JOINS.format(s=s) + where + " ORDER BY s.subcap_id"
-    )
+    p_active = bool(pillar and pillar != "all")
+    sv_active = bool(sv and sv != "all")
     async with _engine().connect() as conn:
+        has_vcc = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap_vcc"))).scalar() or 0
+        if has_vcc:
+            where = ["1=1"]
+            params: dict[str, Any] = {}
+            if sv_active:
+                where.append("vc.subvertical = :sv")
+                params["sv"] = sv
+            if p_active:
+                where.append("left(vc.subcap_id, 2) = :p")
+                params["p"] = pillar
+            sql = text(
+                "SELECT v.vcc_id AS code, v.name, vc.subcap_id, sc.name AS subcap_name, "
+                "left(vc.subcap_id, 2) AS pillar, min(vc.stage_ord) OVER "
+                "(PARTITION BY v.vcc_id) AS ord "
+                f"FROM {s}.subcap_vcc vc "
+                f"JOIN {s}.value_chain_cluster v ON v.vcc_id = vc.vcc_id "
+                f"JOIN {s}.subcap sc ON sc.subcap_id = vc.subcap_id "
+                f"WHERE {' AND '.join(where)}"
+            )
+            rows = (await conn.execute(sql, params)).mappings().all()
+            segs: dict[str, dict[str, Any]] = {}
+            for r in rows:
+                g = segs.setdefault(
+                    str(r["code"]),
+                    {
+                        "code": str(r["code"]),
+                        "name": str(r["name"]),  # the REAL stage name, never just the code
+                        "ord": r["ord"] if r["ord"] is not None else 9999,
+                        "subcaps": [],
+                        "merged_from": [],
+                        "pillars": set(),
+                    },
+                )
+                g["subcaps"].append(
+                    {
+                        "id": str(r["subcap_id"]),
+                        "name": str(r["subcap_name"]),
+                        "pillar": r["pillar"],
+                    }
+                )
+                g["pillars"].add(str(r["pillar"]))
+            clusters = []
+            for g in sorted(segs.values(), key=lambda x: (x["ord"], x["name"])):
+                seen_ids: set[str] = set()
+                subs = [
+                    x
+                    for x in g["subcaps"]
+                    if not (x["id"] in seen_ids or seen_ids.add(x["id"]))  # type: ignore[func-returns-value]
+                ]
+                clusters.append(
+                    {
+                        "code": g["code"],
+                        "name": g["name"],
+                        "pillar": min(g["pillars"]) if len(g["pillars"]) == 1 else None,
+                        "count": len(subs),
+                        "subcaps": subs,
+                        "merged_from": [],
+                    }
+                )
+            return {
+                "version": version,
+                "sv": sv or "all",
+                "source": "catalogue_vc_mapping",
+                "clusters": clusters,
+                "raw_clusters": len(clusters),
+                "deduped": 0,
+                "total_subcaps": len({x["id"] for c in clusters for x in c["subcaps"]}),
+            }
+        # FALLBACK: no mapping shipped with this version — derive from capability clusters.
+        where_sql = " WHERE cat.pillar_id = :p" if p_active else ""
+        sql = text(
+            "SELECT s.subcap_id, s.name, cat.pillar_id AS pillar, cat.name AS cluster, "
+            "cap.name AS category " + _JOINS.format(s=s) + where_sql + " ORDER BY s.subcap_id"
+        )
         rows = (await conn.execute(sql, {"p": pillar})).mappings().all()
     out = derive_value_chain([dict(r) for r in rows])
     out["version"] = version
     out["sv"] = sv or "all"
+    out["source"] = "derived_from_clusters"
     return out
 
 
 @router.get("/{version}/summary")
 async def summary(
-    version: str, _user: dict[str, Any] = Depends(get_current_user)
+    version: str,
+    sv: str = Query("all"),
+    _user: dict[str, Any] = Depends(get_current_user),
 ) -> CatalogueSummary:
     v = await resolve_version(version)
     s = _schema(v)
@@ -1068,6 +1142,15 @@ async def summary(
     # (story_catalogue_link is Jira-only by construction — synthetic stories never count). A decayed
     # subcap can stay active; it is flagged HIGH for an admin to mark inactive or keep, never
     # auto-deactivated. A description rewrite is neither decay nor incompleteness.
+    # `sv` scopes EVERYTHING to the subcaps that participate in that subvertical's value chain
+    # (cat_<v>.subcap_vcc, from the catalogue's own per-SV mapping) — so the mission-control tiles
+    # genuinely change when the subvertical toggle changes.
+    sv_filter = (
+        f" AND EXISTS (SELECT 1 FROM {s}.subcap_vcc vc "
+        "WHERE vc.subcap_id = s.subcap_id AND vc.subvertical = :sv)"
+        if sv != "all"
+        else ""
+    )
     sql = text(
         "SELECT p.pillar_id, p.name, count(s.subcap_id) AS subcap_count, "
         "coalesce(count(s.subcap_id) FILTER (WHERE EXISTS ("
@@ -1080,12 +1163,21 @@ async def summary(
         f"FROM {s}.pillar p "
         f"LEFT JOIN {s}.category cat ON cat.pillar_id = p.pillar_id "
         f"LEFT JOIN {s}.capability cap ON cap.category_id = cat.category_id "
-        f"LEFT JOIN {s}.subcap s ON s.capability_id = cap.capability_id "
+        f"LEFT JOIN {s}.subcap s ON s.capability_id = cap.capability_id{sv_filter} "
         "GROUP BY p.pillar_id, p.name ORDER BY p.pillar_id"
     )
+    params: dict[str, Any] = {"vid": v.version_id}
+    if sv != "all":
+        params["sv"] = sv
     async with _engine().connect() as conn:
-        rows = (await conn.execute(sql, {"vid": v.version_id})).mappings().all()
-        total = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap"))).scalar()
+        rows = (await conn.execute(sql, params)).mappings().all()
+        if sv != "all":
+            total_sql = text(
+                f"SELECT count(DISTINCT subcap_id) FROM {s}.subcap_vcc WHERE subvertical = :sv"
+            )
+            total = (await conn.execute(total_sql, {"sv": sv})).scalar()
+        else:
+            total = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap"))).scalar()
     pillars = [PillarSummary.model_validate(dict(r)) for r in rows]
     return CatalogueSummary(version_id=v.version_id, total_subcaps=int(total or 0), pillars=pillars)
 
@@ -1129,9 +1221,11 @@ _LENS_GROUP: dict[str, tuple[str, str, str]] = {
         " JOIN {s}.vendor ven ON ven.vendor_id = l3.vendor_id",
     ),
     "value-chain": (
-        "vcc.vcc_id",
-        "vcc.vcc_id",
-        " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id",
+        # the REAL stage names (same labels as the atlas) — the VCC code is only an id
+        "vcl.name",
+        "vcl.name",
+        " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id"
+        " JOIN {s}.value_chain_cluster vcl ON vcl.vcc_id = vcc.vcc_id",
     ),
 }
 _BAND_AXIS = ["1.0–1.7", "1.7–2.3", "2.3–3.0", "3.0–3.7", "3.7–4.3", "4.3–5.0"]

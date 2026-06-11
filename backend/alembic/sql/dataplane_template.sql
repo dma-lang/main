@@ -26,6 +26,7 @@ CREATE TABLE {schema}.subcap (
     zennify_status  text,
     completeness    numeric(4,3),
     target_maturity text,
+    story_refs      jsonb NOT NULL DEFAULT '[]',  -- the catalogue's own Jira story references
     search          tsvector,                    
     embedding       vector(768)                  
 );
@@ -182,6 +183,7 @@ CREATE TABLE {schema}.subcap_vcc (
     vcc_id          text REFERENCES {schema}.value_chain_cluster(vcc_id),
     subvertical     text,
     stage           text,
+    stage_ord       int,                          -- chain position (first-seen order per subvertical)
     PRIMARY KEY (subcap_id, vcc_id, subvertical)
 );
 

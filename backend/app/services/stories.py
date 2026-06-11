@@ -96,16 +96,17 @@ _INGEST = text(
     "ingested_at = now()"
 )
 
+# One story may evidence SEVERAL subcaps (corpus mapping + the catalogue's own story refs), so the
+# key is (story_key, target_version, carried_to_subcap) — migration 0012. carry_forward RECONSTRUCTS
+# a version's rows inside its transaction (delete -> insert), so re-carries stay idempotent and a
+# remapped story never leaves a stale link behind; DO NOTHING guards in-batch duplicates.
 _CARRY = text(
     "INSERT INTO control.story_subcap_carry "
     "(story_key, source_version, mapped_in_source, base_subcap, subvertical, target_version, "
     "carried_to_subcap, similarity, status, via) VALUES "
     "(:story_key, :source_version, :mapped_in_source, :base_subcap, :subvertical, :target_version, "
     ":carried_to_subcap, :similarity, CAST(:status AS carry_status), :via) "
-    "ON CONFLICT (story_key, target_version) DO UPDATE SET "
-    "carried_to_subcap = EXCLUDED.carried_to_subcap, similarity = EXCLUDED.similarity, "
-    "status = EXCLUDED.status, via = EXCLUDED.via, mapped_in_source = EXCLUDED.mapped_in_source, "
-    "base_subcap = EXCLUDED.base_subcap, subvertical = EXCLUDED.subvertical"
+    "ON CONFLICT (story_key, target_version, carried_to_subcap) DO NOTHING"
 )
 
 
@@ -237,6 +238,11 @@ async def carry_forward(
 
     synthetic = _load_synthetic()
     async with engine.begin() as conn:
+        # RECONSTRUCT this version's carries (idempotent re-carry; no stale links survive a remap)
+        await conn.execute(
+            text("DELETE FROM control.story_subcap_carry WHERE target_version = :tv"),
+            {"tv": target_version},
+        )
         ids = {
             r[0] for r in (await conn.execute(text(f"SELECT subcap_id FROM {schema}.subcap"))).all()
         }
@@ -259,6 +265,12 @@ async def carry_forward(
                 for r in synthetic
             ]
             await conn.execute(_CARRY, syn_carries)
+        # CATALOGUE-REF pass: the catalogue's own per-subcap Jira story references (the v7
+        # Capability Map's Story_Refs_with_UC_Links / the seed's embedded story keys) become real
+        # links wherever the key resolves to a stored, non-synthetic corpus story — the catalogue
+        # authors' mapping, T1, citation-verified (G7 style: only resolvable refs link; the
+        # unresolved are counted, never invented).
+        ref_stats = await _catalogue_ref_pass(conn, schema, target_version)
 
     confirmed = sum(1 for c in carries if c["status"] == "confirmed")
     unmapped = sum(1 for c in carries if c["status"] == "unmapped")
@@ -271,4 +283,89 @@ async def carry_forward(
         "confirmed": confirmed,
         "unmapped": unmapped,
         "distinct_subcaps": distinct,
+        **ref_stats,
+    }
+
+
+async def _catalogue_ref_pass(conn: Any, schema: str, target_version: str) -> dict[str, int]:
+    """Link cat_<v>.subcap.story_refs against the ingested corpus. Returns honest stats: how many
+    additional (story, subcap) links landed, how many refs could not be resolved to a stored
+    story, and the resulting count of distinct Jira-linked subcaps."""
+    rows = (
+        await conn.execute(
+            text(
+                f"SELECT subcap_id, story_refs FROM {schema}.subcap "
+                "WHERE jsonb_array_length(story_refs) > 0"
+            )
+        )
+    ).all()
+    if not rows:
+        # a version with no refs of its own (e.g. v5) borrows the reference catalogue's refs for
+        # the subcap ids it shares — the same identity rule the enrichment fallback uses
+        from app.services.enrichment_seed import story_refs_map
+
+        ref_map = story_refs_map()
+        own_ids = {
+            str(r[0])
+            for r in (await conn.execute(text(f"SELECT subcap_id FROM {schema}.subcap"))).all()
+        }
+        rows = [(sid, refs) for sid, refs in ref_map.items() if sid in own_ids]
+    real = {
+        str(r[0]): str(r[1] or "")
+        for r in await conn.execute(
+            text("SELECT story_key, sub_cap_id FROM control.story WHERE NOT is_synthetic")
+        )
+    }
+    links: list[dict[str, Any]] = []
+    unresolved = 0
+    for subcap_id, refs in ((str(r[0]), r[1] or []) for r in rows):
+        for key in refs:
+            k = str(key)
+            if k not in real:
+                unresolved += 1
+                continue
+            base, sv = normalize_id(subcap_id)
+            links.append(
+                {
+                    "story_key": k,
+                    "source_version": target_version,
+                    "mapped_in_source": real[k] or subcap_id,
+                    "base_subcap": base,
+                    "subvertical": sv,
+                    "target_version": target_version,
+                    "carried_to_subcap": subcap_id,
+                    "similarity": 1.0,
+                    "status": "confirmed",
+                    "via": "catalogue_ref",
+                }
+            )
+    if links:
+        await conn.execute(_CARRY, links)
+    # report what actually LANDED: refs that duplicate the corpus' own (story, subcap) row
+    # conflict away (DO NOTHING), so the inserted count is the honest "additional links" figure
+    inserted = (
+        await conn.execute(
+            text(
+                "SELECT count(*) FROM control.story_subcap_carry "
+                "WHERE target_version = :tv AND via = 'catalogue_ref'"
+            ),
+            {"tv": target_version},
+        )
+    ).scalar() or 0
+    n_linked = (
+        await conn.execute(
+            text(
+                "SELECT count(DISTINCT carried_to_subcap) FROM control.story_subcap_carry c "
+                "JOIN control.story s ON s.story_key = c.story_key "
+                "WHERE c.target_version = :tv AND c.carried_to_subcap IS NOT NULL "
+                "AND c.status IN ('confirmed', 'review') AND NOT s.is_synthetic"
+            ),
+            {"tv": target_version},
+        )
+    ).scalar() or 0
+    return {
+        "catalogue_ref_links": int(inserted),
+        "catalogue_refs_resolved_pairs": len(links),
+        "catalogue_refs_unresolved": unresolved,
+        "jira_linked_subcaps": int(n_linked),
     }

@@ -184,6 +184,37 @@ def test_subcap_connections(client: TestClient) -> None:
 
 
 @needs_db
+def test_value_chain_real_names_and_sv(client: TestClient) -> None:
+    """A3 on the catalogue's REAL VC mapping (v7 sheet 21): per-subvertical chains with the actual
+    stage NAMES (the VCC code is only an id), in chain order; FC is Farm Credit."""
+    fc = client.get("/api/catalogue/v7/value-chain?sv=FC").json()
+    assert fc["source"] == "catalogue_vc_mapping"
+    assert len(fc["clusters"]) > 10
+    names = [c["name"] for c in fc["clusters"]]
+    assert all(not n.startswith("VCC-") for n in names)  # names are names, never codes
+    assert any("AG " in n or "FARM" in n.upper() or "FCA" in n for n in names)  # Farm Credit
+    # a different subvertical has a different chain
+    rb = client.get("/api/catalogue/v7/value-chain?sv=RB").json()
+    assert [c["name"] for c in rb["clusters"]] != names
+    # 'all' aggregates distinct stages across subverticals
+    allv = client.get("/api/catalogue/v7/value-chain").json()
+    assert len(allv["clusters"]) >= len(fc["clusters"])
+
+
+@needs_db
+def test_summary_changes_by_subvertical(client: TestClient) -> None:
+    """The SV toggle must genuinely change the mission-control numbers: counts scope to the
+    subcaps participating in that subvertical's value chain."""
+    allv = client.get("/api/catalogue/v7/summary").json()
+    fc = client.get("/api/catalogue/v7/summary?sv=FC").json()
+    assert fc["total_subcaps"] < allv["total_subcaps"]
+    assert sum(p["subcap_count"] for p in fc["pillars"]) == fc["total_subcaps"]
+    # unknown SV scopes to zero rather than silently showing everything
+    none = client.get("/api/catalogue/v7/summary?sv=ZZ").json()
+    assert none["total_subcaps"] == 0
+
+
+@needs_db
 def test_summary(client: TestClient) -> None:
     r = client.get("/api/catalogue/v7/summary")
     assert r.status_code == 200

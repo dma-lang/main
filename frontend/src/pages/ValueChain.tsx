@@ -50,7 +50,7 @@ function RadialWheel({ segs }: { segs: ValueChainCluster[] }) {
                 textAnchor="middle"
                 dominantBaseline="middle"
               >
-                {s.code}
+                {s.name.length > 16 ? s.name.slice(0, 15) + '…' : s.name}
               </text>
             </g>
           );
@@ -68,6 +68,26 @@ function RadialWheel({ segs }: { segs: ValueChainCluster[] }) {
 }
 
 const PILLARS = ['all', 'P1', 'P2', 'P3', 'P4'];
+const PILLAR_LABEL: Record<string, string> = {
+  P1: 'P1 · Strategy, governance & culture',
+  P2: 'P2 · Customer experience & engagement',
+  P3: 'P3 · Process automation & operations',
+  P4: 'P4 · Data & AI enablement',
+};
+
+// The real VC mapping has no finer stage split (a cluster IS a stage), so the drilldown groups
+// the stage's subcaps by pillar — with the member ids carried so filtering stays exact.
+function groupByPillar(c: ValueChainCluster): { name: string; count: number; ids?: Set<string> }[] {
+  const by = new Map<string, Set<string>>();
+  for (const s of c.subcaps) {
+    const k = s.pillar ?? s.id.slice(0, 2);
+    if (!by.has(k)) by.set(k, new Set());
+    by.get(k)!.add(s.id);
+  }
+  return [...by.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([pl, ids]) => ({ name: PILLAR_LABEL[pl] ?? pl, count: ids.size, ids }));
+}
 
 export function ValueChain() {
   const ui = useUi();
@@ -79,7 +99,7 @@ export function ValueChain() {
   const res = useValueChain(version, pillar, ui.sv);
   const data = res.data;
   const clusters = data?.clusters ?? [];
-  useEffect(() => setOpen(clusters[0]?.code ?? null), [version, pillar]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => setOpen(clusters[0]?.code ?? null), [version, pillar, ui.sv]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const current = clusters.find((c) => c.code === open) ?? null;
 
@@ -87,7 +107,11 @@ export function ValueChain() {
     <Page
       eyebrow="A · Explore"
       title="Value chain atlas"
-      intro="Value-chain segments derived live from this catalogue version's own capability structure — deduped and smart-clustered, never hardcoded. Each version derives its own from its own data."
+      intro={
+        data?.source === 'catalogue_vc_mapping'
+          ? 'The catalogue\'s own value chain — real, named stages per subvertical from the v7 VC-mapping sheet (cascaded to versions without their own, e.g. v5). Pick a subvertical in the header to see that industry\'s chain in order.'
+          : 'Value-chain segments derived live from this catalogue version\'s own capability structure — used only when a version ships no VC mapping of its own.'
+      }
       actions={
         <button
           className={'btn sm ' + (radial ? 'primary' : 'ghost')}
@@ -153,7 +177,7 @@ export function ValueChain() {
                     <span className="mono" style={{ fontSize: 9.5, color: 'var(--z-slate)', fontWeight: 700 }}>
                       {c.code}
                     </span>
-                    <PillarDot p={c.pillar} s={7} />
+                    {c.pillar && <PillarDot p={c.pillar} s={7} />}
                   </div>
                   <div style={{ fontSize: 12.5, fontWeight: 600, minHeight: 32, lineHeight: 1.2 }}>
                     {c.name}
@@ -175,7 +199,7 @@ export function ValueChain() {
                 <div className="row gap8">
                   <span className="chip soft mono">{current.code}</span>
                   <b style={{ fontSize: 15 }}>{current.name}</b>
-                  <span className="chip soft">{current.pillar}</span>
+                  {current.pillar && <span className="chip soft">{current.pillar}</span>}
                   <span className="muted" style={{ fontSize: 12 }}>{current.count} subcaps</span>
                 </div>
               </div>
@@ -187,7 +211,10 @@ export function ValueChain() {
                 </div>
               )}
               <div style={{ display: 'grid', gap: 10 }}>
-                {current.stages.map((st) => (
+                {(
+                  (current.stages as { name: string; count: number; ids?: Set<string> }[] | undefined) ??
+                  groupByPillar(current)
+                ).map((st) => (
                   <div key={st.name}>
                     <div className="row gap8" style={{ marginBottom: 6 }}>
                       <span className="eyebrow" style={{ margin: 0 }}>
@@ -199,7 +226,7 @@ export function ValueChain() {
                     </div>
                     <div className="row wrap gap6">
                       {current.subcaps
-                        .filter((s) => s.stage === st.name)
+                        .filter((s) => (st.ids ? st.ids.has(s.id) : s.stage === st.name))
                         .map((s) => (
                           <span
                             key={s.id}

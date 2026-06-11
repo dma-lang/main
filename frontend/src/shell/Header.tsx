@@ -24,15 +24,16 @@ const LENSES = [
   { v: 'lifecycle', l: 'Lens: Lifecycle' },
 ];
 
-// 9 canonical subverticals (PRD D3).
+// 9 canonical subverticals — codes match the DATA (corpus story_sv_code / tier suffixes and the
+// catalogue's VC-mapping sheet), so the SV filter actually selects rows. FC is Farm Credit.
 const SUBVERTICALS = [
-  { code: 'BK', name: 'Retail banking' },
+  { code: 'RB', name: 'Retail banking' },
+  { code: 'CU', name: 'Credit unions' },
   { code: 'CL', name: 'Commercial lending' },
   { code: 'CIB', name: 'Corporate & investment banking' },
-  { code: 'FC', name: 'Consumer finance' },
-  { code: 'CU', name: 'Credit unions' },
-  { code: 'WM', name: 'Wealth & asset management' },
-  { code: 'RIA', name: 'Registered investment advisors' },
+  { code: 'FC', name: 'Farm credit / ag lending' },
+  { code: 'AM', name: 'Asset & wealth management' },
+  { code: 'RIA', name: 'RIA / broker-dealer' },
   { code: 'IC', name: 'Insurance carriers' },
   { code: 'IB', name: 'Insurance brokerages' },
 ];

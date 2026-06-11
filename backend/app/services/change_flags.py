@@ -318,7 +318,8 @@ async def _scan_no_delivery(
             await conn.execute(
                 text(
                     "SELECT s.subcap_id, s.name, s.lifecycle_state, cap.name AS l2, "
-                    "left(s.subcap_id, 2) AS pillar "
+                    "left(s.subcap_id, 2) AS pillar, "
+                    "jsonb_array_length(s.story_refs) AS n_refs "
                     f"FROM {schema}.subcap s "
                     f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id "
                     "WHERE s.lifecycle_state <> :dead "
@@ -339,13 +340,22 @@ async def _scan_no_delivery(
     created = 0
     for r in rows[:cap]:
         life = str(r["lifecycle_state"])
+        n_refs = int(r["n_refs"] or 0)
+        # honest nuance: the catalogue may REFERENCE Jira stories that are not in the corpus
+        # export — weaker decay evidence, spelled out so the admin decides with full context
+        ref_note = (
+            f" Note: the catalogue references {n_refs} Jira stor"
+            f"{'y' if n_refs == 1 else 'ies'} for it that are not present in the corpus export."
+            if n_refs
+            else ""
+        )
         detail = {
             "title": f"Decayed (no Jira delivery): {r['name']}",
             "body": (
                 f"{r['subcap_id']} has zero real Jira stories in {version_id} (synthetic delivery "
                 f"is excluded by construction). It currently reads '{life}'. A decayed subcap can "
                 "stay active — approve to mark it INACTIVE (lifecycle -> 'dead'), or reject to "
-                "keep it. Nothing is deactivated automatically."
+                f"keep it. Nothing is deactivated automatically.{ref_note}"
             ),
             "name": r["name"],
             "pillar": r["pillar"],

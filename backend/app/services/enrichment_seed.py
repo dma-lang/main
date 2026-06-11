@@ -126,3 +126,25 @@ def enrichment_for(subcap_id: str) -> dict[str, list[dict[str, Any]]]:
 def counts_for(subcap_id: str) -> dict[str, int]:
     e = enrichment_for(subcap_id)
     return {k: len(v) for k, v in e.items()}
+
+
+@functools.lru_cache(maxsize=1)
+def story_refs_map() -> dict[str, list[str]]:
+    """subcap_id -> the reference catalogue's own Jira story refs (from catalogue_<ref>.json.gz),
+    for versions that carry none of their own. Uses the same extraction provisioning applies."""
+    from app.services.provision import _seed_story_refs
+
+    ref = reference_version()
+    if not ref:
+        return {}
+    path = _SEED_DIR / f"catalogue_{ref}.json.gz"
+    if not path.exists():
+        return {}
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        cat = json.load(fh)
+    out: dict[str, list[str]] = {}
+    for s in cat.get("subcaps", []):
+        refs = _seed_story_refs(s)
+        if refs:
+            out[str(s["id"])] = refs
+    return out

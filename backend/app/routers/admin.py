@@ -251,6 +251,14 @@ async def upload_catalogue(
                 },
                 fh,
             )
+        # The per-subcap × per-subvertical VALUE-CHAIN mapping (sheet 21) — persisted so the
+        # atlas / SV filters run on the catalogue's REAL stage names for this version too.
+        vc = wb_service.parse_vc_mapping_zip(raw)
+        if vc.get("mapping"):
+            with _gzip.open(
+                _SEED_DIR / f"vc_mapping_{version}.json.gz", "wt", encoding="utf-8"
+            ) as fh:
+                json.dump(vc, fh)
         # The workbooks may embed a user-story tab: its non-Jira rows are SYNTHETIC stories,
         # seeded per version and ingested labelled (is_synthetic) at carry — the real corpus
         # comes only from the Full Story Catalog, so the two never mix.

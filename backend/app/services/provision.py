@@ -122,6 +122,23 @@ def _statements(sql: str) -> Iterator[str]:
             yield stmt
 
 
+_JIRA_REF_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,5}$")
+
+
+def _seed_story_refs(s: dict[str, Any]) -> list[str]:
+    """The subcap's own Jira story references, from EITHER seed shape: the committed v7 seed's
+    ``stories: [{'k': 'JIRA-BCFSC-1273', …}]`` (richer extraction) or the workbook-upload parser's
+    ``story_refs: ['BCFSC-1273', …]``. Normalised (JIRA- prefix stripped), validated as real
+    issue-key shapes, deduped + sorted for determinism."""
+    raw: list[str] = list(s.get("story_refs") or [])
+    for st in s.get("stories") or []:
+        k = st.get("k") if isinstance(st, dict) else None
+        if k:
+            raw.append(str(k))
+    keys = {re.sub(r"^JIRA-", "", str(k).strip()) for k in raw}
+    return sorted(k for k in keys if _JIRA_REF_RE.match(k))
+
+
 def _derive(
     cat: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -155,6 +172,10 @@ def _derive(
                 "lifecycle_state": s.get("life", "stable"),
                 "zennify_status": s.get("status"),
                 "completeness": completeness,
+                # the catalogue's own Jira references — carried into cat_<v>.subcap.story_refs so
+                # carry-forward can link them against the corpus (the user's "v7 references a lot
+                # of Jira stories" — it does, and now they count)
+                "story_refs": json.dumps(_seed_story_refs(s)),
             }
         )
     return pillars, categories, list(caps.values()), subcaps
@@ -335,6 +356,85 @@ async def _record_id_governance(conn: AsyncConnection) -> tuple[int, int]:
         )
         written += len(recs)
     return written, deferred
+
+
+def _load_vc_mapping(version_id: str) -> dict[str, Any] | None:
+    """The per-subcap × per-subvertical value-chain mapping (vc_mapping_<v>.json.gz) — committed
+    for v7 (extracted from the workbooks' 21_VC_Mapping_PerSubcap sheet) and written at runtime by
+    the upload endpoint. A version without its own CASCADES the reference's (v7) mapping for the
+    subcap ids it shares — the same identity rule the enrichment fallback uses."""
+    own = _SEED_DIR / f"vc_mapping_{version_id}.json.gz"
+    if own.exists():
+        with gzip.open(own, "rt", encoding="utf-8") as fh:
+            data: dict[str, Any] = json.load(fh)
+        data["cascaded_from"] = None
+        return data
+    best: tuple[int, str] | None = None
+    for f in _SEED_DIR.glob("vc_mapping_*.json.gz"):
+        vid = f.stem.replace(".json", "").split("_", 2)[2]
+        num = int("".join(ch for ch in vid if ch.isdigit()) or 0)
+        if vid != version_id and (best is None or num > best[0]):
+            best = (num, vid)
+    if best is None:
+        return None
+    with gzip.open(_SEED_DIR / f"vc_mapping_{best[1]}.json.gz", "rt", encoding="utf-8") as fh:
+        ref: dict[str, Any] = json.load(fh)
+    ref["cascaded_from"] = best[1]
+    return ref
+
+
+async def _seed_value_chain(
+    conn: AsyncConnection, schema: str, vc: dict[str, Any]
+) -> dict[str, Any]:
+    """Seed value_chain_cluster + subcap_vcc from the mapping (filtered to this version's own
+    subcap ids, so a cascaded mapping never invents subcaps). vcc ids are deterministic
+    (VCC-NN over the sorted distinct stage names)."""
+    own_ids = {
+        str(r[0])
+        for r in (await conn.execute(text(f"SELECT subcap_id FROM {schema}.subcap"))).all()
+    }
+    rows = [m for m in vc.get("mapping", []) if str(m["subcap_id"]) in own_ids]
+    if not rows:
+        return {"vc_stages": 0, "vc_links": 0, "vc_cascaded_from": vc.get("cascaded_from")}
+    names = sorted({s for m in rows for s in m["stages"]})
+    vcc_by_name = {n: f"VCC-{i + 1:02d}" for i, n in enumerate(names)}
+    await conn.execute(
+        text(f"INSERT INTO {schema}.value_chain_cluster (vcc_id, name) VALUES (:v, :n)"),
+        [{"v": v, "n": n} for n, v in vcc_by_name.items()],
+    )
+    ord_by_sv: dict[tuple[str, str], int] = {}
+    for sv, order in (vc.get("stage_order") or {}).items():
+        for i, st in enumerate(order):
+            ord_by_sv[(sv, st)] = i
+    links: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for m in rows:
+        for st in m["stages"]:
+            key = (m["subcap_id"], vcc_by_name[st], m["sv"])
+            if key in seen:
+                continue
+            seen.add(key)
+            links.append(
+                {
+                    "sub": m["subcap_id"],
+                    "vcc": vcc_by_name[st],
+                    "sv": m["sv"],
+                    "stage": st,
+                    "ord": ord_by_sv.get((m["sv"], st)),
+                }
+            )
+    await conn.execute(
+        text(
+            f"INSERT INTO {schema}.subcap_vcc (subcap_id, vcc_id, subvertical, stage, stage_ord) "
+            "VALUES (:sub, :vcc, :sv, :stage, :ord)"
+        ),
+        links,
+    )
+    return {
+        "vc_stages": len(names),
+        "vc_links": len(links),
+        "vc_cascaded_from": vc.get("cascaded_from"),
+    }
 
 
 def _toks(s: str | None) -> set[str]:
@@ -540,9 +640,9 @@ async def bring_version_online(
             text(
                 f"INSERT INTO {schema}.subcap "
                 "(subcap_id, capability_id, name, description, solution_type, tier, "
-                "lifecycle_state, zennify_status, completeness, search) VALUES "
+                "lifecycle_state, zennify_status, completeness, story_refs, search) VALUES "
                 "(:subcap_id, :capability_id, :name, :description, :solution_type, :tier, "
-                ":lifecycle_state, :zennify_status, :completeness, "
+                ":lifecycle_state, :zennify_status, :completeness, CAST(:story_refs AS jsonb), "
                 "to_tsvector('english', coalesce(:name, '') || ' ' || coalesce(:description, '')))"
             ),
             subcaps,
@@ -552,6 +652,14 @@ async def bring_version_online(
         # Cross-version enrichment: a base-only version (v5) inherits v7's platforms / use cases /
         # maturity / personas / offerings per subcap, so no deep dive is left empty (user ask).
         inherited = await _inherit_enrichment(conn, schema, version_id)
+        # Value chain: the REAL per-subvertical stage mapping (v7 sheet 21); a version without its
+        # own cascades the reference's for the subcap ids it shares (user ask: v7 -> v5).
+        vc = _load_vc_mapping(version_id)
+        vc_stats = (
+            await _seed_value_chain(conn, schema, vc)
+            if vc
+            else {"vc_stages": 0, "vc_links": 0, "vc_cascaded_from": None}
+        )
         # Provisioning makes a version COMMITTABLE, not active: activation is a separate,
         # admin-approved toggle (exactly one active). Re-provisioning the active version keeps
         # it active; the very first provision auto-activates so a fresh workspace works.
@@ -608,6 +716,9 @@ async def bring_version_online(
         "offerings": int(offerings or 0),
         "enrichment_inherited_from": inherited.get("inherited_from"),
         "enrichment_inherited_subcaps": inherited.get("inherited_subcaps", 0),
+        "vc_stages": vc_stats["vc_stages"],
+        "vc_links": vc_stats["vc_links"],
+        "vc_cascaded_from": vc_stats["vc_cascaded_from"],
         "id_links_recorded": gov_written,
         "id_links_deferred": gov_deferred,
     }

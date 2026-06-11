@@ -71,10 +71,10 @@ export function usePatchPreferences() {
   });
 }
 
-export const useSummary = (version: string) =>
+export const useSummary = (version: string, sv = 'all') =>
   useQuery<CatalogueSummary>({
-    queryKey: ['summary', version],
-    queryFn: () => api.summary(version),
+    queryKey: ['summary', version, sv],
+    queryFn: () => api.summary(version, sv),
     enabled: !!version,
   });
 

@@ -54,7 +54,108 @@ _CAP_ALIASES: dict[str, str] = {
     "zennifystatus": "status",
     "primaryproducts": "platforms_raw",
     "l3platformsaddressingsubcap": "platforms_raw",
+    # per-subcap REAL Jira story references the catalogue authors mapped (all four v7 pillar
+    # workbooks carry this column) — they become story_subcap_carry links at carry-forward
+    "storyrefswithuclinks": "story_refs",
+    "storyrefs": "story_refs",
+    "jirastoryrefs": "story_refs",
 }
+
+# Jira issue keys inside a refs cell ("BCFSC-1273, EBT-277 | MCUDA-13 …")
+_JIRA_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d{1,5}\b")
+
+# The 9 canonical subverticals as the v7 VC-mapping sheet names them -> data codes (these match
+# the corpus story_sv_code / tier suffixes: RB, CU, CL, CIB, FC=Farm Credit, AM, RIA, IC, IB).
+_VC_SV_CODES: dict[str, str] = {
+    "retailbanking": "RB",
+    "creditunions": "CU",
+    "commerciallending": "CL",
+    "corpinvestmentbanking": "CIB",
+    "farmcreditaglending": "FC",
+    "assetwealthmanagement": "AM",
+    "riabrokerdealer": "RIA",
+    "insurancecarriers": "IC",
+    "insurancebrokerages": "IB",
+}
+
+
+def parse_vc_mapping_zip(data: bytes) -> dict[str, Any]:
+    """The per-subcap × per-subvertical VALUE-CHAIN mapping the v7 pillar workbooks ship
+    (sheet ``21_VC_Mapping_PerSubcap``): each subvertical column holds the named value-chain
+    stage(s) the subcap belongs to ("▌ BACK OFFICE OPS", …). Returns
+    ``{svs: {code: display}, mapping: [{subcap_id, sv, stages: [...]}], stage_order: {sv: [...]}}``
+    — stage order preserved as first-seen per subvertical (the sheet lists subcaps in chain
+    order), names kept verbatim (the user-facing labels), deterministic output. Workbooks without
+    the sheet yield an empty mapping (v5 inherits the reference's at provision)."""
+    books = _pillar_workbooks(data)
+    mapping: dict[tuple[str, str], list[str]] = {}
+    svs: dict[str, str] = {}
+    stage_order: dict[str, list[str]] = {}
+    for fname, blob in books:
+        wb = _load_book(fname, blob)
+        ws = _sheet(wb, "vcmappingpersubcap", "vcmapping")
+        if ws is None:
+            continue
+        rows = ws.iter_rows(values_only=True)
+        header: list[str] | None = None
+        for r in rows:  # the sheet has a banner block; the real header starts at 'Category'
+            cells = [str(x or "") for x in r]
+            if cells and cells[0] == "Category" and any("Sub_Cap_ID" in c for c in cells):
+                header = cells
+                break
+        if header is None:
+            continue
+        sid_i = header.index("Sub_Cap_ID")
+        sv_cols: list[tuple[int, str]] = []
+        for i, h in enumerate(header):
+            code = _VC_SV_CODES.get(_norm_header(h))
+            if code:
+                sv_cols.append((i, code))
+                svs.setdefault(code, h.strip())
+        for r in rows:
+            if len(r) <= sid_i:
+                continue
+            sid = str(r[sid_i] or "").strip()
+            if not _SUBCAP_ID_RE.match(sid):
+                continue
+            for i, code in sv_cols:
+                cell = str(r[i] or "") if i < len(r) else ""
+                # stages are "▌"-prefixed blocks; commas INSIDE a stage name are part of it.
+                # "- (N/A)" / "Not applicable — …" cells mean the subcap has no stage in this
+                # subvertical's chain — honest absence, not a stage.
+                stages = [s.strip(" ▌\n\t") for s in cell.split("▌")]
+                # "(applicable via X pattern)" is provenance, not part of the stage name —
+                # stripping it collapses the cross-pattern variants into the one real stage
+                stages = [
+                    re.sub(r"\s*\(applicable via [^)]*\)\s*$", "", re.sub(r"\s+", " ", s)).strip()
+                    for s in stages
+                ]
+                stages = [
+                    s
+                    for s in stages
+                    if s
+                    and not re.match(r"^-?\s*\(?n/?a\)?\.?$", s, re.I)
+                    and not s.lower().startswith("not applicable")
+                    and s.lower() not in ("none", "-")
+                ]
+                if not stages:
+                    continue
+                mapping.setdefault((sid, code), [])
+                order = stage_order.setdefault(code, [])
+                for st in stages:
+                    if st not in mapping[(sid, code)]:
+                        mapping[(sid, code)].append(st)
+                    if st not in order:
+                        order.append(st)
+    return {
+        "svs": svs,
+        "mapping": [
+            {"subcap_id": sid, "sv": sv, "stages": stages}
+            for (sid, sv), stages in sorted(mapping.items())
+        ],
+        "stage_order": stage_order,
+    }
+
 
 _STORY_ALIASES: dict[str, str] = {
     "storykey": "story_key",
@@ -242,6 +343,9 @@ def parse_catalogue_zip(
                     "status": _cell(row, idx, "status") or None,
                     "life": "stable",
                     "comp": 0,
+                    # the catalogue's own Jira story references for this subcap (deduped, sorted
+                    # for a deterministic seed) — linked against the corpus at carry-forward
+                    "story_refs": sorted(set(_JIRA_KEY_RE.findall(_cell(row, idx, "story_refs")))),
                 }
             )
             book_detail["subcaps_parsed"] += 1

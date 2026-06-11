@@ -30,7 +30,7 @@ export function MissionControl() {
   const sv = useUi((s) => s.sv);
   const lens = useUi((s) => s.lens);
   const setPillar = useUi((s) => s.setPillar);
-  const summary = useSummary(version);
+  const summary = useSummary(version, sv);
   const heat = useHeatmap(version, lens, pillar, sv);
   const flagsQ = useChangeFlags('open');
   const pendingQ = useSuggestions('pending');

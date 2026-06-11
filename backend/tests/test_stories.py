@@ -74,6 +74,11 @@ def test_carry_summary(carried: dict[str, Any]) -> None:
     assert total == carried["stories_ingested"]
     # The v7 workbooks' embedded synthetic stories ingest alongside, labelled, never mixed.
     assert carried["synthetic_ingested"] == 4552
+    # The v7 CATALOGUE's own per-subcap Jira references (Story_Refs_with_UC_Links) become real
+    # links wherever the key resolves to a stored corpus story — exact, from the canonical seeds.
+    assert carried["catalogue_ref_links"] == 1929  # additional links actually landed
+    assert carried["catalogue_refs_unresolved"] == 160  # counted, never invented as stories
+    assert carried["jira_linked_subcaps"] == 318  # up from the corpus' own 87
 
 
 @needs_db
@@ -134,7 +139,7 @@ def test_subcap_stories_endpoint(client: TestClient) -> None:
     r = client.get("/api/catalogue/v7/subcaps/P2C3.5.1/stories?size=5")
     assert r.status_code == 200
     body = r.json()
-    assert body["total"] == 1501
+    assert body["total"] == 1513  # 1501 corpus carries + 12 catalogue-ref links
     assert len(body["items"]) == 5
     # ordered by composite desc, with the graded sub-scores present
     first = body["items"][0]
@@ -145,13 +150,15 @@ def test_subcap_stories_endpoint(client: TestClient) -> None:
 @needs_db
 def test_detail_n_stories_lights_up(client: TestClient) -> None:
     detail = client.get("/api/catalogue/v7/subcaps/P2C3.5.1").json()
-    assert detail["n_stories"] == 1501
+    assert detail["n_stories"] == 1513
 
 
 @needs_db
 def test_undelivered_subcap_has_no_stories(client: TestClient) -> None:
-    # A subcap with no delivery history shows an honest zero, not borrowed counts.
-    r = client.get("/api/catalogue/v7/subcaps/P1C1.1.1/stories")
+    # A subcap with no delivery history AND no catalogue refs shows an honest zero, not
+    # borrowed counts. (P1C1.1.1 is no longer such a case: the v7 catalogue references real Jira
+    # stories for it, which now link.)
+    r = client.get("/api/catalogue/v7/subcaps/P1C1.1.6/stories")
     assert r.status_code == 200
     assert r.json()["total"] == 0
 
@@ -224,7 +231,9 @@ def test_analysis_view_is_jira_only(carried: dict[str, Any]) -> None:
         return int(linked or 0), int(syn_carries or 0)
 
     linked, syn_carries = asyncio.run(_q())
-    assert linked == 14406  # every analysis row is a real Jira story
+    # every analysis row is a real Jira story: the 14,406 corpus carries + the catalogue's own
+    # resolved story refs (multi-subcap links, via='catalogue_ref') — synthetic never enters
+    assert linked == 14406 + carried["catalogue_ref_links"]
     assert syn_carries > 0  # synthetic carries exist (visible in the library) yet never leak
 
 
