@@ -270,26 +270,77 @@ done
 [ "${MIGRATED:-0}" = "1" ] || die "migration still failing after 3 heal attempts — error lines: $(migrate_logs | grep -E '^(psycopg|sqlalchemy)' | sort -u | head -3)"
 
 # ------------------------------------------------------------------ 8. end-to-end verify
-step "8. verify ${URL}/healthz"
-HEALTH=""
-for _ in 1 2 3 4 5; do
-  HEALTH="$(curl -fsS --max-time 20 "${URL}/healthz" 2>/dev/null || true)"
-  grep -q '"db":"ok"' <<<"$HEALTH" && break
-  sleep 5
-done
-if grep -q 'Error 404' <<<"$HEALTH"; then
-  die "Google's 404 page (not the app) at ${URL} — external requests are not reaching the
-service. The doctor already set ingress to 'all'; if this persists, an organisation policy or a
-load balancer in front of Cloud Run is intercepting the URL. Also make sure you are opening
-EXACTLY ${URL} — an older bookmark may point at a different, stale service."
+step "8. verify external reachability + health at ${URL}"
+# /healthz ALWAYS returns HTTP 200 (db state is a body field, never an HTTP error). So a non-200
+# means the request never reached the app — it was rejected at Google's frontend = ingress / org
+# policy / wrong URL, NOT the database. Re-assert public ingress first (the app's own auth fails
+# closed, so external ingress is safe).
+CUR_INGRESS="$(gcloud run services describe "$SERVICE" --region "$REGION" \
+  --format='value(metadata.annotations."run.googleapis.com/ingress")')"
+if [ "${CUR_INGRESS:-all}" != "all" ]; then
+  gcloud run services update "$SERVICE" --region "$REGION" --ingress all --quiet \
+    && fixed "ingress -> all" || warn "could not set ingress to all (org policy?)"
 fi
-grep -q '"status":"ok"' <<<"$HEALTH" || die "healthz did not return ok: ${HEALTH:-<no response>}"
-grep -q '"db":"ok"'     <<<"$HEALTH" || die "app is up but db is down: ${HEALTH}"
-ok "${HEALTH}"
-# Sign-in config smoke: the SPA needs only the OAuth CLIENT ID (Google Identity Services
-# ID-token flow — the client SECRET is for authorization-code server flows this app does not
-# use, by design; there is nothing to configure for it).
-CFG="$(curl -fsS --max-time 20 "${URL}/api/config" 2>/dev/null || true)"
+
+# Diagnostic probe: capture HTTP code AND body (no -f, so 404/503 bodies are visible). Retry to
+# absorb a just-deployed revision and the freshly-enabled public IP settling.
+TMP="$(mktemp)"
+CODE=000; BODY=""
+for _ in 1 2 3 4 5 6; do
+  CODE="$(curl -sS -o "$TMP" -w '%{http_code}' --max-time 20 "${URL}/healthz" 2>/dev/null || echo 000)"
+  BODY="$(cat "$TMP" 2>/dev/null)"
+  { [ "$CODE" = "200" ] && grep -q '"db":"ok"' <<<"$BODY"; } && break
+  sleep 8
+done
+rm -f "$TMP"
+echo "  HTTP ${CODE} — $(head -c 200 <<<"$BODY" | tr '\n' ' ')"
+
+case "$CODE" in
+  200)
+    if grep -q '"db":"ok"' <<<"$BODY"; then
+      ok "healthy: ${BODY}"
+    else
+      die "the app is reachable but reports db=down — the SERVING revision lacks the Cloud SQL
+attach or the secret. Re-run the doctor (its step 6 deploys with both); if it persists, the
+serving revision is stale: gcloud run services update-traffic ${SERVICE} --region ${REGION} --to-latest.
+body: ${BODY}"
+    fi
+    ;;
+  403|404)
+    # Reached Google's frontend, not the app: ingress, an org policy override, or a stale URL.
+    POL="$(gcloud org-policies describe run.allowedIngress --project "$PROJECT" 2>/dev/null \
+      | grep -iE 'internal|INTERNAL' || true)"
+    if [ -n "$POL" ]; then
+      die "ROOT CAUSE: the org policy constraints/run.allowedIngress restricts this project to
+INTERNAL ingress, so ${URL} is unreachable from the public internet no matter the per-service
+setting (this is why /healthz 404s externally while the app is healthy and migrated internally).
+If you have orgpolicy.policyAdmin on the project, lift it with:
+    gcloud org-policies reset run.allowedIngress --project ${PROJECT}
+  then re-run this doctor. Otherwise an ORG ADMIN must allow external ingress (or exempt the
+'${SERVICE}' service), or you front it with an external HTTPS Load Balancer / IAP, or reach it
+from inside the VPC. Nothing in the app or this script can override an org policy."
+    fi
+    OTHERS="$(gcloud run services list --format='value(metadata.name)' 2>/dev/null \
+      | grep -v "^${SERVICE}\$" | tr '\n' ' ')"
+    die "external request hit Google's ${CODE} (not the app). Ingress is now 'all' with no
+org-policy override detected, so you are almost certainly opening a STALE url. The ONE url for the
+live service is:
+    ${URL}
+Other Cloud Run services in this project (a stale bookmark may point at one): ${OTHERS:-none}"
+    ;;
+  000)
+    die "no HTTP response from ${URL} (timeout/DNS/connection). A VPC-SC perimeter or network
+policy in front of Cloud Run can block the run.app URL externally — otherwise retry in a minute."
+    ;;
+  *)
+    die "unexpected HTTP ${CODE} from ${URL}/healthz — body: ${BODY:-<empty>}"
+    ;;
+esac
+
+# Sign-in config smoke: the SPA needs only the OAuth CLIENT ID (Google Identity Services ID-token
+# flow — the client SECRET is for authorization-code server flows this app does not use; there is
+# nothing to configure for it).
+CFG="$(curl -sS --max-time 20 "${URL}/api/config" 2>/dev/null || true)"
 if grep -q '"google_client_id":"..*"' <<<"$CFG"; then
   ok "sign-in configured — /api/config serves the client id"
 else
