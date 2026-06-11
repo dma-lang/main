@@ -21,6 +21,15 @@ All notable changes to this project are documented here. The format is based on
   `--client-id` to set the OAuth client id. Documented as the recommended path in DEPLOYMENT A11.
 
 ### Fixed
+- **The "unreachable" service was reachable all along — on its other URL.** A Cloud Run service
+  carries two URL formats: the deterministic `<service>-<projectNumber>.<region>.run.app` (what
+  `gcloud run deploy` prints) and the legacy hash `<service>-<hash>-<rc>.a.run.app` (what
+  `status.url` can still report) — and on this service only the deterministic one routes; the
+  legacy URL 404s at Google's frontend. Every health probe (and browser bookmark) using the
+  legacy URL produced a false "service unreachable / database not ready" while the app was
+  healthy and fully migrated. The doctor now probes BOTH formats, adopts whichever answers, and
+  prints per-URL HTTP codes; its final output and the OAuth-origins instruction use the proven
+  live URL.
 - **Migration kept failing on a connectivity cause no config string could fix — diagnosed by
   simulation, healed by the doctor.** Running the exact job entrypoint
   (`uv run python -m app.migrate`) against a fresh empty database applies all 11 migrations with

@@ -270,7 +270,7 @@ done
 [ "${MIGRATED:-0}" = "1" ] || die "migration still failing after 3 heal attempts — error lines: $(migrate_logs | grep -E '^(psycopg|sqlalchemy)' | sort -u | head -3)"
 
 # ------------------------------------------------------------------ 8. end-to-end verify
-step "8. verify external reachability + health at ${URL}"
+step "8. verify external reachability + health"
 # /healthz ALWAYS returns HTTP 200 (db state is a body field, never an HTTP error). So a non-200
 # means the request never reached the app — it was rejected at Google's frontend = ingress / org
 # policy / wrong URL, NOT the database. Re-assert public ingress first (the app's own auth fails
@@ -282,18 +282,34 @@ if [ "${CUR_INGRESS:-all}" != "all" ]; then
     && fixed "ingress -> all" || warn "could not set ingress to all (org policy?)"
 fi
 
-# Diagnostic probe: capture HTTP code AND body (no -f, so 404/503 bodies are visible). Retry to
-# absorb a just-deployed revision and the freshly-enabled public IP settling.
+# A Cloud Run service can carry TWO url formats — the deterministic one
+# (<service>-<projectNumber>.<region>.run.app, what `gcloud run deploy` prints) and the legacy
+# hash one (<service>-<hash>-<rc>.a.run.app, what status.url can still report) — and on some
+# services only the deterministic one actually routes (the legacy URL 404s at the GFE). Probing
+# only status.url produced a false "service unreachable" while the app was healthy the whole
+# time. Probe BOTH and adopt whichever answers.
+DET_URL="https://${SERVICE}-${PN}.${REGION}.run.app"
+CANDIDATES=("$DET_URL")
+[ -n "$URL" ] && [ "$URL" != "$DET_URL" ] && CANDIDATES+=("$URL")
+WINNER=""; CODE=000; BODY=""
 TMP="$(mktemp)"
-CODE=000; BODY=""
 for _ in 1 2 3 4 5 6; do
-  CODE="$(curl -sS -o "$TMP" -w '%{http_code}' --max-time 20 "${URL}/healthz" 2>/dev/null || echo 000)"
-  BODY="$(cat "$TMP" 2>/dev/null)"
-  { [ "$CODE" = "200" ] && grep -q '"db":"ok"' <<<"$BODY"; } && break
+  for u in "${CANDIDATES[@]}"; do
+    CODE="$(curl -sS -o "$TMP" -w '%{http_code}' --max-time 20 "${u}/healthz" 2>/dev/null || echo 000)"
+    BODY="$(cat "$TMP" 2>/dev/null)"
+    echo "  ${u} -> HTTP ${CODE}"
+    if [ "$CODE" = "200" ]; then WINNER="$u"; break 2; fi
+  done
   sleep 8
 done
 rm -f "$TMP"
-echo "  HTTP ${CODE} — $(head -c 200 <<<"$BODY" | tr '\n' ' ')"
+if [ -n "$WINNER" ]; then
+  URL="$WINNER"
+  ok "the live url is ${URL}"
+else
+  URL="$DET_URL"
+  echo "  no url format answered 200 — last body: $(head -c 200 <<<"$BODY" | tr '\n' ' ')"
+fi
 
 case "$CODE" in
   200)
