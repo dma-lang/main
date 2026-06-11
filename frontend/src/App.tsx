@@ -45,6 +45,16 @@ function Authed({ me }: { me: Me }) {
       )[0];
       setVersion(newest.version_id);
     }
+    // J1: straight after login, a workspace with NO catalogue lands on the automapping flow
+    // (upload -> parse -> map -> provision -> carry) instead of an empty mission control. Deep
+    // links and explicit pages are left alone; once a version exists, login lands on mission
+    // control as usual.
+    if (vs && vs.length === 0) {
+      const h = location.hash.replace(/[?].*$/, '');
+      if (h === '' || h === '#/' || h === '#/mission-control' || h === '#/login') {
+        location.hash = '#/onboarding';
+      }
+    }
   }, [versions.data, version, setVersion]);
 
   return <RouterProvider router={router} />;
