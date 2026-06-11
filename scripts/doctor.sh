@@ -208,6 +208,18 @@ if [ -z "$READY" ] || [ "$READY" != "$CREATED" ]; then
   die "service has no ready revision — fix the error above and re-run"
 fi
 ok "serving revision ${READY}"
+# Ingress: a service can deploy green yet Google-404 every external request when ingress is
+# restricted (internal / internal-and-cloud-load-balancing). The app's own auth fails closed, so
+# external ingress is safe — converge it.
+INGRESS="$(gcloud run services describe "$SERVICE" --region "$REGION" \
+  --format='value(metadata.annotations."run.googleapis.com/ingress")')"
+if [ -n "$INGRESS" ] && [ "$INGRESS" != "all" ]; then
+  warn "service ingress is '${INGRESS}' — external requests get Google's 404 page, not the app"
+  gcloud run services update "$SERVICE" --region "$REGION" --ingress all --quiet
+  fixed "ingress set to 'all' (sign-in still fails closed inside the app)"
+else
+  ok "ingress allows external traffic"
+fi
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
 
 # ------------------------------------------------------------------ 7. migrate (classify+heal)
@@ -265,6 +277,12 @@ for _ in 1 2 3 4 5; do
   grep -q '"db":"ok"' <<<"$HEALTH" && break
   sleep 5
 done
+if grep -q 'Error 404' <<<"$HEALTH"; then
+  die "Google's 404 page (not the app) at ${URL} — external requests are not reaching the
+service. The doctor already set ingress to 'all'; if this persists, an organisation policy or a
+load balancer in front of Cloud Run is intercepting the URL. Also make sure you are opening
+EXACTLY ${URL} — an older bookmark may point at a different, stale service."
+fi
 grep -q '"status":"ok"' <<<"$HEALTH" || die "healthz did not return ok: ${HEALTH:-<no response>}"
 grep -q '"db":"ok"'     <<<"$HEALTH" || die "app is up but db is down: ${HEALTH}"
 ok "${HEALTH}"
@@ -280,6 +298,13 @@ else
 fi
 
 step "DONE — healthy at ${URL}"
-echo "  one thing gcloud cannot check or fix for you: the OAuth client's Authorized JavaScript"
-echo "  origins must include exactly ${URL}"
-echo "  (GCP Console -> APIs & Services -> Credentials -> your web client). Then sign in."
+echo "  USE EXACTLY THIS URL in the browser. Older bookmarks may point at a stale service:"
+OTHERS="$(gcloud run services list --format='value(metadata.name)' 2>/dev/null | grep -v "^${SERVICE}\$" | head -6 | tr '\n' ' ')"
+[ -n "$OTHERS" ] && echo "  (other Cloud Run services exist in this project: ${OTHERS}— the CIA app is only '${SERVICE}')"
+echo ""
+echo "  Two things only the Console can do (gcloud has no API for either):"
+echo "  1. If Google shows 'Error 401: invalid_client' at sign-in, the configured OAuth client id"
+echo "     no longer exists (it was rotated/deleted). Create or open the CURRENT 'Web application'"
+echo "     client (Console -> APIs & Services -> Credentials), copy its Client ID, then:"
+echo "         bash scripts/doctor.sh --client-id <the-new-client-id>"
+echo "  2. On that SAME client, add to 'Authorized JavaScript origins':  ${URL}"
