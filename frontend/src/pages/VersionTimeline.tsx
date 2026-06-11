@@ -98,6 +98,7 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
 export function VersionTimeline() {
   const versions = useVersions();
   const active = useUi((s) => s.version);
+  const isAdmin = useUi((s) => s.adminView);
   const rows = versions.data ?? [];
 
   return (
@@ -106,13 +107,29 @@ export function VersionTimeline() {
       title="Version timeline"
       width="narrow"
       intro="Every catalogue snapshot, inspectable and reversible. Re-ingesting a newer version creates a new versioned database rather than overwriting history."
+      actions={
+        <button
+          className="btn primary sm"
+          disabled={!isAdmin}
+          title={isAdmin ? 'Upload & provision a new catalogue version' : 'Admin only'}
+          onClick={() => go('onboarding')}
+        >
+          {!isAdmin && <Icon n="lock" s={12} />}
+          <Icon n="upload" s={14} /> Upload new version
+        </button>
+      }
     >
       {rows.length === 0 ? (
         <div className="card pad">
-          <div className="muted" style={{ fontSize: 12.5 }}>
-            No catalogue version is provisioned yet. An admin brings one online from onboarding or the
-            schema mapping studio; it then persists for every user.
+          <div className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>
+            No catalogue version is provisioned yet. Upload the pillar-wise workbooks (a .zip of the
+            four pillar .xlsx files, or a single .xlsx) — the app parses them, provisions a new{' '}
+            <span className="mono">cat_&lt;version&gt;</span> schema, carries the story corpus
+            forward, and commits it to the dashboard for every user.
           </div>
+          <button className="btn primary" disabled={!isAdmin} onClick={() => go('onboarding')}>
+            <Icon n="upload" s={15} /> Upload & provision a catalogue
+          </button>
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
