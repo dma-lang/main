@@ -106,8 +106,16 @@ elif [ -n "$JOB_VPC" ]; then
 else
   warn "instance has NO public IP and the migrate job has no VPC egress — the Cloud SQL proxy"
   warn "cannot reach it; THIS is the 'server closed the connection unexpectedly' failure"
-  gcloud sql instances patch "$SQL_INSTANCE" --assign-ip --quiet
-  fixed "enabled the instance public IP (IAM-gated proxy; no authorized networks = not exposed)"
+  if gcloud sql instances patch "$SQL_INSTANCE" --assign-ip --quiet; then
+    fixed "enabled the instance public IP (IAM-gated proxy; no authorized networks = not exposed)"
+  else
+    die "could not enable the public IP (org policy?). Private-IP alternative — create a
+Serverless VPC connector once and attach it to both the job and the service:
+  gcloud compute networks vpc-access connectors create cia-conn --region ${REGION} --range 10.8.0.0/28
+  gcloud run jobs update ${JOB} --region ${REGION} --vpc-connector cia-conn --vpc-egress private-ranges-only
+  gcloud run services update ${SERVICE} --region ${REGION} --vpc-connector cia-conn --vpc-egress private-ranges-only
+then re-run this doctor."
+  fi
 fi
 
 step "3. database '${DB_NAME}'"
@@ -260,6 +268,16 @@ done
 grep -q '"status":"ok"' <<<"$HEALTH" || die "healthz did not return ok: ${HEALTH:-<no response>}"
 grep -q '"db":"ok"'     <<<"$HEALTH" || die "app is up but db is down: ${HEALTH}"
 ok "${HEALTH}"
+# Sign-in config smoke: the SPA needs only the OAuth CLIENT ID (Google Identity Services
+# ID-token flow — the client SECRET is for authorization-code server flows this app does not
+# use, by design; there is nothing to configure for it).
+CFG="$(curl -fsS --max-time 20 "${URL}/api/config" 2>/dev/null || true)"
+if grep -q '"google_client_id":"..*"' <<<"$CFG"; then
+  ok "sign-in configured — /api/config serves the client id"
+else
+  warn "GOOGLE_CLIENT_ID is not live on the service — sign-in will say 'not configured';"
+  warn "re-run with: bash scripts/doctor.sh --client-id <your-oauth-web-client-id>"
+fi
 
 step "DONE — healthy at ${URL}"
 echo "  one thing gcloud cannot check or fix for you: the OAuth client's Authorized JavaScript"

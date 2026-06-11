@@ -99,3 +99,84 @@ def test_wait_fails_fast_on_missing_database() -> None:
     with pytest.raises(OperationalError):
         migrate._wait_for_db(url, max_wait=30.0)
     assert time.monotonic() - start < 10.0  # fast-failed, did not burn the 30s window
+
+
+# --------------------------------------------------------------------------------------------
+# END-TO-END SIMULATION of the Cloud Run Job <-> Cloud SQL Auth Proxy hop (tests/proxy_sim.py).
+# Runs the EXACT job entrypoint (python -m app.migrate) through a fake proxy socket that
+# misbehaves precisely the way production did, proving each outcome rather than guessing it.
+# --------------------------------------------------------------------------------------------
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+from urllib.parse import urlsplit  # noqa: E402
+
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+def _run_job_entrypoint(socket_dir: Path, dbname: str, wait_seconds: str) -> tuple[int, str]:
+    """python -m app.migrate, exactly like the Cloud Run job, against a unix-socket DB URL."""
+    env = dict(os.environ)
+    env["DATABASE_URL"] = f"postgresql+psycopg://cia:cia@/{dbname}?host={socket_dir}"
+    env["MIGRATE_DB_WAIT_SECONDS"] = wait_seconds
+    proc = subprocess.run(
+        [sys.executable, "-m", "app.migrate"],
+        cwd=_BACKEND_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+@needs_db
+def test_e2e_migrate_survives_the_proxy_startup_race(tmp_path: Path) -> None:
+    """The sidecar race: the proxy drops connections for the first seconds, then works. The job
+    must log the retries, connect once the tunnel is up, and exit 0 — no human, no re-run."""
+    from proxy_sim import FakeSqlProxy
+
+    parts = urlsplit(os.environ["DATABASE_URL"].replace("+asyncpg", ""))
+    proxy = FakeSqlProxy(
+        tmp_path,
+        target_host=parts.hostname or "127.0.0.1",
+        target_port=parts.port or 5432,
+        mode="drop_then_ok",
+        drop_for=3.0,
+    )
+    proxy.start()
+    try:
+        rc, out = _run_job_entrypoint(tmp_path, (parts.path or "/cia_test").lstrip("/"), "60")
+    finally:
+        proxy.stop()
+    assert rc == 0, out
+    assert "database not ready (attempt" in out  # it hit the race…
+    assert "reachable after" in out  # …healed itself…
+    assert proxy.dropped >= 1 and proxy.forwarded >= 1  # …through the proxy, not around it
+
+
+def test_e2e_migrate_bounded_when_proxy_never_reaches_the_backend(tmp_path: Path) -> None:
+    """The production blocker: the proxy accepts and drops FOREVER (it cannot reach the instance
+    backend — e.g. private-IP-only with no VPC egress). The simulation must reproduce the exact
+    production error string, and the job must give up at the bound with an actionable message —
+    never hang, never exit opaquely."""
+    from proxy_sim import FakeSqlProxy
+
+    proxy = FakeSqlProxy(tmp_path, mode="drop")  # never forwards; Postgres is never contacted
+    proxy.start()
+    try:
+        rc, out = _run_job_entrypoint(tmp_path, "cia", "6")
+    finally:
+        proxy.stop()
+    assert rc != 0
+    assert "server closed the connection unexpectedly" in out  # the literal production signature
+    assert "not reachable after 6s" in out
+    assert "--set-cloudsql-instances" in out  # the actionable hint names the wiring to check
+
+
+def test_e2e_migrate_bounded_when_the_proxy_socket_is_absent(tmp_path: Path) -> None:
+    """The sidecar never even created the socket: still a bounded, explained failure."""
+    rc, out = _run_job_entrypoint(tmp_path, "cia", "5")
+    assert rc != 0
+    assert "not reachable after 5s" in out
+    assert "database not ready (attempt" in out  # retried (transient), then gave up at the bound
