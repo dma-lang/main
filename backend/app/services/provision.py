@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from app import db
 _BACKEND = Path(__file__).resolve().parents[2]  # backend/ (app/services/provision.py -> backend)
 _SEED_DIR = _BACKEND / "seed"
 _TEMPLATE = _BACKEND / "alembic" / "sql" / "dataplane_template.sql"
+_SCHEMA_RE = re.compile(r"^cat_[a-z0-9_]+$")
 
 
 def _load_catalogue(version_id: str) -> dict[str, Any]:
@@ -335,6 +337,169 @@ async def _record_id_governance(conn: AsyncConnection) -> tuple[int, int]:
     return written, deferred
 
 
+def _toks(s: str | None) -> set[str]:
+    return {t for t in re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split() if len(t) > 2}
+
+
+def _near(a: str | None, b: str | None, thr: float = 0.25) -> bool:
+    ta, tb = _toks(a), _toks(b)
+    if not ta or not tb:
+        return False  # need both to claim a description match
+    return len(ta & tb) / len(ta | tb) >= thr
+
+
+async def _inherit_enrichment(
+    conn: AsyncConnection, schema: str, version_id: str
+) -> dict[str, Any]:
+    """Cross-version enrichment (user ask): a version with no enrichment of its OWN (e.g. v5,
+    which ships base-only) inherits platforms / use cases / maturity / personas / offerings from
+    the richest sibling version (e.g. v7), mapped per subcap so the deep dive is never empty.
+
+    Mapping (most-specific first, so NO subcap is left without enrichment when a counterpart
+    exists): exact subcap id -> id-governance crosswalk -> L2 capability name + near description
+    -> L2 capability name (same capability) -> same category. Dimension tables (vendor, platform,
+    persona, offering) are copied wholesale; the per-subcap links/children are copied with the
+    subcap id remapped. The capability metadata is genuinely shared across catalogue versions, so
+    this is enrichment reuse, not fabrication — and it is recorded in the provision report."""
+    if not _SCHEMA_RE.match(schema):
+        raise ValueError("invalid schema")
+    uc = (await conn.execute(text(f"SELECT count(*) FROM {schema}.use_case"))).scalar() or 0
+    plat = (await conn.execute(text(f"SELECT count(*) FROM {schema}.subcap_platform"))).scalar()
+    if uc or (plat or 0):
+        return {"inherited_from": None, "inherited_subcaps": 0, "reason": "has own enrichment"}
+
+    # richest OTHER provisioned/active version (most use cases) is the enrichment source
+    src = (
+        await conn.execute(
+            text(
+                "SELECT cv.version_id, cv.schema_name FROM control.catalogue_version cv "
+                "WHERE cv.version_id <> :v AND cv.status IN ('active', 'provisioned')"
+            ),
+            {"v": version_id},
+        )
+    ).all()
+    best: tuple[int, str, str] | None = None
+    for vid, sname in ((str(r[0]), str(r[1])) for r in src):
+        if not _SCHEMA_RE.match(sname):
+            continue
+        n = (await conn.execute(text(f"SELECT count(*) FROM {sname}.use_case"))).scalar() or 0
+        if n and (best is None or n > best[0]):
+            best = (int(n), vid, sname)
+    if best is None:
+        return {"inherited_from": None, "inherited_subcaps": 0, "reason": "no enriched sibling"}
+    _n, src_ver, src_schema = best
+
+    # build the subcap correspondence this_subcap -> source_subcap
+    async def _subcaps(sch: str) -> list[dict[str, Any]]:
+        sql = (
+            f"SELECT s.subcap_id AS id, cap.name AS l2, s.description AS descr, "
+            f"cap.category_id AS cat FROM {sch}.subcap s "
+            f"JOIN {sch}.capability cap ON cap.capability_id = s.capability_id"
+        )
+        return [dict(r) for r in (await conn.execute(text(sql))).mappings()]
+
+    cur = await _subcaps(schema)
+    srows = await _subcaps(src_schema)
+    src_ids = {r["id"] for r in srows}
+    src_by_l2: dict[str, list[dict[str, Any]]] = {}
+    src_by_cat: dict[str, str] = {}
+    for r in srows:
+        src_by_l2.setdefault((r["l2"] or "").strip().lower(), []).append(r)
+        src_by_cat.setdefault(r["cat"], r["id"])
+    crosswalk = {
+        str(r[0]): str(r[1])
+        for r in await conn.execute(
+            text(
+                "SELECT from_subcap, to_subcap FROM control.version_crosswalk "
+                "WHERE from_version = :a AND to_version = :b"
+            ),
+            {"a": version_id, "b": src_ver},
+        )
+    }
+    mapping: list[dict[str, str]] = []
+    for r in cur:
+        sid = r["id"]
+        tgt = None
+        if sid in src_ids:
+            tgt = sid
+        elif sid in crosswalk and crosswalk[sid] in src_ids:
+            tgt = crosswalk[sid]
+        else:
+            cands = src_by_l2.get((r["l2"] or "").strip().lower(), [])
+            near = next((c["id"] for c in cands if _near(r["descr"], c["descr"])), None)
+            tgt = near or (cands[0]["id"] if cands else src_by_cat.get(r["cat"]))
+        if tgt:
+            mapping.append({"this_sub": sid, "src_sub": tgt})
+    if not mapping:
+        return {"inherited_from": src_ver, "inherited_subcaps": 0, "reason": "no correspondence"}
+
+    # dimensions copied wholesale (FK order: vendor -> l3_platform / offering; persona standalone)
+    for tbl, cols in (
+        ("vendor", "vendor_id, name"),
+        ("l3_platform", "l3_id, vendor_id, name, category, description, reference_url"),
+        ("persona", "persona_id, canonical_name, role_description"),
+        ("offering", "offering_id, name, category, status, primary_vendor_id, description"),
+    ):
+        await conn.execute(
+            text(f"INSERT INTO {schema}.{tbl} ({cols}) SELECT {cols} FROM {src_schema}.{tbl}")
+        )
+
+    await conn.execute(text("CREATE TEMP TABLE _emap (this_sub text, src_sub text) ON COMMIT DROP"))
+    await conn.execute(
+        text("INSERT INTO _emap (this_sub, src_sub) VALUES (:this_sub, :src_sub)"), mapping
+    )
+    # per-subcap links/children, subcap id remapped via _emap (use_case/maturity ids are made
+    # unique by suffixing the target subcap, since one source subcap can map to several here)
+    await conn.execute(
+        text(
+            f"INSERT INTO {schema}.subcap_platform (subcap_id, l3_id) "
+            f"SELECT DISTINCT m.this_sub, sp.l3_id FROM _emap m "
+            f"JOIN {src_schema}.subcap_platform sp ON sp.subcap_id = m.src_sub"
+        )
+    )
+    await conn.execute(
+        text(
+            f"INSERT INTO {schema}.subcap_persona (subcap_id, persona_id) "
+            f"SELECT DISTINCT m.this_sub, sp.persona_id FROM _emap m "
+            f"JOIN {src_schema}.subcap_persona sp ON sp.subcap_id = m.src_sub"
+        )
+    )
+    await conn.execute(
+        text(
+            f"INSERT INTO {schema}.offering_subcap "
+            "(offering_id, subcap_id, mapping_rationale, maturity_lift, status) "
+            f"SELECT DISTINCT os.offering_id, m.this_sub, os.mapping_rationale, os.maturity_lift, "
+            f"os.status FROM _emap m "
+            f"JOIN {src_schema}.offering_subcap os ON os.subcap_id = m.src_sub"
+        )
+    )
+    await conn.execute(
+        text(
+            f"INSERT INTO {schema}.use_case (use_case_id, subcap_id, archetype, name, description) "
+            f"SELECT uc.use_case_id || ':' || m.this_sub, m.this_sub, uc.archetype, uc.name, "
+            f"uc.description FROM _emap m "
+            f"JOIN {src_schema}.use_case uc ON uc.subcap_id = m.src_sub"
+        )
+    )
+    await conn.execute(
+        text(
+            f"INSERT INTO {schema}.maturity_descriptor "
+            "(descriptor_id, subcap_id, level, descriptor, features) "
+            f"SELECT md.descriptor_id || ':' || m.this_sub, m.this_sub, md.level, md.descriptor, "
+            f"md.features FROM _emap m "
+            f"JOIN {src_schema}.maturity_descriptor md ON md.subcap_id = m.src_sub"
+        )
+    )
+    enriched = (
+        await conn.execute(text(f"SELECT count(DISTINCT subcap_id) FROM {schema}.subcap_platform"))
+    ).scalar() or 0
+    return {
+        "inherited_from": src_ver,
+        "inherited_subcaps": len(mapping),
+        "subcaps_with_platforms": int(enriched),
+    }
+
+
 async def bring_version_online(
     version_id: str = "v7", label: str = "Catalogue v7.0"
 ) -> dict[str, Any]:
@@ -384,6 +549,9 @@ async def bring_version_online(
         )
         if enrich:
             await _seed_enrichment(conn, schema, enrich)
+        # Cross-version enrichment: a base-only version (v5) inherits v7's platforms / use cases /
+        # maturity / personas / offerings per subcap, so no deep dive is left empty (user ask).
+        inherited = await _inherit_enrichment(conn, schema, version_id)
         # Provisioning makes a version COMMITTABLE, not active: activation is a separate,
         # admin-approved toggle (exactly one active). Re-provisioning the active version keeps
         # it active; the very first provision auto-activates so a fresh workspace works.
@@ -414,6 +582,18 @@ async def bring_version_online(
         # the moment both sides exist.
         gov_written, gov_deferred = await _record_id_governance(conn)
 
+        # Counts reflect what the version ACTUALLY carries (own seed OR inherited), so the report
+        # and the deep dive agree — never reporting 0 platforms while the tabs show them.
+        async def _count(table: str) -> int:
+            n = (await conn.execute(text(f"SELECT count(*) FROM {schema}.{table}"))).scalar()
+            return int(n or 0)
+
+        use_cases = await _count("use_case")
+        platforms = await _count("l3_platform")
+        personas = await _count("persona")
+        maturity = await _count("maturity_descriptor")
+        offerings = await _count("offering")
+
     return {
         "version_id": version_id,
         "schema": schema,
@@ -421,11 +601,13 @@ async def bring_version_online(
         "categories": len(categories),
         "capabilities": len(caps),
         "subcaps": len(subcaps),
-        "use_cases": len(enrich["use_cases"]) if enrich else 0,
-        "platforms": len(enrich["l3_platforms"]) if enrich else 0,
-        "personas": len(enrich["personas"]) if enrich else 0,
-        "maturity": len(enrich["maturity_descriptors"]) if enrich else 0,
-        "offerings": len(enrich["offerings"]) if enrich else 0,
+        "use_cases": int(use_cases or 0),
+        "platforms": int(platforms or 0),
+        "personas": int(personas or 0),
+        "maturity": int(maturity or 0),
+        "offerings": int(offerings or 0),
+        "enrichment_inherited_from": inherited.get("inherited_from"),
+        "enrichment_inherited_subcaps": inherited.get("inherited_subcaps", 0),
         "id_links_recorded": gov_written,
         "id_links_deferred": gov_deferred,
     }

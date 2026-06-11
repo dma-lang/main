@@ -115,7 +115,13 @@ def test_diff_reports_exact_changes(client: TestClient) -> None:
     assert [r["id"] for r in d["added"]] == ["P1C1.1.2"]
     assert d["removed"] == []
     assert [m["id"] for m in d["modified"]] == ["P1C1.1.1"]
-    assert d["modified"][0]["changes"] == ["name"]
+    mod = d["modified"][0]
+    # the change is now spelled out in detail (field + old → new), not a bare field name
+    assert len(mod["changes"]) == 1 and mod["changes"][0].startswith("name ")
+    assert "Renamed For Diff" in mod["changes"][0]
+    assert mod["from_id"] is None and mod["explanation"]  # same id kept, explained
+    # the genuinely-added subcap explains WHY (no id/L2 match in the older version)
+    assert d["added"][0]["explanation"]
     assert d["unchanged"] == 849
 
     # and the reverse direction flips added/removed

@@ -3,6 +3,8 @@
 // re-gates the proposed correction G1–G8 server-side and, on pass, mutates cat_<v> + writes an
 // audit row; Reject needs a reason; Defer snoozes. Wired to GET /api/change-flags. Ported from the
 // prototype ChangeFlags.
+import { useState } from 'react';
+
 import type { ChangeFlag } from '../api/client';
 import { useChangeFlags, useFlagActions } from '../api/queries';
 import { Empty, Page } from '../components/primitives';
@@ -18,13 +20,26 @@ const sevColor: Record<string, string> = {
   LOW: 'soft',
 };
 
+// Human labels for the flag kinds, used by the kind filter (decay scans can raise hundreds of
+// "no delivery" candidates, so being able to narrow by kind keeps the inbox usable).
+const KIND_LABEL: Record<string, string> = {
+  contradicted_evidence: 'Lifecycle contradictions',
+  decay_no_delivery: 'Decay · no Jira delivery',
+  decay_missing_subcap: 'Decay · removed from a previous version',
+  evidence_gate_failure: 'Evidence gate failures',
+};
+const RENDER_CAP = 120;
+
 export function ChangeFlags() {
   const version = useUi((s) => s.version);
   const isAdmin = useUi((s) => s.adminView);
   const q = useChangeFlags('open');
   const { scan, approve, reject, defer } = useFlagActions();
-  const flags = q.data?.flags ?? [];
+  const allFlags = q.data?.flags ?? [];
   const counts = q.data?.counts ?? { BLOCKING: 0, HIGH: 0, MED: 0, LOW: 0 };
+  const [kind, setKind] = useState<string>('all');
+  const kinds = [...new Set(allFlags.map((f) => f.kind))];
+  const flags = kind === 'all' ? allFlags : allFlags.filter((f) => f.kind === kind);
 
   const onReject = (id: string) => {
     const reason = window.prompt('Reason for rejecting this flag?')?.trim();
@@ -71,7 +86,7 @@ export function ChangeFlags() {
         ) : null
       }
     >
-      <div className="row gap8" style={{ marginBottom: 18 }}>
+      <div className="row gap8" style={{ marginBottom: 12 }}>
         {SEV_ORDER.map((k) => (
           <span
             key={k}
@@ -83,8 +98,29 @@ export function ChangeFlags() {
         ))}
       </div>
 
+      {/* kind filter — a decay scan can raise hundreds of "no delivery" candidates; narrow by kind */}
+      {kinds.length > 1 && (
+        <div className="row wrap gap6" style={{ marginBottom: 16 }}>
+          <button
+            className={'btn xs ' + (kind === 'all' ? 'primary' : 'ghost')}
+            onClick={() => setKind('all')}
+          >
+            All · {allFlags.length}
+          </button>
+          {kinds.map((k) => (
+            <button
+              key={k}
+              className={'btn xs ' + (kind === k ? 'primary' : 'ghost')}
+              onClick={() => setKind(k)}
+            >
+              {KIND_LABEL[k] ?? k} · {allFlags.filter((f) => f.kind === k).length}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div style={{ display: 'grid', gap: 12 }}>
-        {flags.map((f) => (
+        {flags.slice(0, RENDER_CAP).map((f) => (
           <div key={f.id} className="card pad fade-in">
             <div className="row gap8" style={{ marginBottom: 8 }}>
               <span className={'chip ' + (sevColor[f.sev] ?? 'soft')}>{f.sev}</span>
@@ -126,7 +162,10 @@ export function ChangeFlags() {
                 </div>
                 <div className="muted" style={{ fontSize: 11.5 }}>
                   Approve re-gates G1–G8 server-side and applies it to {version || 'the version'}{' '}
-                  under version control · {f.stories} delivered stories ground the fix.
+                  under version control ·{' '}
+                  {f.kind === 'decay_no_delivery'
+                    ? 'grounded in the corpus scan (zero real Jira delivery). If delivery has since appeared, G6 blocks the change.'
+                    : `${f.stories} delivered stories ground the fix.`}
                 </div>
               </div>
             )}
@@ -177,6 +216,12 @@ export function ChangeFlags() {
             </div>
           </div>
         ))}
+        {flags.length > RENDER_CAP && (
+          <div className="card pad muted" style={{ fontSize: 12, textAlign: 'center' }}>
+            Showing the first {RENDER_CAP} of {flags.length} {kind === 'all' ? '' : KIND_LABEL[kind] ?? ''}{' '}
+            flags (highest severity first). Resolve or filter by kind to see more — none are dropped.
+          </div>
+        )}
         {!flags.length && (
           <Empty
             icon="flag"

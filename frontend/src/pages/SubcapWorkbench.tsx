@@ -353,37 +353,73 @@ function scoreColor(v: number): string {
 // prototype's hashed quarter bars are intentionally omitted rather than faked.
 function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
   const [open, setOpen] = useState<string | null>(null);
-  const stories = useSubcapStories(version, node.id);
+  // ONE toggle for the whole Delivery tab: Jira-only (analysis grade) vs include synthetic. It
+  // drives the story list AND the clients/clusters drilldown below, so they stay consistent.
+  const [synthetic, setSynthetic] = useState(false);
+  const stories = useSubcapStories(version, node.id, synthetic);
   const data = stories.data;
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
+  const toggle = (
+    <div className="row gap8" style={{ marginBottom: 14 }}>
+      <span className="muted" style={{ fontSize: 11 }}>
+        Stories:
+      </span>
+      <button
+        className={'btn xs ' + (!synthetic ? 'primary' : 'ghost')}
+        onClick={() => setSynthetic(false)}
+        title="Real Jira delivery only (analysis grade)"
+      >
+        Jira only
+      </button>
+      <button
+        className={'btn xs ' + (synthetic ? 'primary' : 'ghost')}
+        onClick={() => setSynthetic(true)}
+        title="Also show the labelled synthetic stories"
+      >
+        + synthetic
+      </button>
+    </div>
+  );
+
   if (stories.isLoading) {
     return (
-      <div className="muted fade-in" style={{ fontSize: 12 }}>
-        Loading delivery…
+      <div className="fade-in">
+        {toggle}
+        <div className="muted" style={{ fontSize: 12 }}>
+          Loading delivery…
+        </div>
       </div>
     );
   }
   if (total === 0) {
     return (
-      <EmptyTab
-        icon="book"
-        title="No mapped stories"
-        desc="No real-client stories carry forward to this subcap in the active version."
-      />
+      <div className="fade-in">
+        {toggle}
+        <EmptyTab
+          icon="book"
+          title={synthetic ? 'No mapped stories' : 'No real-client stories'}
+          desc={
+            synthetic
+              ? 'No Jira or synthetic story carries forward to this subcap in this version.'
+              : 'No real-client (Jira) stories carry forward here. Toggle “+ synthetic” to include synthetic stories.'
+          }
+        />
+      </div>
     );
   }
 
   return (
     <div className="fade-in">
+      {toggle}
       <div className="row gap16" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
         <div style={{ textAlign: 'center' }}>
           <div className="num" style={{ fontSize: 20, fontWeight: 700 }}>
             {total}
           </div>
           <div className="muted" style={{ fontSize: 10 }}>
-            total stories
+            {synthetic ? 'stories (incl. synthetic)' : 'Jira stories'}
           </div>
         </div>
         <div style={{ textAlign: 'center' }}>
@@ -415,6 +451,11 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
                   <span className="mono" style={{ fontSize: 11, color: 'var(--text-primary)', flex: 'none' }}>
                     {st.story_key}
                   </span>
+                  {st.is_synthetic && (
+                    <span className="chip orange" style={{ fontSize: 8.5, flex: 'none' }} title="synthetic story (not real Jira delivery)">
+                      synthetic
+                    </span>
+                  )}
                   {st.project_key && (
                     <span className="chip soft" style={{ fontSize: 9, flex: 'none' }} title="Jira project (client proxy)">
                       {st.project_key}
@@ -479,7 +520,7 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
       <div className="eyebrow" style={{ marginBottom: 8 }}>
         Who delivered this, and what clusters together
       </div>
-      <DeliveryDrillPanel version={version} id={node.id} />
+      <DeliveryDrillPanel version={version} id={node.id} synthetic={synthetic} />
     </div>
   );
 }

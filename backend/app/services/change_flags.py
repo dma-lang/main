@@ -246,123 +246,214 @@ async def _create_flag(conn: AsyncConnection, c: Any, version_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------- decay analysis
-_DECAY_KIND = "decay_missing_subcap"
-_SCAN_CAP = 25  # bound each scan run (§15); the remainder is counted, never silently dropped
+# Two decay classes (user definition): a subcap is decayed if it has NO real Jira delivery, OR it
+# was genuinely removed from a previous version. Both raise change flags so an admin can decide
+# whether to mark the subcap inactive — nothing is ever auto-deactivated.
+_DECAY_KIND = "decay_missing_subcap"  # removed-from-previous (kept stable for existing rows)
+_DECAY_NO_DELIVERY = "decay_no_delivery"  # in this version but zero real Jira stories
+_INACTIVE_STATE = "dead"  # "mark inactive" target lifecycle
+_LIVE_STATES = ("emerging", "rising", "stable")  # believed active -> decay is the real decision
+_NO_DELIVERY_CAP = 1000  # generous: surface ALL decayed subcaps (v7 ~765) in one scan
+_NEAR_DESC = 0.4  # token-overlap >= this = "descriptions near in meaning" (hermetic proxy)
 
 
-def _tokens(name: str) -> set[str]:
-    return {t for t in re.sub(r"[^a-z0-9 ]", " ", name.lower()).split() if len(t) > 2}
+def _tokens(name: str | None) -> set[str]:
+    return {t for t in re.sub(r"[^a-z0-9 ]", " ", (name or "").lower()).split() if len(t) > 2}
 
 
-async def scan_decay(version: str) -> dict[str, Any]:
-    """DECAY analysis -> change flags (explained, never auto-acted):
+def _jaccard(a: set[str], b: set[str]) -> float:
+    return len(a & b) / len(a | b) if (a or b) else 1.0  # both empty => identical (vacuously near)
 
-    A) subcaps MISSING vs the previous provisioned version, each classified with an explicit
-       explanation: renamed/reassigned (same name lives under a new id — id governance: ids are
-       never recycled), recorded in the id-governance crosswalk, possibly integrated into a
-       near-matching subcap (token overlap), or removed with no successor detected.
-    Story-less decay is surfaced as gated SUGGESTIONS (suggestions.propose_decay) and the live
-    decay count on mission control — flooding the flag queue with hundreds of identical
-    "no stories" flags would bury the actionable ones."""
+
+def _desc_near(a: str | None, b: str | None) -> bool:
+    """Deterministic 'description nearing by meaning' proxy (token overlap). Live mode can upgrade
+    this to embedding cosine over the shared vector(768) space; the contract is identical."""
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta and not tb:
+        return True  # neither has a description -> can't say they diverged
+    return _jaccard(ta, tb) >= _NEAR_DESC
+
+
+def _decay_severity(life: str) -> str:
+    """A subcap we BELIEVE is live (emerging/rising/stable) but has no delivery is the real
+    decision (MED); one already winding down (declining/fading) is consistent decay (LOW)."""
+    return "MED" if life in _LIVE_STATES else "LOW"
+
+
+async def scan_decay(version: str, no_delivery_cap: int = _NO_DELIVERY_CAP) -> dict[str, Any]:
+    """DECAY analysis -> change flags for the admin (explained, never auto-acted). Two classes:
+
+    A) NO-DELIVERY decay — a subcap in this version with ZERO real Jira stories (synthetic never
+       counts). It may stay active, but it is a candidate to mark INACTIVE; each flag proposes
+       lifecycle -> 'dead' for the admin to approve or reject. This is the bulk (v7: almost all).
+    B) REMOVED decay — a subcap present in the PREVIOUS version but genuinely gone now. Refined
+       (user rule): a previous subcap counts as removed ONLY if neither its subcap-id NOR its L2
+       capability name survives with a near description. A rename/reassignment/integration (same
+       id or same L2 name + near description) is NOT a removal and raises no flag.
+    """
     v = await resolve_version(version)
     schema = v.schema_name
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
     engine = db.require_engine()
     async with engine.begin() as conn:
-        prev = (
+        nod = await _scan_no_delivery(conn, schema, v.version_id, no_delivery_cap)
+        rem = await _scan_removed(conn, schema, v.version_id)
+    return {
+        "version": v.version_id,
+        "created": nod["created"] + rem["created"],
+        "candidates": nod["candidates"] + rem["candidates"],
+        "no_delivery": nod,
+        "removed": rem,
+    }
+
+
+async def _scan_no_delivery(
+    conn: AsyncConnection, schema: str, version_id: str, cap: int
+) -> dict[str, Any]:
+    """Flag every current subcap with no real Jira delivery as a candidate to mark inactive."""
+    rows = (
+        (
             await conn.execute(
                 text(
-                    "SELECT version_id, schema_name FROM control.catalogue_version "
-                    "WHERE status IN ('active','provisioned') AND version_id <> :v "
-                    "AND coalesce(nullif(regexp_replace(version_id,'[^0-9]','','g'),'')::int,0) < "
-                    "coalesce((SELECT nullif(regexp_replace(version_id,'[^0-9]','','g'),'')::int "
-                    "FROM control.catalogue_version WHERE version_id = :v), 0) "
-                    "ORDER BY coalesce(nullif(regexp_replace(version_id,'[^0-9]','','g'),'')"
-                    "::int, 0) DESC LIMIT 1"
+                    "SELECT s.subcap_id, s.name, s.lifecycle_state, cap.name AS l2, "
+                    "left(s.subcap_id, 2) AS pillar "
+                    f"FROM {schema}.subcap s "
+                    f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id "
+                    "WHERE s.lifecycle_state <> :dead "
+                    "AND NOT EXISTS (SELECT 1 FROM control.story_catalogue_link l "
+                    "WHERE l.version_id = :ver AND l.subcap_id = s.subcap_id) "
+                    "AND NOT EXISTS (SELECT 1 FROM control.change_flag cf "
+                    "WHERE cf.kind = :k AND cf.target_ref = s.subcap_id) "
+                    # believed-live first (the real decision), then leverage tier, then id
+                    "ORDER BY (s.lifecycle_state IN ('emerging','rising','stable')) DESC, "
+                    "s.tier NULLS LAST, s.subcap_id"
                 ),
-                {"v": v.version_id},
+                {"dead": _INACTIVE_STATE, "ver": version_id, "k": _DECAY_NO_DELIVERY},
             )
-        ).first()
-        if prev is None or not _SCHEMA_RE.match(str(prev[1])):
-            return {"version": v.version_id, "created": 0, "candidates": 0, "note": "no previous"}
-        prev_ver, prev_schema = str(prev[0]), str(prev[1])
-        cur = {
-            str(r[0]): str(r[1])
-            for r in await conn.execute(text(f"SELECT subcap_id, name FROM {schema}.subcap"))
+        )
+        .mappings()
+        .all()
+    )
+    created = 0
+    for r in rows[:cap]:
+        life = str(r["lifecycle_state"])
+        detail = {
+            "title": f"Decayed (no Jira delivery): {r['name']}",
+            "body": (
+                f"{r['subcap_id']} has zero real Jira stories in {version_id} (synthetic delivery "
+                f"is excluded by construction). It currently reads '{life}'. A decayed subcap can "
+                "stay active — approve to mark it INACTIVE (lifecycle -> 'dead'), or reject to "
+                "keep it. Nothing is deactivated automatically."
+            ),
+            "name": r["name"],
+            "pillar": r["pillar"],
+            "l2": r["l2"],
+            "version": version_id,
+            "explanation": "No real Jira story links to this subcap (decay candidate).",
+            "before": {"lifecycle_state": life},
+            "after": {"lifecycle_state": _INACTIVE_STATE},
         }
-        old = {
-            str(r[0]): str(r[1])
-            for r in await conn.execute(text(f"SELECT subcap_id, name FROM {prev_schema}.subcap"))
-        }
-        cur_by_name = {n.strip().lower(): i for i, n in cur.items()}
-        gov = {
-            str(r[0]): str(r[1])
-            for r in await conn.execute(
-                text(
-                    "SELECT from_subcap, note FROM control.version_crosswalk "
-                    "WHERE note LIKE 'id-governance:%'"
-                )
-            )
-        }
-        missing = sorted(set(old) - set(cur))
-        created = 0
-        for sid in missing[:_SCAN_CAP]:
-            name = old[sid]
-            renamed_to = cur_by_name.get(name.strip().lower())
-            if renamed_to:
-                explanation = (
-                    f"'{name}' still exists in {v.version_id} under a NEW id {renamed_to} — a "
-                    f"rename/reassignment ({sid} is retired, never recycled; id governance)."
-                )
-            elif sid in gov:
-                explanation = f"recorded in the id-governance crosswalk: {gov[sid][:180]}"
-            else:
-                toks = _tokens(name)
-                best, best_j = None, 0.0
-                for cid, cname in cur.items():
-                    ct = _tokens(cname)
-                    j = len(toks & ct) / len(toks | ct) if toks | ct else 0.0
-                    if j > best_j:
-                        best, best_j = (cid, cname), j
-                if best and best_j >= 0.5:
-                    explanation = (
-                        f"no direct successor; possibly integrated into {best[0]} "
-                        f"'{best[1]}' (name similarity {best_j:.0%}) — e.g. an L2 rename or a "
-                        "pillar restructure. A human should confirm."
-                    )
-                else:
-                    explanation = (
-                        f"removed in {v.version_id}; no successor detected (it may have been "
-                        "deduped or dropped at source). A human should confirm."
-                    )
-            exists = (
-                await conn.execute(
-                    text("SELECT 1 FROM control.change_flag WHERE kind = :k AND target_ref = :t"),
-                    {"k": _DECAY_KIND, "t": sid},
-                )
-            ).first()
-            if exists:
-                continue
-            detail = {
-                "title": f"{sid} '{name}' is missing from {v.version_id}",
-                "body": f"Present in {prev_ver}, absent in {v.version_id}. {explanation} A "
-                "decayed subcap may stay active elsewhere — decide whether anything must move.",
-                "name": name,
-                "pillar": sid[:2],
-                "version": v.version_id,
-                "previous_version": prev_ver,
-                "explanation": explanation,
-            }
+        await conn.execute(
+            text(
+                "INSERT INTO control.change_flag (kind, severity, target_ref, detail) "
+                "VALUES (:k, :sev, :t, CAST(:d AS jsonb))"
+            ),
+            {
+                "k": _DECAY_NO_DELIVERY,
+                "sev": _decay_severity(life),
+                "t": r["subcap_id"],
+                "d": json.dumps(detail),
+            },
+        )
+        created += 1
+    return {"created": created, "candidates": len(rows), "flagged_cap": cap}
+
+
+async def _scan_removed(conn: AsyncConnection, schema: str, version_id: str) -> dict[str, Any]:
+    """Flag previous-version subcaps that are GENUINELY removed (refined id+L2-name+desc rule)."""
+    prev = (
+        await conn.execute(
+            text(
+                "SELECT version_id, schema_name FROM control.catalogue_version "
+                "WHERE status IN ('active','provisioned') AND version_id <> :v "
+                "AND coalesce(nullif(regexp_replace(version_id,'[^0-9]','','g'),'')::int,0) < "
+                "coalesce((SELECT nullif(regexp_replace(version_id,'[^0-9]','','g'),'')::int "
+                "FROM control.catalogue_version WHERE version_id = :v), 0) "
+                "ORDER BY coalesce(nullif(regexp_replace(version_id,'[^0-9]','','g'),'')"
+                "::int, 0) DESC LIMIT 1"
+            ),
+            {"v": version_id},
+        )
+    ).first()
+    if prev is None or not _SCHEMA_RE.match(str(prev[1])):
+        return {"created": 0, "candidates": 0, "note": "no previous version"}
+    prev_ver, prev_schema = str(prev[0]), str(prev[1])
+    cur = {str(r[0]): (str(r[1]), str(r[2]), r[3]) for r in await _subcaps_with_l2(conn, schema)}
+    old = {
+        str(r[0]): (str(r[1]), str(r[2]), r[3]) for r in await _subcaps_with_l2(conn, prev_schema)
+    }
+    cur_names = {n.strip().lower() for (n, _l2, _d) in cur.values()}
+    cur_l2 = {l2.strip().lower(): (n, d) for (n, l2, d) in cur.values()}
+    missing = sorted(set(old) - set(cur))
+    created, genuinely_removed = 0, 0
+    for sid in missing:
+        name, l2, desc = old[sid]
+        # SUCCESSOR test (refined user rule): same subcap name, OR same L2 capability name with a
+        # near description => the subcap carried over (rename / reassignment / integration), so it
+        # is NOT a removal and raises no flag.
+        if name.strip().lower() in cur_names:
+            continue
+        l2hit = cur_l2.get(l2.strip().lower())
+        if l2hit and _desc_near(desc, l2hit[1]):
+            continue
+        genuinely_removed += 1
+        if (
             await conn.execute(
-                text(
-                    "INSERT INTO control.change_flag (kind, severity, target_ref, detail) "
-                    "VALUES (:k, 'MED', :t, CAST(:d AS jsonb))"
-                ),
-                {"k": _DECAY_KIND, "t": sid, "d": json.dumps(detail)},
+                text("SELECT 1 FROM control.change_flag WHERE kind = :k AND target_ref = :t"),
+                {"k": _DECAY_KIND, "t": sid},
             )
-            created += 1
-    return {"version": v.version_id, "created": created, "candidates": len(missing)}
+        ).first():
+            continue
+        explanation = (
+            f"Neither the id {sid} nor its L2 capability '{l2}' survives in {version_id} with a "
+            "near description — a genuine removal (deduped or dropped at source), not a rename. "
+            "A human should confirm whether anything must move."
+        )
+        detail = {
+            "title": f"Decayed (removed): {sid} '{name}'",
+            "body": f"Present in {prev_ver}, gone from {version_id}. {explanation}",
+            "name": name,
+            "pillar": sid[:2],
+            "l2": l2,
+            "version": version_id,
+            "previous_version": prev_ver,
+            "explanation": explanation,
+        }
+        await conn.execute(
+            text(
+                "INSERT INTO control.change_flag (kind, severity, target_ref, detail) "
+                "VALUES (:k, 'MED', :t, CAST(:d AS jsonb))"
+            ),
+            {"k": _DECAY_KIND, "t": sid, "d": json.dumps(detail)},
+        )
+        created += 1
+    return {
+        "created": created,
+        "candidates": genuinely_removed,
+        "missing_total": len(missing),
+        "previous_version": prev_ver,
+    }
+
+
+async def _subcaps_with_l2(conn: AsyncConnection, schema: str) -> Any:
+    return await conn.execute(
+        text(
+            "SELECT s.subcap_id, s.name, cap.name AS l2, s.description "
+            f"FROM {schema}.subcap s "
+            f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id"
+        )
+    )
 
 
 def _flag_row(m: dict[str, Any]) -> FlagRow:
@@ -449,7 +540,29 @@ async def approve(flag_id: str, actor: str) -> FlagResult:
             return FlagResult(resolved=False, status="not_found")
         if flag["status"] != "open":
             return FlagResult(resolved=False, status=flag["status"])
-        if flag["kind"] != _KIND:
+        detail = flag["detail"] or {}
+        target = flag["target_ref"]
+
+        # REMOVED-from-previous decay: the subcap is gone from cat_<v> — there is nothing to
+        # mutate. Approving ACKNOWLEDGES the removal (audited), it never re-creates a row.
+        if flag["kind"] == _DECAY_KIND:
+            await _audit(
+                conn,
+                actor,
+                "change_flag.approve",
+                target,
+                {"flag_id": flag_id, "acknowledged": "removal", "version": detail.get("version")},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE control.change_flag SET status = 'approved', resolved_at = now() "
+                    "WHERE flag_id = :id"
+                ),
+                {"id": flag_id},
+            )
+            return FlagResult(resolved=True, status="approved")
+
+        if flag["kind"] not in (_KIND, _DECAY_NO_DELIVERY):
             # Evidence-gate failures (F7 ingest) have no lifecycle correction to apply; the
             # source must be fixed or the item rejected. Stays open, failing gate named, and
             # no re-gate run is written (there is nothing to re-gate).
@@ -459,8 +572,6 @@ async def approve(flag_id: str, actor: str) -> FlagResult:
                 gate_failed=(flag["detail"] or {}).get("gate_failed"),
             )
 
-        target = flag["target_ref"]
-        detail = flag["detail"] or {}
         v = await resolve_version(str(detail.get("version") or ""))
         schema = v.schema_name
         if not _SCHEMA_RE.match(schema):
@@ -471,24 +582,42 @@ async def approve(flag_id: str, actor: str) -> FlagResult:
                 {"t": target},
             )
         ).scalar()
-        stories = (
-            await conn.execute(
-                text(
-                    "SELECT count(*) FROM control.story_catalogue_link "
-                    "WHERE version_id = :ver AND subcap_id = :t"
-                ),
-                {"ver": v.version_id, "t": target},
-            )
-        ).scalar() or 0
-        # The correction resolves the contradiction (active delivery now agrees with the state).
-        results, verdict = gates.evaluate_suggestion(
-            target_exists=current is not None,
-            evidence_count=int(stories),
-            source_tier="T1",
-            cited=True,
-            contradicts=False,
-            cost_usd=0.0,
+        stories = int(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM control.story_catalogue_link "
+                        "WHERE version_id = :ver AND subcap_id = :t"
+                    ),
+                    {"ver": v.version_id, "t": target},
+                )
+            ).scalar()
+            or 0
         )
+        if flag["kind"] == _DECAY_NO_DELIVERY:
+            # Marking a decayed subcap INACTIVE is grounded in the corpus-scan absence (catalogue
+            # record + the zero-delivery measurement = 2 sources). The grounded self-check: if
+            # delivery has since appeared, the decay premise is gone — G6 fails and nothing is
+            # marked inactive (the flag stays open, naming the contradiction).
+            results, verdict = gates.evaluate_suggestion(
+                target_exists=current is not None,
+                evidence_count=2,
+                source_tier="T1",
+                cited=True,
+                contradicts=stories > 0,
+                cost_usd=0.0,
+            )
+        else:
+            # contradicted_evidence: the correction (-> 'stable') resolves the contradiction
+            # (active delivery now agrees with the state).
+            results, verdict = gates.evaluate_suggestion(
+                target_exists=current is not None,
+                evidence_count=stories,
+                source_tier="T1",
+                cited=True,
+                contradicts=False,
+                cost_usd=0.0,
+            )
         await conn.execute(
             text(
                 "INSERT INTO control.validation_gate_run "

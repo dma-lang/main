@@ -49,78 +49,179 @@ class DiffRow(BaseModel):
     id: str
     name: str
     pillar: str
+    l2: str | None = None
+    explanation: str  # WHY it is added / removed (the detail the diff now spells out)
 
 
 class DiffModified(BaseModel):
     id: str
     name: str
     pillar: str
-    changes: list[str]  # which fields differ: name | lifecycle_state | description | tier
+    l2: str | None = None
+    from_id: str | None = None  # set when the id was reassigned (a rename carried across versions)
+    changes: list[str]  # human-readable field deltas
+    explanation: str
 
 
 class DiffResp(BaseModel):
     a: str
     b: str
-    added: list[DiffRow]  # in b, not in a
-    removed: list[DiffRow]  # in a, not in b
-    modified: list[DiffModified]
+    added: list[DiffRow]  # genuinely new in b (no id or L2+description match in a)
+    removed: list[DiffRow]  # genuinely gone from a (no id or L2+description match in b)
+    modified: list[DiffModified]  # same subcap, changed — INCLUDING renames (id reassigned)
     unchanged: int
+
+
+def _norm(s: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _toks(s: str | None) -> set[str]:
+    return {t for t in re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split() if len(t) > 2}
+
+
+def _near(a: str | None, b: str | None, thr: float = 0.4) -> bool:
+    """Deterministic 'descriptions near in meaning' proxy (token overlap); live mode upgrades to
+    embedding cosine over the shared vector(768) space — same contract."""
+    ta, tb = _toks(a), _toks(b)
+    if not ta and not tb:
+        return True
+    return (len(ta & tb) / len(ta | tb) if (ta | tb) else 1.0) >= thr
 
 
 @router.get("/diff/{a}/{b}")
 async def diff_versions(
     a: str, b: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> DiffResp:
-    """Catalogue diff (G2): added / removed / modified subcaps between two PROVISIONED versions —
-    a full outer join on subcap_id with per-field comparison. An unprovisioned version is a clear
-    404 from resolve_version (the page tells the operator to provision it); a self-compare returns
-    an empty diff. Renames across versions come from control.version_crosswalk once a real legacy
-    workbook is ingested — id-identity is the honest baseline until then."""
+    """Catalogue diff (G2) between two PROVISIONED versions, explained in detail.
+
+    Identity rule (refined per the catalogue's own governance): a subcap's IDENTITY is its
+    **subcap id OR its L2 capability name**. So a previous subcap is only *removed* when NEITHER
+    its id NOR its L2 capability name survives with a near description; a new subcap is only
+    *added* under the same test. If the id changed but the L2 name (or subcap name) still matches
+    with a near description, that is a **rename/reassignment** — reported as *modified* (id
+    reassigned), never as a remove+add pair. Same-id subcaps whose description stays near in
+    meaning do not count as a change. Each row carries the explanation."""
     va = await resolve_version(a)
     vb = await resolve_version(b)
     for v in (va, vb):
         if not _SCHEMA_RE.match(v.schema_name):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid version schema")
     engine = db.require_engine()
-    sql = text(
-        f"SELECT coalesce(sa.subcap_id, sb.subcap_id) AS id, "
-        f"coalesce(sb.name, sa.name) AS name, "
-        f"left(coalesce(sa.subcap_id, sb.subcap_id), 2) AS pillar, "
-        f"(sa.subcap_id IS NULL) AS added, (sb.subcap_id IS NULL) AS removed, "
-        f"(sa.name IS DISTINCT FROM sb.name) AS d_name, "
-        f"(sa.lifecycle_state IS DISTINCT FROM sb.lifecycle_state) AS d_life, "
-        f"(sa.description IS DISTINCT FROM sb.description) AS d_desc, "
-        f"(sa.tier IS DISTINCT FROM sb.tier) AS d_tier "
-        f"FROM {va.schema_name}.subcap sa "
-        f"FULL OUTER JOIN {vb.schema_name}.subcap sb ON sb.subcap_id = sa.subcap_id"
+    sql = (
+        "SELECT s.subcap_id AS id, s.name, cap.name AS l2, s.description AS descr, "
+        "s.lifecycle_state AS life, s.tier, left(s.subcap_id, 2) AS pillar "
+        "FROM {s}.subcap s JOIN {s}.capability cap ON cap.capability_id = s.capability_id"
     )
     async with engine.connect() as conn:
-        rows = (await conn.execute(sql)).mappings().all()
+        a_rows = (await conn.execute(text(sql.format(s=va.schema_name)))).mappings().all()
+        b_rows = (await conn.execute(text(sql.format(s=vb.schema_name)))).mappings().all()
+    A = {str(r["id"]): dict(r) for r in a_rows}
+    B = {str(r["id"]): dict(r) for r in b_rows}
+    b_by_name: dict[str, str] = {_norm(r["name"]): str(r["id"]) for r in b_rows}
+    b_by_l2: dict[str, list[str]] = {}
+    for r in b_rows:
+        b_by_l2.setdefault(_norm(r["l2"]), []).append(str(r["id"]))
+
     added: list[DiffRow] = []
     removed: list[DiffRow] = []
     modified: list[DiffModified] = []
     unchanged = 0
-    for r in rows:
-        base = {"id": r["id"], "name": r["name"], "pillar": r["pillar"]}
-        if r["added"]:
-            added.append(DiffRow(**base))
-        elif r["removed"]:
-            removed.append(DiffRow(**base))
-        else:
-            changes = [
-                f
-                for f, hit in (
-                    ("name", r["d_name"]),
-                    ("lifecycle_state", r["d_life"]),
-                    ("description", r["d_desc"]),
-                    ("tier", r["d_tier"]),
+    matched_b: set[str] = set()  # B-only ids consumed as rename targets
+
+    # 1) same-id subcaps — modified only if a field actually diverged
+    for sid in sorted(set(A) & set(B)):
+        x, y = A[sid], B[sid]
+        changes: list[str] = []
+        if _norm(x["name"]) != _norm(y["name"]):
+            changes.append(f"name '{x['name']}' → '{y['name']}'")
+        if _norm(x["l2"]) != _norm(y["l2"]):
+            changes.append(f"L2 capability '{x['l2']}' → '{y['l2']}'")
+        # Same id => same subcap; a reworded description is expected across versions and is NOT a
+        # change. Only count a near-total rewrite, and only when BOTH versions actually carry a
+        # description (an empty v5 field vs a populated v7 one is missing enrichment, not a change).
+        dx, dy = _toks(x["descr"]), _toks(y["descr"])
+        if dx and dy and (len(dx & dy) / len(dx | dy)) < 0.12:
+            changes.append("description substantially rewritten")
+        if (x["tier"] or "") != (y["tier"] or ""):
+            changes.append(f"tier {x['tier'] or '—'} → {y['tier'] or '—'}")
+        # NOTE: lifecycle_state is deliberately excluded — it is mutable RUNTIME state (evolved by
+        # suggestions/flags after provisioning), not a version-defining catalogue attribute.
+        if changes:
+            modified.append(
+                DiffModified(
+                    id=sid,
+                    name=y["name"],
+                    pillar=y["pillar"],
+                    l2=y["l2"],
+                    changes=changes,
+                    explanation="Same subcap id, kept; " + "; ".join(changes) + ".",
                 )
-                if hit
-            ]
-            if changes:
-                modified.append(DiffModified(**base, changes=changes))
-            else:
-                unchanged += 1
+            )
+        else:
+            unchanged += 1
+
+    # 2) A-only ids — a rename (carried over under a new id) or a genuine removal
+    for sid in sorted(set(A) - set(B)):
+        x = A[sid]
+        succ = b_by_name.get(_norm(x["name"]))
+        matched_by = "subcap name"
+        if not succ or succ in A:
+            succ = None
+            for cand in b_by_l2.get(_norm(x["l2"]), []):
+                if cand not in A and cand not in matched_b and _near(x["descr"], B[cand]["descr"]):
+                    succ, matched_by = cand, "L2 capability name + near description"
+                    break
+        if succ and succ not in A:
+            matched_b.add(succ)
+            y = B[succ]
+            modified.append(
+                DiffModified(
+                    id=succ,
+                    name=y["name"],
+                    pillar=y["pillar"],
+                    l2=y["l2"],
+                    from_id=sid,
+                    changes=[f"id reassigned {sid} → {succ}"],
+                    explanation=(
+                        f"Rename/reassignment: '{x['name']}' [{sid}] in {va.version_id} carries "
+                        f"over as '{y['name']}' [{succ}] in {vb.version_id} (matched by "
+                        f"{matched_by}). Id governance never recycles ids, so a new id was minted "
+                        "— this is not a removal."
+                    ),
+                )
+            )
+        else:
+            removed.append(
+                DiffRow(
+                    id=sid,
+                    name=x["name"],
+                    pillar=x["pillar"],
+                    l2=x["l2"],
+                    explanation=(
+                        f"Genuinely removed: neither id {sid} nor its L2 capability '{x['l2']}' "
+                        f"survives in {vb.version_id} with a near description (deduped or dropped "
+                        "at source)."
+                    ),
+                )
+            )
+
+    # 3) B-only ids not consumed as a rename target — genuinely added
+    for sid in sorted(set(B) - set(A)):
+        if sid in matched_b:
+            continue
+        y = B[sid]
+        added.append(
+            DiffRow(
+                id=sid,
+                name=y["name"],
+                pillar=y["pillar"],
+                l2=y["l2"],
+                explanation=(
+                    f"Genuinely new: no id or L2-capability+description match in {va.version_id}."
+                ),
+            )
+        )
     return DiffResp(
         a=va.version_id,
         b=vb.version_id,

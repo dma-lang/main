@@ -20,9 +20,12 @@ export interface DiffRow {
   id: string;
   name: string;
   pillar: string;
+  l2?: string | null;
+  explanation: string;
 }
 
 export interface DiffModified extends DiffRow {
+  from_id?: string | null; // set when the id was reassigned (a rename carried across versions)
   changes: string[];
 }
 
@@ -281,6 +284,7 @@ export interface StoryRow {
   story_score: number | null;
   story_sv_code: string | null;
   tier: string | null;
+  is_synthetic?: boolean;
 }
 
 export interface StoryPage {
@@ -1063,10 +1067,14 @@ export const api = {
   },
   subcap: (v: string, id: string): Promise<SubcapDetail> =>
     http<SubcapDetail>(`/api/catalogue/${v}/subcaps/${id}`),
-  subcapStories: (v: string, id: string, page = 1, size = 8): Promise<StoryPage> =>
-    http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
-  subcapDelivery: (v: string, id: string): Promise<DeliveryDrill> =>
-    http<DeliveryDrill>(`/api/catalogue/${v}/subcaps/${id}/delivery`),
+  subcapStories: (v: string, id: string, page = 1, size = 8, synthetic = false): Promise<StoryPage> =>
+    http<StoryPage>(
+      `/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}&include_synthetic=${synthetic}`,
+    ),
+  subcapDelivery: (v: string, id: string, synthetic = false): Promise<DeliveryDrill> =>
+    http<DeliveryDrill>(
+      `/api/catalogue/${v}/subcaps/${id}/delivery?include_synthetic=${synthetic}`,
+    ),
   timeline: (v: string, id: string): Promise<TimelineResp> =>
     http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
   kg: (v: string, subcap: string): Promise<KgResp> =>

@@ -90,6 +90,20 @@ class StoryRow(BaseModel):
     story_score: float | None = None
     story_sv_code: str | None = None
     tier: str | None = None
+    is_synthetic: bool = False
+
+
+# The carried-delivery source for a subcap. The analysis-grade default is JIRA-ONLY (matches the
+# story_catalogue_link view + n_stories); `include_synthetic` adds the labelled synthetic stories
+# the deep-dive toggle reveals. Same status floor as the view (confirmed | review).
+def _carry_where(include_synthetic: bool) -> str:
+    syn = "" if include_synthetic else "AND NOT st.is_synthetic "
+    return (
+        "FROM control.story_subcap_carry c "
+        "JOIN control.story st ON st.story_key = c.story_key "
+        "WHERE c.target_version = :ver AND c.carried_to_subcap = :sid "
+        "AND c.status IN ('confirmed', 'review') AND c.carried_to_subcap IS NOT NULL " + syn
+    )
 
 
 class StoryPage(BaseModel):
@@ -296,21 +310,20 @@ async def subcap_stories(
     subcap_id: str,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    include_synthetic: bool = Query(False),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> StoryPage:
-    """Confirmed delivery stories carried onto this subcap (F5), highest composite first."""
+    """Delivery stories carried onto this subcap (F5), highest composite first. Jira-only by
+    default (analysis grade); ``include_synthetic`` adds the labelled synthetic stories."""
     v = await resolve_version(version)
-    where = (
-        "FROM control.story_catalogue_link scl "
-        "JOIN control.story st ON st.story_key = scl.story_key "
-        "WHERE scl.version_id = :ver AND scl.subcap_id = :sid"
-    )
+    where = _carry_where(include_synthetic)
     rows_sql = text(
         "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
         "st.composite_score::float AS composite_score, st.ac_score::float AS ac_score, "
         "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
-        "st.story_sv_code, st.tier " + where + " ORDER BY st.composite_score DESC NULLS LAST, "
-        "st.story_key LIMIT :size OFFSET :off"
+        "st.story_sv_code, st.tier, st.is_synthetic "
+        + where
+        + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
     )
     params = {"ver": v.version_id, "sid": subcap_id}
     async with _engine().connect() as conn:
@@ -365,21 +378,20 @@ _CLUSTER_SCAN_CAP = 600
 
 @router.get("/{version}/subcaps/{subcap_id}/delivery")
 async def subcap_delivery(
-    version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
+    version: str,
+    subcap_id: str,
+    include_synthetic: bool = Query(False),
+    _user: dict[str, Any] = Depends(get_current_user),
 ) -> DeliveryDrill:
     """Drilldown UNDER the story count: which clients (Jira projects) delivered this subcap, and
-    which story themes cluster together across them. Every number is computed straight from
-    control.story_catalogue_link ∪ control.story for THIS version — the same join the mission
-    control heatmap and n_stories use, so the figures reconcile exactly (traceability)."""
+    which story themes cluster together across them. Jira-only by default (so the figures reconcile
+    exactly with the heatmap and n_stories); ``include_synthetic`` folds in the labelled synthetic
+    stories the deep-dive toggle reveals (those carry no real client → '(no project)')."""
     from app.services.story_insights import cluster_stories
 
     v = await resolve_version(version)
     s = _schema(v)
-    link = (
-        "FROM control.story_catalogue_link l "
-        "JOIN control.story st ON st.story_key = l.story_key "
-        "WHERE l.version_id = :ver AND l.subcap_id = :sid"
-    )
+    link = _carry_where(include_synthetic)
     name_sql = text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid")
     clients_sql = text(
         "SELECT coalesce(st.project_key, '(no project)') AS project_key, "
@@ -390,10 +402,10 @@ async def subcap_delivery(
     )
     top_sql = text(
         "SELECT story_key, project_key, summary, confidence_level, composite_score, ac_score, "
-        "sd_score, story_score, story_sv_code, tier FROM ("
+        "sd_score, story_score, story_sv_code, tier, is_synthetic FROM ("
         "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
         "st.composite_score::float, st.ac_score::float, st.sd_score::float, "
-        "st.story_score::float, st.story_sv_code, st.tier, "
+        "st.story_score::float, st.story_sv_code, st.tier, st.is_synthetic, "
         "row_number() OVER (PARTITION BY coalesce(st.project_key, '(no project)') "
         "ORDER BY st.composite_score DESC NULLS LAST, st.story_key) AS rn " + link + ") t "
         "WHERE rn <= 3"

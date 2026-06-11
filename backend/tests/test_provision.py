@@ -73,6 +73,62 @@ def test_provision_seeds_v7_catalogue() -> None:
 
 
 @needs_db
+def test_v5_inherits_v7_enrichment() -> None:
+    """Cross-version enrichment (user ask): v5 ships base-only, so when v7 is already provisioned
+    v5 INHERITS its platforms / use cases / maturity / personas / offerings per subcap — the deep
+    dive is never empty. Provisions v7 then v5 (the order that makes v7 the enrichment source)."""
+    from app import migrate
+
+    migrate.run()
+
+    async def _run() -> None:
+        db.init_engine()
+        try:
+            await provision.bring_version_online("v7")
+            rep = await provision.bring_version_online("v5", label="Catalogue v5.0")
+            assert rep["enrichment_inherited_from"] == "v7"
+            assert rep["enrichment_inherited_subcaps"] > 700  # almost every v5 subcap maps to v7
+            assert rep["platforms"] > 0 and rep["use_cases"] > 0
+            assert rep["maturity"] > 0 and rep["personas"] > 0
+            engine = db.get_engine()
+            assert engine is not None
+            async with engine.connect() as conn:
+                plat = (
+                    await conn.execute(
+                        text("SELECT count(DISTINCT subcap_id) FROM cat_v5.subcap_platform")
+                    )
+                ).scalar()
+                mat = (
+                    await conn.execute(
+                        text("SELECT count(DISTINCT subcap_id) FROM cat_v5.maturity_descriptor")
+                    )
+                ).scalar()
+            assert int(plat or 0) > 0  # base-only v5 would be 0 here
+            assert int(mat or 0) > 700  # maturity covers (almost) every mapped subcap
+        finally:
+            engine = db.get_engine()
+            if engine is not None:
+                async with engine.begin() as conn:
+                    await conn.execute(text("DROP SCHEMA IF EXISTS cat_v5 CASCADE"))
+                    await conn.execute(text("DROP SCHEMA IF EXISTS cat_v7 CASCADE"))
+                    await conn.execute(
+                        text(
+                            "DELETE FROM control.version_crosswalk "
+                            "WHERE from_version IN ('v5','v7') OR to_version IN ('v5','v7')"
+                        )
+                    )
+                    await conn.execute(
+                        text(
+                            "DELETE FROM control.catalogue_version "
+                            "WHERE version_id IN ('v5', 'v7')"
+                        )
+                    )
+            await db.dispose_engine()
+
+    asyncio.run(_run())
+
+
+@needs_db
 def test_provision_seeds_v5_catalogue_with_id_governance() -> None:
     """The legacy v5 pillar-wise maps provision from their committed seed (837 subcaps), and the
     one real ID collision (P2C3.2.IC1 held both 'Policy Self-Service' and 'AI Claims Estimation')

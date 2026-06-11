@@ -184,17 +184,17 @@ export const useSubcap = (version: string, id: string | null) =>
     enabled: !!version && !!id,
   });
 
-export const useSubcapStories = (version: string, id: string | null) =>
+export const useSubcapStories = (version: string, id: string | null, synthetic = false) =>
   useQuery<StoryPage>({
-    queryKey: ['subcap-stories', version, id],
-    queryFn: () => api.subcapStories(version, id ?? ''),
+    queryKey: ['subcap-stories', version, id, synthetic],
+    queryFn: () => api.subcapStories(version, id ?? '', 1, 8, synthetic),
     enabled: !!version && !!id,
   });
 
-export const useSubcapDelivery = (version: string, id: string | null) =>
+export const useSubcapDelivery = (version: string, id: string | null, synthetic = false) =>
   useQuery<DeliveryDrill>({
-    queryKey: ['subcap-delivery', version, id],
-    queryFn: () => api.subcapDelivery(version, id ?? ''),
+    queryKey: ['subcap-delivery', version, id, synthetic],
+    queryFn: () => api.subcapDelivery(version, id ?? '', synthetic),
     enabled: !!version && !!id,
   });
 

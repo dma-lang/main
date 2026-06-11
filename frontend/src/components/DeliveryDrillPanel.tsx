@@ -38,6 +38,11 @@ function StoryLine({ st, showClient }: { st: StoryRow; showClient?: boolean }) {
           <span className="mono" style={{ fontSize: 10.5, flex: 'none' }}>
             {st.story_key}
           </span>
+          {st.is_synthetic && (
+            <span className="chip orange" style={{ fontSize: 8.5, flex: 'none' }} title="synthetic story (not real Jira delivery)">
+              synthetic
+            </span>
+          )}
           {showClient && st.project_key && (
             <span className="chip soft" style={{ fontSize: 9, flex: 'none' }}>
               {st.project_key}
@@ -97,38 +102,78 @@ function StoryLine({ st, showClient }: { st: StoryRow; showClient?: boolean }) {
   );
 }
 
-export function DeliveryDrillPanel({ version, id }: { version: string; id: string }) {
-  const drill = useSubcapDelivery(version, id);
+export function DeliveryDrillPanel({
+  version,
+  id,
+  synthetic,
+}: {
+  version: string;
+  id: string;
+  synthetic?: boolean; // controlled by the parent (workbench tab); uncontrolled => own toggle
+}) {
+  const [ownSyn, setOwnSyn] = useState(false);
+  const syn = synthetic ?? ownSyn;
+  const controlled = synthetic !== undefined;
+  const drill = useSubcapDelivery(version, id, syn);
   const [openClient, setOpenClient] = useState<string | null>(null);
   const [openCluster, setOpenCluster] = useState<number | null>(null);
   const d = drill.data;
 
+  // Own toggle only when NOT controlled by a parent (e.g. on the Trace page). In the workbench the
+  // Delivery tab owns one toggle for both the story list and this panel.
+  const toggle = !controlled && (
+    <div className="row gap8" style={{ marginBottom: 12 }}>
+      <button
+        className={'btn xs ' + (!syn ? 'primary' : 'ghost')}
+        onClick={() => setOwnSyn(false)}
+      >
+        Jira only
+      </button>
+      <button
+        className={'btn xs ' + (syn ? 'primary' : 'ghost')}
+        onClick={() => setOwnSyn(true)}
+        title="Include the labelled synthetic stories"
+      >
+        + synthetic
+      </button>
+    </div>
+  );
+
   if (drill.isLoading) {
     return (
-      <div className="muted" style={{ fontSize: 12 }}>
-        Parsing clients and clustering stories…
+      <div>
+        {toggle}
+        <div className="muted" style={{ fontSize: 12 }}>
+          Parsing clients and clustering stories…
+        </div>
       </div>
     );
   }
   if (!d || d.total_stories === 0) {
     return (
-      <div className="banner info" style={{ fontSize: 11.5 }}>
-        <Icon n="book" s={13} />
-        No real Jira delivery carries onto this subcap in {version} — nothing to parse into clients
-        or clusters. (Synthetic stories never count here.)
+      <div>
+        {toggle}
+        <div className="banner info" style={{ fontSize: 11.5 }}>
+          <Icon n="book" s={13} />
+          No {syn ? '' : 'real Jira '}delivery carries onto this subcap in {version}
+          {syn ? ' (Jira or synthetic)' : ''} — nothing to parse into clients or clusters.
+          {!syn && ' Toggle “+ synthetic” to include synthetic stories.'}
+        </div>
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-        gap: 14,
-        alignItems: 'start',
-      }}
-    >
+    <div>
+      {toggle}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+          gap: 14,
+          alignItems: 'start',
+        }}
+      >
       <div className="card pad" style={{ padding: 14 }}>
         <div className="between" style={{ marginBottom: 4 }}>
           <div className="h3">Clients · {d.n_clients}</div>
@@ -303,6 +348,7 @@ export function DeliveryDrillPanel({ version, id }: { version: string; id: strin
             unclustered — counted, never hidden.
           </div>
         )}
+        </div>
       </div>
     </div>
   );
