@@ -168,6 +168,14 @@ export const useSubcaps = (version: string) =>
     enabled: !!version,
   });
 
+export const useValueChain = (version: string, pillar: string, sv: string) =>
+  useQuery({
+    queryKey: ['value-chain', version, pillar, sv],
+    queryFn: () => api.valueChain(version, pillar, sv),
+    enabled: !!version,
+    placeholderData: (prev) => prev,
+  });
+
 export const useSubcap = (version: string, id: string | null) =>
   useQuery<SubcapDetail>({
     queryKey: ['subcap', version, id],

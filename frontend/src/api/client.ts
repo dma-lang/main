@@ -230,6 +230,30 @@ export interface SubcapNode {
   is_new: boolean;
 }
 
+export interface ValueChainSubcap {
+  id: string;
+  name: string;
+  pillar: string;
+  stage: string;
+}
+export interface ValueChainCluster {
+  code: string;
+  name: string;
+  pillar: string;
+  count: number;
+  subcaps: ValueChainSubcap[];
+  stages: { name: string; count: number }[];
+  merged_from: string[];
+}
+export interface ValueChainResp {
+  version: string;
+  sv: string;
+  clusters: ValueChainCluster[];
+  raw_clusters: number;
+  deduped: number;
+  total_subcaps: number;
+}
+
 export interface SubcapDetail {
   id: string;
   name: string;
@@ -972,6 +996,12 @@ export const api = {
   },
   subcaps: (v: string): Promise<SubcapNode[]> =>
     http<SubcapNode[]>(`/api/catalogue/${v}/subcaps`),
+  valueChain: (v: string, pillar = '', sv = ''): Promise<ValueChainResp> => {
+    const qs = new URLSearchParams();
+    if (pillar && pillar !== 'all') qs.set('pillar', pillar);
+    if (sv && sv !== 'all') qs.set('sv', sv);
+    return http<ValueChainResp>(`/api/catalogue/${v}/value-chain?${qs.toString()}`);
+  },
   subcap: (v: string, id: string): Promise<SubcapDetail> =>
     http<SubcapDetail>(`/api/catalogue/${v}/subcaps/${id}`),
   subcapStories: (v: string, id: string, page = 1, size = 8): Promise<StoryPage> =>

@@ -806,6 +806,35 @@ async def whatif(
     )
 
 
+@router.get("/{version}/value-chain")
+async def value_chain(
+    version: str,
+    pillar: str = "",
+    sv: str = "",
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """The value-chain atlas, DERIVED LIVE from the version's own capability clusters (A3) —
+    dynamic, deduped, and smart-clustered (services/value_chain). Works for v5 and v7 alike from
+    each one's data. ``pillar`` filters; ``sv`` is accepted for the UI lens but the segments are
+    catalogue-wide."""
+    from app.services.value_chain import derive_value_chain
+
+    s = _schema(await resolve_version(version))
+    where = " WHERE cat.pillar_id = :p" if pillar and pillar != "all" else ""
+    # Segment at the CATEGORY grain (the natural value-chain stage, ~16) — capabilities (135) are
+    # too granular to be a chain. The smart dedupe/cluster then merges near-duplicate categories.
+    sql = text(
+        "SELECT s.subcap_id, s.name, cat.pillar_id AS pillar, cat.name AS cluster, "
+        "cap.name AS category " + _JOINS.format(s=s) + where + " ORDER BY s.subcap_id"
+    )
+    async with _engine().connect() as conn:
+        rows = (await conn.execute(sql, {"p": pillar})).mappings().all()
+    out = derive_value_chain([dict(r) for r in rows])
+    out["version"] = version
+    out["sv"] = sv or "all"
+    return out
+
+
 @router.get("/{version}/summary")
 async def summary(
     version: str, _user: dict[str, Any] = Depends(get_current_user)

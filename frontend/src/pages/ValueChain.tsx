@@ -1,29 +1,27 @@
-// Value chain atlas (A3) — the 8 universal MECE clusters (VCC-01..08) and the per-subvertical
-// stage pipeline. Cluster cards + counts come from the committed prototype config
-// (frontend/src/data/valueChain.ts); subcap NAMES in the expanded pipeline join LIVE from the
-// active catalogue version so the chips deep-link and peek correctly. The backend value-chain
-// endpoint (sheet-21 seed) is deferred — see the data file header.
-import { useMemo, useState } from 'react';
+// Value chain atlas (A3) — DYNAMIC. Segments are DERIVED LIVE from the active catalogue version's
+// own capability categories (GET /api/catalogue/{v}/value-chain): deduped (same segment, different
+// spelling -> one) and smart-clustered (near-duplicate names merged, shown transparently). v5 and
+// v7 each derive their own chain from their own data — nothing hardcoded. Click a segment to see
+// its stages (the finer capabilities) and subcaps; chips deep-link/peek into the workbench.
+import { useEffect, useState } from 'react';
 
-import { useSubcaps } from '../api/queries';
-import { Dropdown, Page, SC } from '../components/primitives';
-import { VALUE_CHAIN, VC_STAGES } from '../data/valueChain';
-import { openPeek } from '../lib/events';
+import type { ValueChainCluster } from '../api/client';
+import { useValueChain } from '../api/queries';
+import { Empty, Page, PillarDot } from '../components/primitives';
+import { go, openPeek } from '../lib/events';
 import { heatBg } from '../lib/helpers';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
-// Radial view of the 8 clusters — wedge radius ∝ subcap count, ported from the prototype's
-// RadialWheel (ui.jsx:2765). Replaces the old toggle that only reflowed grid columns.
-function RadialWheel() {
+// Radial view — wedge radius ∝ subcap count, fed by the live clusters.
+function RadialWheel({ segs }: { segs: ValueChainCluster[] }) {
   const cx = 200;
   const cy = 200;
-  const segs = VALUE_CHAIN;
-  const max = Math.max(...segs.map((s) => s.count));
+  const max = Math.max(1, ...segs.map((s) => s.count));
   const total = segs.reduce((a, s) => a + s.count, 0);
   return (
     <div className="card pad" style={{ display: 'flex', justifyContent: 'center' }}>
-      <svg width={440} height={400} viewBox="0 0 400 400">
+      <svg width="100%" height={400} viewBox="0 0 400 400" style={{ maxWidth: 440 }}>
         {segs.map((s, i) => {
           const a0 = (i / segs.length) * 2 * Math.PI - Math.PI / 2;
           const a1 = ((i + 1) / segs.length) * 2 * Math.PI - Math.PI / 2;
@@ -33,8 +31,8 @@ function RadialWheel() {
           const x1 = cx + Math.cos(a1) * rr;
           const y1 = cy + Math.sin(a1) * rr;
           const mid = (a0 + a1) / 2;
-          const lx = cx + Math.cos(mid) * (rr + 18);
-          const ly = cy + Math.sin(mid) * (rr + 18);
+          const lx = cx + Math.cos(mid) * (rr + 16);
+          const ly = cy + Math.sin(mid) * (rr + 16);
           return (
             <g key={s.code}>
               <path
@@ -46,7 +44,7 @@ function RadialWheel() {
               <text
                 x={lx}
                 y={ly}
-                fontSize="9"
+                fontSize="8.5"
                 fontWeight="700"
                 fill="var(--text-tertiary)"
                 textAnchor="middle"
@@ -58,7 +56,7 @@ function RadialWheel() {
           );
         })}
         <circle cx={cx} cy={cy} r={50} fill="var(--surface-base)" stroke="var(--border-subtle)" />
-        <text x={cx} y={cy - 6} fontSize="20" fontWeight="700" fill="var(--text-primary)" textAnchor="middle">
+        <text x={cx} y={cy - 4} fontSize="22" fontWeight="700" fill="var(--interactive)" textAnchor="middle">
           {total}
         </text>
         <text x={cx} y={cy + 12} fontSize="9" fill="var(--text-tertiary)" textAnchor="middle">
@@ -69,176 +67,158 @@ function RadialWheel() {
   );
 }
 
+const PILLARS = ['all', 'P1', 'P2', 'P3', 'P4'];
+
 export function ValueChain() {
   const ui = useUi();
   const version = ui.version;
-  const [expanded, setExpanded] = useState('VCC-03');
+  const [pillar, setPillar] = useState('all');
   const [radial, setRadial] = useState(false);
-  const subs = useSubcaps(version);
-  const nameOf = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const s of subs.data ?? []) m.set(s.id, s.name);
-    return m;
-  }, [subs.data]);
+  const [open, setOpen] = useState<string | null>(null);
 
-  const sv = ui.sv === 'all' ? 'CL' : ui.sv;
-  const stages = VC_STAGES[expanded + '|' + sv] ?? VC_STAGES[expanded + '|CL'];
-  const max = Math.max(...VALUE_CHAIN.map((c) => c.count));
-  const expandedName = VALUE_CHAIN.find((c) => c.code === expanded)?.name ?? '';
+  const res = useValueChain(version, pillar, ui.sv);
+  const data = res.data;
+  const clusters = data?.clusters ?? [];
+  useEffect(() => setOpen(clusters[0]?.code ?? null), [version, pillar]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const svOptions = [
-    { v: 'all', l: 'Subvertical: CL' },
-    { v: 'CL', l: 'SV: Commercial lending' },
-    { v: 'CIB', l: 'SV: Corporate & investment banking' },
-    { v: 'WM', l: 'SV: Wealth management' },
-    { v: 'RIA', l: 'SV: Registered investment advisor' },
-  ];
+  const current = clusters.find((c) => c.code === open) ?? null;
 
   return (
     <Page
       eyebrow="A · Explore"
       title="Value chain atlas"
-      intro="The 8 universal MECE value-chain clusters and where the catalogue sits in each, by subvertical — so a pillar lead can spot coverage and gaps at a glance."
+      intro="Value-chain segments derived live from this catalogue version's own capability structure — deduped and smart-clustered, never hardcoded. Each version derives its own from its own data."
       actions={
-        <div className="row gap8">
-          <Dropdown value={ui.sv} icon="filter" options={svOptions} onChange={ui.setSv} />
-          <button
-            className={'btn sm ' + (radial ? 'primary' : 'ghost')}
-            onClick={() => setRadial((r) => !r)}
-          >
-            <Icon n="dot" s={13} /> Radial
-          </button>
-        </div>
+        <button
+          className={'btn sm ' + (radial ? 'primary' : 'ghost')}
+          onClick={() => setRadial((r) => !r)}
+        >
+          <Icon n="route" s={13} /> {radial ? 'Grid' : 'Radial'}
+        </button>
       }
     >
-      <div className="card pad">
-        <div className="muted" style={{ fontSize: 12, marginBottom: 16 }}>
-          8 clusters, left to right. Counts are subcaps mapped to each cluster for the selected
-          subvertical.
+      <div className="row wrap gap8" style={{ marginBottom: 14, alignItems: 'center' }}>
+        <div className="pillseg">
+          {PILLARS.map((p) => (
+            <button key={p} className={pillar === p ? 'on' : ''} onClick={() => setPillar(p)}>
+              {p === 'all' ? 'All pillars' : p}
+            </button>
+          ))}
         </div>
-        {radial && <RadialWheel />}
-        <div
-          style={{
-            display: radial ? 'none' : 'grid',
-            gridTemplateColumns: 'repeat(8,1fr)',
-            gap: 8,
-          }}
-        >
-          {VALUE_CHAIN.map((c) => {
-            const on = expanded === c.code;
-            return (
-              <div
-                key={c.code}
-                onClick={() => setExpanded(c.code)}
-                className="card hov"
-                style={{
-                  padding: '12px 12px 14px',
-                  cursor: 'pointer',
-                  borderColor: on ? 'var(--border-strong)' : 'var(--border-subtle)',
-                  background: on ? 'var(--surface-overlay)' : 'var(--surface-base)',
-                  position: 'relative',
-                }}
-              >
-                <div className="mono" style={{ fontSize: 10, color: 'var(--z-slate)', fontWeight: 700 }}>
-                  {c.code}
-                </div>
-                <div className="h3" style={{ fontSize: 12.5, margin: '6px 0', minHeight: 32, lineHeight: 1.2 }}>
-                  {c.name}
-                </div>
-                <div className="num" style={{ fontSize: 22, fontWeight: 700, color: 'var(--interactive)' }}>
-                  {c.count}
-                </div>
-                <div className="muted" style={{ fontSize: 10 }}>
-                  subcaps
-                </div>
-                <div className="muted" style={{ fontSize: 10.5, marginTop: 6, lineHeight: 1.3, minHeight: 26 }}>
-                  {c.blurb}
-                </div>
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    height: 3,
-                    background: heatBg(c.count / max),
-                    borderRadius: '0 0 5px 5px',
-                  }}
-                />
-              </div>
-            );
-          })}
-        </div>
+        {data && (
+          <span className="muted" style={{ fontSize: 12 }}>
+            {clusters.length} value-chain segments · {data.total_subcaps} subcaps
+            {data.deduped > 0 && (
+              <span className="chip teal" style={{ marginLeft: 8, fontSize: 10 }}>
+                {data.deduped} duplicate/similar merged
+              </span>
+            )}
+          </span>
+        )}
       </div>
 
-      {stages && (
-        <div className="card pad mt16 fade-in">
-          <div className="between" style={{ marginBottom: 4 }}>
-            <div className="h2">{expandedName} — expanded</div>
-            <span className="chip soft">{sv === 'CL' ? 'Commercial lending' : sv} · tab 21</span>
-          </div>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 16 }}>
-            Subvertical-specific stages from <span className="mono">21_VC_Mapping_PerSubcap</span>.
-            Click a subcap → deep dive scoped to the subvertical.
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 0 }}>
-            {stages.map((st, i) => (
-              <div key={i} style={{ position: 'relative', paddingRight: 14 }}>
-                <div className="row gap8" style={{ marginBottom: 10 }}>
-                  <div
-                    style={{
-                      width: 24,
-                      height: 24,
-                      borderRadius: '50%',
-                      background: 'var(--surface-overlay)',
-                      color: 'var(--interactive)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 11,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {i + 1}
+      {clusters.length === 0 ? (
+        <Empty
+          icon="route"
+          title="No value chain yet"
+          desc="Provision a catalogue version (upload its workbooks) and the value-chain segments derive automatically from its categories."
+        />
+      ) : radial ? (
+        <RadialWheel segs={clusters} />
+      ) : (
+        <>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+              gap: 8,
+              marginBottom: 16,
+            }}
+          >
+            {clusters.map((c) => {
+              const on = c.code === open;
+              return (
+                <div
+                  key={c.code}
+                  onClick={() => setOpen(c.code)}
+                  className="card hov"
+                  style={{
+                    padding: '11px 12px 13px',
+                    cursor: 'pointer',
+                    borderColor: on ? 'var(--border-strong)' : 'var(--border-subtle)',
+                    background: on ? 'var(--surface-overlay)' : 'var(--surface-base)',
+                  }}
+                >
+                  <div className="row gap6" style={{ marginBottom: 5 }}>
+                    <span className="mono" style={{ fontSize: 9.5, color: 'var(--z-slate)', fontWeight: 700 }}>
+                      {c.code}
+                    </span>
+                    <PillarDot p={c.pillar} s={7} />
                   </div>
-                  <div className="h3" style={{ fontSize: 12.5 }}>
-                    {st.stage}
+                  <div style={{ fontSize: 12.5, fontWeight: 600, minHeight: 32, lineHeight: 1.2 }}>
+                    {c.name}
+                  </div>
+                  <div className="num" style={{ fontSize: 21, fontWeight: 700, color: 'var(--interactive)' }}>
+                    {c.count}
+                  </div>
+                  <div className="muted" style={{ fontSize: 10 }}>
+                    subcaps{c.merged_from.length ? ` · ${c.merged_from.length} merged` : ''}
                   </div>
                 </div>
-                <div style={{ display: 'grid', gap: 6 }}>
-                  {st.subs.map((id) => (
-                    <div
-                      key={id}
-                      className="card hov"
-                      style={{ padding: '8px 10px', cursor: 'pointer' }}
-                      onClick={() => openPeek(id)}
-                    >
-                      <SC id={id} />
-                      <div
-                        style={{
-                          fontSize: 11.5,
-                          color: 'var(--text-secondary)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {nameOf.get(id) ?? '—'}
-                      </div>
-                    </div>
-                  ))}
+              );
+            })}
+          </div>
+
+          {current && (
+            <div className="card pad fade-in">
+              <div className="between" style={{ marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                <div className="row gap8">
+                  <span className="chip soft mono">{current.code}</span>
+                  <b style={{ fontSize: 15 }}>{current.name}</b>
+                  <span className="chip soft">{current.pillar}</span>
+                  <span className="muted" style={{ fontSize: 12 }}>{current.count} subcaps</span>
                 </div>
-                {i < stages.length - 1 && (
-                  <Icon
-                    n="chevR"
-                    s={16}
-                    style={{ position: 'absolute', right: 0, top: 4, color: 'var(--text-disabled)' }}
-                  />
-                )}
               </div>
-            ))}
-          </div>
-        </div>
+              {current.merged_from.length > 0 && (
+                <div className="banner info" style={{ marginBottom: 12 }}>
+                  <Icon n="branch" s={13} />
+                  Merged duplicate/similar segments into this one:{' '}
+                  {current.merged_from.join(' · ')}
+                </div>
+              )}
+              <div style={{ display: 'grid', gap: 10 }}>
+                {current.stages.map((st) => (
+                  <div key={st.name}>
+                    <div className="row gap8" style={{ marginBottom: 6 }}>
+                      <span className="eyebrow" style={{ margin: 0 }}>
+                        {st.name}
+                      </span>
+                      <span className="muted" style={{ fontSize: 11 }}>
+                        {st.count}
+                      </span>
+                    </div>
+                    <div className="row wrap gap6">
+                      {current.subcaps
+                        .filter((s) => s.stage === st.name)
+                        .map((s) => (
+                          <span
+                            key={s.id}
+                            className="chip soft mono"
+                            style={{ cursor: 'pointer', fontSize: 10.5 }}
+                            title={s.name}
+                            onClick={() => openPeek(s.id)}
+                            onDoubleClick={() => go('subcap/' + s.id)}
+                          >
+                            {s.id}
+                          </span>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </Page>
   );
