@@ -145,9 +145,10 @@ def test_decay_no_delivery_flags_let_admin_mark_inactive(client: TestClient) -> 
     flags = client.get("/api/change-flags?status=open").json()["flags"]
     decay = [f for f in flags if f["kind"] == "decay_no_delivery"]
     assert len(decay) > 100  # almost all of v7 is decayed — flags reflect that
-    f = next(x for x in decay if x["before"] != "dead")
+    f = next(x for x in decay if x["before"] in ("emerging", "rising", "stable"))
     target = f["target"]
     assert f["after"] == "dead"  # proposed correction: mark inactive
+    assert f["sev"] == "HIGH"  # a believed-live subcap with zero delivery is a HIGH admin alert
 
     detail = client.get(f"/api/catalogue/v7/subcaps/{target}").json()
     assert detail["n_stories"] == 0  # genuinely zero real Jira delivery

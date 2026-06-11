@@ -112,6 +112,13 @@ function OverviewTab({
   const platforms = enr?.platforms ?? [];
   return (
     <div className="fade-in">
+      {enr?.inherited_from && (
+        <div className="banner info" style={{ fontSize: 11.5, marginBottom: 12 }}>
+          <Icon n="branch" s={13} />
+          This version carries no enrichment of its own — platforms, use cases and maturity are
+          shown from the <b>{enr.inherited_from}</b> reference catalogue, mapped by subcap ID.
+        </div>
+      )}
       <p style={{ margin: '0 0 16px', fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
         {d?.description ?? 'No description recorded in this version.'}
       </p>

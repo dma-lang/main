@@ -190,6 +190,11 @@ def test_summary(client: TestClient) -> None:
     body = r.json()
     assert body["total_subcaps"] == 851
     assert len(body["pillars"]) == 4
+    # COMPLETENESS = (total subcaps - decayed subcaps) / total subcaps, exactly (user definition).
+    for p in body["pillars"]:
+        if p["subcap_count"]:
+            expected = (p["subcap_count"] - p["decay"]) / p["subcap_count"]
+            assert abs(p["completeness"] - expected) < 1e-6
 
 
 @needs_db

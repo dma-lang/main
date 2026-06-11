@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app import db
 from app.deps import get_current_user
@@ -151,6 +151,9 @@ class SubcapEnrichment(BaseModel):
     use_cases: list[UseCase]
     maturity: list[Maturity]
     offerings: list[OfferingRef]
+    # set when any list was filled from the reference catalogue (v7) because this version had none
+    # of its own — surfaced honestly in the UI as "enriched from <version>".
+    inherited_from: str | None = None
 
 
 class ConnectionSibling(BaseModel):
@@ -262,6 +265,18 @@ _JOINS = (
     "JOIN {s}.category cat ON cat.category_id = cap.category_id"
 )
 
+# Record completeness = filled CORE FIELDS / 5, computed LIVE from the subcap's own columns at read
+# time. (It was read from a stored column that an older provision left at 0 — so mission control
+# showed a permanent 0% until a re-provision. Computing it live makes it correct for every version
+# immediately, and it never depends on stale data. A subcap always has a name, so it is never 0%.)
+_FILL_SCORE = (
+    "(((s.name IS NOT NULL AND s.name <> '')::int "
+    "+ (s.description IS NOT NULL AND s.description <> '')::int "
+    "+ (s.tier IS NOT NULL AND s.tier <> '')::int "
+    "+ (s.solution_type IS NOT NULL AND s.solution_type <> '')::int "
+    "+ (s.zennify_status IS NOT NULL AND s.zennify_status <> '')::int)::float / 5)"
+)
+
 
 @router.get("/{version}/subcaps")
 async def list_subcaps(
@@ -288,7 +303,8 @@ async def get_subcap(
     sql = text(
         "SELECT s.subcap_id AS id, s.name, cat.pillar_id AS pillar, cat.name AS category, "
         "cap.name AS cluster, s.description, s.solution_type, s.tier, s.lifecycle_state, "
-        "s.completeness, "
+        + _FILL_SCORE
+        + " AS completeness, "
         f"(SELECT count(*) FROM {s}.use_case uc WHERE uc.subcap_id = s.subcap_id) AS n_use_cases, "
         f"(SELECT count(*) FROM {s}.subcap_platform sp WHERE sp.subcap_id = s.subcap_id) "
         "AS n_platforms, "
@@ -299,9 +315,19 @@ async def get_subcap(
     )
     async with _engine().connect() as conn:
         row = (await conn.execute(sql, {"sid": subcap_id, "ver": v.version_id})).mappings().first()
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"subcap '{subcap_id}' not found")
-    return SubcapDetail.model_validate(dict(row))
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"subcap '{subcap_id}' not found")
+        d = dict(row)
+        # Stat tiles must agree with the deep-dive tabs: when this version has no enrichment of
+        # its own, the counts reflect the reference (v7) fallback the enrichment endpoint uses.
+        if not d["n_use_cases"] or not d["n_platforms"]:
+            from app.services import enrichment_seed
+
+            ref_id = await _map_to_reference(conn, v.version_id, subcap_id)
+            c = enrichment_seed.counts_for(ref_id)
+            d["n_use_cases"] = d["n_use_cases"] or c["use_cases"]
+            d["n_platforms"] = d["n_platforms"] or c["platforms"]
+    return SubcapDetail.model_validate(d)
 
 
 @router.get("/{version}/subcaps/{subcap_id}/stories")
@@ -596,12 +622,42 @@ async def subcap_timeline(
     )
 
 
+async def _map_to_reference(conn: AsyncConnection, version_id: str, subcap_id: str) -> str:
+    """Map a subcap to its counterpart in the reference catalogue (v7) for enrichment fallback —
+    by SUBCAP ID first (the user's ask), then the diff/id-governance crosswalk. Returns the
+    reference subcap id (the same id when the version already uses v7 ids, e.g. an uploaded v7)."""
+    from app.services import enrichment_seed
+
+    ref = enrichment_seed.reference_version()
+    if not ref or version_id == ref:
+        return subcap_id
+    row = (
+        await conn.execute(
+            text(
+                "SELECT to_subcap FROM control.version_crosswalk "
+                "WHERE from_version = :v AND to_version = :r AND from_subcap = :sid "
+                "AND to_subcap IS NOT NULL LIMIT 1"
+            ),
+            {"v": version_id, "r": ref, "sid": subcap_id},
+        )
+    ).first()
+    return str(row[0]) if row else subcap_id
+
+
 @router.get("/{version}/subcaps/{subcap_id}/enrichment")
 async def subcap_enrichment(
     version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> SubcapEnrichment:
-    """Personas, L3 platforms, use cases and M1-M5 maturity for a subcap (Overview/Use/Maturity)."""
-    s = _schema(await resolve_version(version))
+    """Personas, L3 platforms, use cases and M1-M5 maturity for a subcap (Overview/Use/Maturity).
+
+    If this version carries none of its OWN enrichment for the subcap (e.g. a base-only uploaded
+    catalogue), each empty facet is filled from the reference catalogue (v7) mapped BY SUBCAP ID
+    (then the diff/crosswalk) and tagged ``inherited_from`` — so the deep dive is never empty and
+    the source is honest. The version's own enrichment always wins where it exists."""
+    from app.services import enrichment_seed
+
+    v = await resolve_version(version)
+    s = _schema(v)
     q_personas = text(
         f"SELECT p.persona_id, p.canonical_name, p.role_description FROM {s}.subcap_persona sp "
         f"JOIN {s}.persona p ON p.persona_id = sp.persona_id WHERE sp.subcap_id = :sid "
@@ -628,17 +684,34 @@ async def subcap_enrichment(
     )
     p = {"sid": subcap_id}
     async with _engine().connect() as conn:
-        personas = (await conn.execute(q_personas, p)).mappings().all()
-        platforms = (await conn.execute(q_platforms, p)).mappings().all()
-        use_cases = (await conn.execute(q_uc, p)).mappings().all()
-        maturity = (await conn.execute(q_mat, p)).mappings().all()
-        offerings = (await conn.execute(q_off, p)).mappings().all()
+        personas = [dict(r) for r in (await conn.execute(q_personas, p)).mappings().all()]
+        platforms = [dict(r) for r in (await conn.execute(q_platforms, p)).mappings().all()]
+        use_cases = [dict(r) for r in (await conn.execute(q_uc, p)).mappings().all()]
+        maturity = [dict(r) for r in (await conn.execute(q_mat, p)).mappings().all()]
+        offerings = [dict(r) for r in (await conn.execute(q_off, p)).mappings().all()]
+        # fall back to the reference catalogue ONLY for the facets this version lacks
+        inherited_from: str | None = None
+        if not (personas and platforms and use_cases and maturity and offerings):
+            ref_id = await _map_to_reference(conn, v.version_id, subcap_id)
+            seed = enrichment_seed.enrichment_for(ref_id)
+            ref_ver = enrichment_seed.reference_version()
+            if not personas and seed["personas"]:
+                personas, inherited_from = seed["personas"], ref_ver
+            if not platforms and seed["platforms"]:
+                platforms, inherited_from = seed["platforms"], ref_ver
+            if not use_cases and seed["use_cases"]:
+                use_cases, inherited_from = seed["use_cases"], ref_ver
+            if not maturity and seed["maturity"]:
+                maturity, inherited_from = seed["maturity"], ref_ver
+            if not offerings and seed["offerings"]:
+                offerings, inherited_from = seed["offerings"], ref_ver
     return SubcapEnrichment(
-        personas=[Persona.model_validate(dict(r)) for r in personas],
-        platforms=[Platform.model_validate(dict(r)) for r in platforms],
-        use_cases=[UseCase.model_validate(dict(r)) for r in use_cases],
-        maturity=[Maturity.model_validate(dict(r)) for r in maturity],
-        offerings=[OfferingRef.model_validate(dict(r)) for r in offerings],
+        personas=[Persona.model_validate(r) for r in personas],
+        platforms=[Platform.model_validate(r) for r in platforms],
+        use_cases=[UseCase.model_validate(r) for r in use_cases],
+        maturity=[Maturity.model_validate(r) for r in maturity],
+        offerings=[OfferingRef.model_validate(r) for r in offerings],
+        inherited_from=inherited_from,
     )
 
 
@@ -990,13 +1063,17 @@ async def summary(
 ) -> CatalogueSummary:
     v = await resolve_version(version)
     s = _schema(v)
-    # completeness = DATA completeness of the load (filled key fields, computed at provision).
-    # decay = subcaps with NO delivered JIRA story (story_catalogue_link is Jira-only by
-    # construction — synthetic stories never count). A decayed subcap can still be active; the
-    # decay scan flags it for an admin decision, it is never auto-deactivated.
+    # COMPLETENESS (user definition) = (total subcaps - decayed subcaps) / total subcaps, i.e. the
+    # share of subcaps backed by real Jira delivery. decay = subcaps with NO delivered Jira story
+    # (story_catalogue_link is Jira-only by construction — synthetic stories never count). A decayed
+    # subcap can stay active; it is flagged HIGH for an admin to mark inactive or keep, never
+    # auto-deactivated. A description rewrite is neither decay nor incompleteness.
     sql = text(
         "SELECT p.pillar_id, p.name, count(s.subcap_id) AS subcap_count, "
-        "coalesce(avg(s.completeness), 0)::float AS completeness, "
+        "coalesce(count(s.subcap_id) FILTER (WHERE EXISTS ("
+        "  SELECT 1 FROM control.story_catalogue_link l "
+        "  WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id))::float "
+        "/ nullif(count(s.subcap_id), 0), 0) AS completeness, "
         "count(s.subcap_id) FILTER (WHERE NOT EXISTS ("
         "  SELECT 1 FROM control.story_catalogue_link l "
         "  WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id)) AS decay "

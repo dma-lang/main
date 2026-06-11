@@ -275,9 +275,10 @@ def _desc_near(a: str | None, b: str | None) -> bool:
 
 
 def _decay_severity(life: str) -> str:
-    """A subcap we BELIEVE is live (emerging/rising/stable) but has no delivery is the real
-    decision (MED); one already winding down (declining/fading) is consistent decay (LOW)."""
-    return "MED" if life in _LIVE_STATES else "LOW"
+    """Decayed subcaps are HIGH alerts for the admin to action (mark inactive or keep): a subcap we
+    BELIEVE is live (emerging/rising/stable) yet has zero delivery is the urgent case (HIGH); one
+    already winding down (declining/fading) is consistent decay, still actionable (MED)."""
+    return "HIGH" if life in _LIVE_STATES else "MED"
 
 
 async def scan_decay(version: str, no_delivery_cap: int = _NO_DELIVERY_CAP) -> dict[str, Any]:

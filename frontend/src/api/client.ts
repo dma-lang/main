@@ -363,6 +363,7 @@ export interface SubcapEnrichment {
   use_cases: UseCase[];
   maturity: Maturity[];
   offerings: OfferingRef[];
+  inherited_from?: string | null; // set when facets came from the reference catalogue (v7)
 }
 
 export interface ConnectionSibling {
