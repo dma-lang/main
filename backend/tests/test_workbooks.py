@@ -134,6 +134,16 @@ def test_parses_v5_and_v7_header_variants() -> None:
     assert by_id["P3C1.1"]["cluster"] == "Ops Automation"
     assert out["skipped_rows"] == 0
     assert out["id_reconciliations"] == [] and out["id_conflicts"] == []
+    # the DETECTED SCHEMA the onboarding review step shows: sheet + column->field per workbook
+    detail = {d["file"]: d for d in out["workbooks_detail"]}
+    assert detail["Pillar 1 v7.xlsx"]["sheet"] == "2_Capability_Map"
+    cols = {c["source"]: c["field"] for c in detail["Pillar 1 v7.xlsx"]["columns"]}
+    assert cols["Sub_Cap_ID"] == "id" and cols["Sub_Cap_Name"] == "name"
+    assert detail["Pillar 1 v7.xlsx"]["subcaps_parsed"] == 1
+    assert detail["Pillar 2 v5.xlsx"]["sheet"] == "Capability Map"
+    assert {c["source"]: c["field"] for c in detail["Pillar 2 v5.xlsx"]["columns"]}[
+        "Sub-Cap ID"
+    ] == "id"
 
 
 def test_skips_rows_without_a_subcap_id_or_name() -> None:

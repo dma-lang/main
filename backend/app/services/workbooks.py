@@ -143,6 +143,7 @@ def parse_catalogue_zip(
     register = {k.strip().lower(): v for k, v in (id_register or {}).items()}
     reconciliations: list[dict[str, str]] = []
     conflicts: list[dict[str, str]] = []
+    detail: list[dict[str, Any]] = []  # per-workbook detected schema, for the automap review step
     duplicates = 0
     skipped = 0
     for fname, blob in books:
@@ -160,6 +161,27 @@ def parse_catalogue_zip(
                 f"{fname}: Capability Map headers not recognised "
                 f"(need a Sub-Cap ID and Sub-Capability/Sub_Cap_Name column)"
             )
+        # DETECTED SCHEMA for the human review step: which sheet matched and how each source
+        # column maps to a canonical field — plus the headers the automap did not recognise
+        # (shown, never silently dropped).
+        columns = [
+            {"source": str(h).strip(), "field": _CAP_ALIASES[_norm_header(h)]}
+            for h in header
+            if h is not None and str(h).strip() and _norm_header(h) in _CAP_ALIASES
+        ]
+        unmapped = [
+            str(h).strip()
+            for h in header
+            if h is not None and str(h).strip() and _norm_header(h) not in _CAP_ALIASES
+        ]
+        book_detail: dict[str, Any] = {
+            "file": fname,
+            "sheet": ws.title,
+            "columns": columns,
+            "unmapped_headers": unmapped,
+            "subcaps_parsed": 0,
+        }
+        detail.append(book_detail)
         for row in rows:
             sid = _cell(row, idx, "id")
             name = _cell(row, idx, "name")
@@ -205,6 +227,7 @@ def parse_catalogue_zip(
                     "comp": 0,
                 }
             )
+            book_detail["subcaps_parsed"] += 1
     if not subcaps:
         raise ValueError("the pillar workbooks contained no subcap rows")
     pillars = {
@@ -219,6 +242,7 @@ def parse_catalogue_zip(
         "duplicate_rows": duplicates,
         "id_reconciliations": reconciliations,
         "id_conflicts": conflicts,
+        "workbooks_detail": detail,  # per-book detected schema, for the automap review step
     }
 
 

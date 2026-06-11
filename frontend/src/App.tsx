@@ -35,21 +35,23 @@ function Authed({ me }: { me: Me }) {
 
   useEffect(() => {
     const vs = versions.data;
+    // Only PROVISIONED versions are usable (an 'uploaded' one has no cat_<v> schema yet).
+    const usable = (vs ?? []).filter((v) => v.status === 'provisioned' || v.status === 'active');
     // Default to the MOST RECENT catalogue version — highest version number, not latest
     // provisioned row (re-provisioning legacy v5 must never steal the default from v7).
-    if (vs && vs.length > 0 && !version) {
-      const newest = [...vs].sort(
+    if (usable.length > 0 && !version) {
+      const newest = [...usable].sort(
         (a, b) =>
           (parseInt(b.version_id.replace(/\D/g, ''), 10) || 0) -
           (parseInt(a.version_id.replace(/\D/g, ''), 10) || 0),
       )[0];
       setVersion(newest.version_id);
     }
-    // J1: straight after login, a workspace with NO catalogue lands on the automapping flow
-    // (upload -> parse -> map -> provision -> carry) instead of an empty mission control. Deep
-    // links and explicit pages are left alone; once a version exists, login lands on mission
-    // control as usual.
-    if (vs && vs.length === 0) {
+    // J1: straight after login, a workspace with NO usable catalogue lands on the automapping
+    // flow (upload -> detect schema -> confirm -> provision -> carry) instead of an empty
+    // mission control. Deep links and explicit pages are left alone; once a version is
+    // provisioned, login lands on mission control as usual.
+    if (vs && usable.length === 0) {
       const h = location.hash.replace(/[?].*$/, '');
       if (h === '' || h === '#/' || h === '#/mission-control' || h === '#/login') {
         location.hash = '#/onboarding';

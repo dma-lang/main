@@ -260,18 +260,39 @@ async def upload_catalogue(
             syn_path = _SEED_DIR / f"stories_synthetic_{version}.json.gz"
             with _gzip.open(syn_path, "wt", encoding="utf-8") as fh:
                 json.dump(synthetic, fh)
+    # PERSIST EVERY LOAD (D10): the upload registers the version immediately (status 'uploaded' —
+    # provisioning later flips it to 'provisioned'; never downgraded on re-upload) and records the
+    # full parse as an ingest_run row — detected schema, counts, governance — so each load is
+    # committed to the database and auditable, not just echoed to the browser.
     engine = db.require_engine()
     async with engine.begin() as conn:
         await conn.execute(
             text(
+                "INSERT INTO control.catalogue_version (version_id, label, schema_name, status) "
+                "VALUES (:v, :label, :schema, 'uploaded') ON CONFLICT (version_id) DO NOTHING"
+            ),
+            {"v": version, "label": f"Catalogue {version} (uploaded)", "schema": f"cat_{version}"},
+        )
+        await conn.execute(
+            text(
                 "INSERT INTO control.ingest_run (version_id, source, status, finished_at, stats) "
-                "SELECT :v, 'workbook_upload', 'succeeded', now(), CAST(:s AS jsonb) "
-                "WHERE EXISTS (SELECT 1 FROM control.catalogue_version WHERE version_id = :v)"
+                "VALUES (:v, 'workbook_upload', 'succeeded', now(), CAST(:s AS jsonb))"
             ),
             {
                 "v": version,
                 "s": json.dumps(
-                    {"workbooks": len(workbooks), "pillars": pillars, "files": workbooks[:8]}
+                    {
+                        "workbooks": len(workbooks),
+                        "pillars": pillars,
+                        "files": workbooks[:8],
+                        "subcaps_parsed": subcaps_parsed,
+                        "synthetic_stories_found": synthetic_found,
+                        "skipped_rows": parsed.get("skipped_rows", 0),
+                        "duplicate_rows": parsed.get("duplicate_rows", 0),
+                        "id_reconciliations": parsed.get("id_reconciliations", []),
+                        "id_conflicts": parsed.get("id_conflicts", []),
+                        "workbooks_detail": parsed.get("workbooks_detail", []),
+                    }
                 ),
             },
         )
@@ -283,6 +304,11 @@ async def upload_catalogue(
         "synthetic_stories_found": synthetic_found,
         "id_reconciliations": parsed.get("id_reconciliations", []),
         "id_conflicts": parsed.get("id_conflicts", []),
+        # the DETECTED SCHEMA per workbook (sheet, column->field mapping, unmapped headers,
+        # per-book parsed counts) — what the onboarding "Detect schema" step reviews
+        "workbooks_detail": parsed.get("workbooks_detail", []),
+        "skipped_rows": parsed.get("skipped_rows", 0),
+        "duplicate_rows": parsed.get("duplicate_rows", 0),
         "recorded": True,
         "note": (
             f"Parsed {subcaps_parsed} subcaps from the workbooks"

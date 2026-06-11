@@ -351,6 +351,11 @@ def test_catalogue_zip_upload(client: TestClient) -> None:
             }
         ]
         assert [c["source_id"] for c in out["id_conflicts"]] == ["P3C9.1"]
+        # the detected schema is in the manifest, so the onboarding review step has real content
+        assert len(out["workbooks_detail"]) == 4
+        p1 = next(d for d in out["workbooks_detail"] if d["file"] == "Pillar 1 Test.xlsx")
+        assert p1["subcaps_parsed"] == 2
+        assert {c["source"]: c["field"] for c in p1["columns"]}["Sub-Cap ID"] == "id"
         assert cat_seed.exists() and syn_seed.exists()  # the upload IS the version's source
     finally:
         cat_seed.unlink(missing_ok=True)

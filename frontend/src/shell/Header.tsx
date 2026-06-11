@@ -66,7 +66,9 @@ export function Header() {
     { v: 'all', l: 'All SV' },
     ...SUBVERTICALS.map((s) => ({ v: s.code, l: `${s.code} · ${s.name}` })),
   ];
-  const versions = versionsQ.data ?? [];
+  const versions = (versionsQ.data ?? []).filter(
+    (v) => v.status === 'provisioned' || v.status === 'active', // 'uploaded' has no schema yet
+  );
   const sortedVersions = [...versions].sort(
     (a, b) =>
       (parseInt(b.version_id.replace(/\D/g, ''), 10) || 0) -

@@ -920,6 +920,14 @@ export interface IdConflict {
   file: string;
 }
 
+export interface WorkbookDetail {
+  file: string;
+  sheet: string;
+  columns: { source: string; field: string }[];
+  unmapped_headers: string[];
+  subcaps_parsed: number;
+}
+
 export interface UploadManifest {
   version: string;
   workbooks: { name: string; bytes: number }[];
@@ -928,6 +936,9 @@ export interface UploadManifest {
   synthetic_stories_found: number;
   id_reconciliations: IdReconciliation[];
   id_conflicts: IdConflict[];
+  workbooks_detail: WorkbookDetail[];
+  skipped_rows: number;
+  duplicate_rows: number;
   recorded: boolean;
   note: string;
 }
