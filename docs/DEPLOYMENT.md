@@ -295,6 +295,21 @@ shows `"db":"ok"`.
 
 ## A11. Updating the app later
 
+**The one-command way (recommended): the doctor.** It re-derives every value from the project
+(nothing depends on shell variables surviving a Cloud Shell session), checks each known failure
+mode and **fixes it**, deploys, points the migrate job at the fresh image, executes it with a
+classify-and-heal retry loop (it reads the job's own logs: credential mismatch → resets the
+user+password+secret to agree; missing database → creates it; proxy race → retries), and only
+reports success when `/healthz` answers `{"status":"ok",…,"db":"ok"}`:
+
+```bash
+cd ~/cia && git pull --ff-only
+bash scripts/doctor.sh                       # add --client-id <id> the first time
+```
+
+`--check-only` diagnoses and converges configuration without deploying. The manual steps below
+remain for transparency — the doctor automates exactly them, idempotently.
+
 ```bash
 cd ~/cia
 git pull --ff-only

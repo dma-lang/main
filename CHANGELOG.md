@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added (operations)
+- **`scripts/doctor.sh` — check → fix → verify, every run.** One operator command that makes the
+  whole deploy self-healing: re-derives all values from the project (immune to Cloud Shell losing
+  shell variables), enables missing APIs, verifies the Cloud SQL instance, creates the database
+  if absent, rewrites the `DATABASE_URL` secret to the canonical unix-socket form whenever its
+  shape/instance is wrong (resetting the SQL user's password so user+password+secret agree by
+  construction), grants the two documented runtime roles if missing, deploys from source,
+  converges the migrate job (fresh image + non-empty Cloud SQL attach — the empty-attach bug is
+  structurally impossible), executes it with a **classify-and-heal retry loop** that reads the
+  job's own error logs (credential mismatch → heal credentials; missing db → create; proxy race →
+  retry; anything else → print the exact exception and stop), and ends only on
+  `/healthz = ok + db ok`. Never prints a secret. `--check-only` for diagnosis-only;
+  `--client-id` to set the OAuth client id. Documented as the recommended path in DEPLOYMENT A11.
+
 ### Fixed
 - **Migration job failed against a cold database (self-healing)**: in a Cloud Run **Job** the
   Cloud SQL Auth Proxy sidecar has no startup-ordering guarantee, so `app.migrate` opened the
