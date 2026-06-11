@@ -37,12 +37,15 @@ DB_NAME="${DB_NAME:-cia}"
 DB_USER="${DB_USER:-cia}"
 DB_SECRET="${DB_SECRET:-cia-database-url}"
 HMAC_SECRET="${HMAC_SECRET:-cia-hmac-key}"
+OAUTH_SECRET="${OAUTH_SECRET:-cia-google-client-secret}"  # Secret Manager name for the OAuth secret
 CLIENT_ID="${CLIENT_ID:-}"
+CLIENT_SECRET="${CLIENT_SECRET:-}"
 CHECK_ONLY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --client-id) CLIENT_ID="$2"; shift 2 ;;
+    --client-secret) CLIENT_SECRET="$2"; shift 2 ;;  # OAuth code flow needs the secret (server-side)
     --check-only) CHECK_ONLY=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -155,6 +158,22 @@ else
     heal_db_credentials
   fi
 fi
+# OAuth client secret (the code flow needs it, server-side). The doctor cannot invent it — store
+# it once with --client-secret; thereafter it lives in Secret Manager.
+if [ -n "$CLIENT_SECRET" ]; then
+  gcloud secrets describe "$OAUTH_SECRET" >/dev/null 2>&1 \
+    || gcloud secrets create "$OAUTH_SECRET" --replication-policy=automatic >/dev/null 2>&1 || true
+  printf '%s' "$CLIENT_SECRET" | gcloud secrets versions add "$OAUTH_SECRET" --data-file=- >/dev/null
+  fixed "stored the OAuth client secret in ${OAUTH_SECRET}"
+fi
+if gcloud secrets describe "$OAUTH_SECRET" >/dev/null 2>&1; then
+  OAUTH_SECRET_READY=1
+  ok "${OAUTH_SECRET} present (OAuth client secret)"
+else
+  OAUTH_SECRET_READY=0
+  warn "no OAuth client secret yet — sign-in will be unconfigured until you re-run with"
+  warn "  --client-secret <the GOCSPX-… secret from APIs & Services -> Credentials>"
+fi
 
 step "5. runtime service-account roles (documented in A8)"
 PN="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
@@ -180,23 +199,34 @@ fi
 # ------------------------------------------------------------------ 6. deploy the service
 step "6. deploy ${SERVICE} from source (Cloud Build)"
 [ -f Dockerfile ] && [ -d backend ] || die "run from the repo root (~/cia)"
-if [ -z "$CLIENT_ID" ]; then
+if [ -z "$CLIENT_ID" ]; then  # reuse the id already on the service if not passed
   CLIENT_ID="$(gcloud run services describe "$SERVICE" --region "$REGION" --format=json 2>/dev/null \
     | python3 -c 'import json,sys
 try:
   envs=json.load(sys.stdin)["spec"]["template"]["spec"]["containers"][0].get("env",[])
-  print(next((e.get("value","") for e in envs if e.get("name")=="GOOGLE_CLIENT_ID"), ""))
+  by={e.get("name"):e.get("value","") for e in envs}
+  print(by.get("GOOGLE_OAUTH_CLIENT_ID") or by.get("GOOGLE_CLIENT_ID") or "")
 except Exception:
   print("")')"
 fi
+# OAuth Authorization-Code flow: the SPA needs the client id (env) and the service needs the
+# client secret (Secret Manager). The secret stays out of env vars.
 ENVS="LLM_MODE=live"
-if [ -n "$CLIENT_ID" ]; then ENVS="${ENVS},GOOGLE_CLIENT_ID=${CLIENT_ID}"; ok "GOOGLE_CLIENT_ID present"; else
-  warn "no GOOGLE_CLIENT_ID known — sign-in will be unconfigured until you re-run with --client-id <id>"
+SECRETS="DATABASE_URL=${DB_SECRET}:latest,HMAC_KEY=${HMAC_SECRET}:latest"
+if [ -n "$CLIENT_ID" ]; then
+  ENVS="${ENVS},GOOGLE_OAUTH_CLIENT_ID=${CLIENT_ID}"
+  ok "GOOGLE_OAUTH_CLIENT_ID present"
+else
+  warn "no client id — re-run with --client-id <oauth-web-client-id>"
+fi
+if [ "${OAUTH_SECRET_READY:-0}" = "1" ]; then
+  SECRETS="${SECRETS},GOOGLE_OAUTH_CLIENT_SECRET=${OAUTH_SECRET}:latest"
+  ok "GOOGLE_OAUTH_CLIENT_SECRET wired from ${OAUTH_SECRET}"
 fi
 gcloud run deploy "$SERVICE" --source . --region "$REGION" \
   --allow-unauthenticated \
   --add-cloudsql-instances "$SQL_CONN" \
-  --set-secrets "DATABASE_URL=${DB_SECRET}:latest,HMAC_KEY=${HMAC_SECRET}:latest" \
+  --set-secrets "$SECRETS" \
   --set-env-vars "$ENVS" \
   --quiet
 READY="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
@@ -412,15 +442,14 @@ policy in front of Cloud Run can block the run.app URL externally — otherwise 
     ;;
 esac
 
-# Sign-in config smoke: the SPA needs only the OAuth CLIENT ID (Google Identity Services ID-token
-# flow — the client SECRET is for authorization-code server flows this app does not use; there is
-# nothing to configure for it).
+# Sign-in config smoke: the OAuth code flow advertises auth_configured + login_url (the client
+# id/secret stay server-side, so they never appear in /api/config).
 CFG="$(curl -sS --max-time 20 "${URL}/api/config" 2>/dev/null || true)"
-if grep -q '"google_client_id":"..*"' <<<"$CFG"; then
-  ok "sign-in configured — /api/config serves the client id"
+if grep -q '"auth_configured":true' <<<"$CFG"; then
+  ok "sign-in configured — OAuth client id + secret are live on the service"
 else
-  warn "GOOGLE_CLIENT_ID is not live on the service — sign-in will say 'not configured';"
-  warn "re-run with: bash scripts/doctor.sh --client-id <your-oauth-web-client-id>"
+  warn "sign-in is NOT configured on the service — re-run with BOTH:"
+  warn "  bash scripts/doctor.sh --client-id <oauth-web-client-id> --client-secret <GOCSPX-…>"
 fi
 
 step "DONE — healthy at ${URL}"
@@ -428,9 +457,8 @@ echo "  USE EXACTLY THIS URL in the browser. Older bookmarks may point at a stal
 OTHERS="$(gcloud run services list --format='value(metadata.name)' 2>/dev/null | grep -v "^${SERVICE}\$" | head -6 | tr '\n' ' ')"
 [ -n "$OTHERS" ] && echo "  (other Cloud Run services exist in this project: ${OTHERS}— the CIA app is only '${SERVICE}')"
 echo ""
-echo "  Two things only the Console can do (gcloud has no API for either):"
-echo "  1. If Google shows 'Error 401: invalid_client' at sign-in, the configured OAuth client id"
-echo "     no longer exists (it was rotated/deleted). Create or open the CURRENT 'Web application'"
-echo "     client (Console -> APIs & Services -> Credentials), copy its Client ID, then:"
-echo "         bash scripts/doctor.sh --client-id <the-new-client-id>"
-echo "  2. On that SAME client, add to 'Authorized JavaScript origins':  ${URL}"
+echo "  ONE Console step the API cannot do — register the OAuth redirect URI (NOT a JS origin):"
+echo "    Console -> APIs & Services -> Credentials -> your Web client -> Authorized redirect URIs"
+echo "    -> + Add URI -> EXACTLY:   ${URL}/api/auth/callback"
+echo "  (The Authorization-Code flow uses redirect URIs, so it works on any origin / behind the LB."
+echo "   No 'Authorized JavaScript origins' are needed.) Then open ${URL} and Continue with Google."
