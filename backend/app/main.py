@@ -9,11 +9,11 @@ probe that gates traffic; ``/livez`` is the liveness probe. The lifespan handler
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -52,6 +52,19 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # Never let browsers cache the SPA shell or API responses: a cached index.html kept executing
+    # against an origin Google's frontend had since blocked, showing a ghost app with bare
+    # "404:" errors. Hashed /assets/* bundles stay cacheable (their names change per build).
+    @app.middleware("http")
+    async def _no_store(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        path = request.url.path
+        if not path.startswith("/assets/") and not path.startswith("/brand/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
     @app.get("/healthz", tags=["system"])
     async def healthz() -> dict[str, object]:

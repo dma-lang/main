@@ -39,6 +39,14 @@ def test_livez(client: TestClient) -> None:
     assert r.json() == {"status": "alive"}
 
 
+def test_shell_and_api_are_never_browser_cached(client: TestClient) -> None:
+    """A cached index.html kept executing against an origin Google's frontend had since blocked
+    (ghost app, bare '404:' errors) — the SPA shell and every API response must be no-store.
+    Hashed /assets/* bundles stay cacheable (excluded from the middleware)."""
+    for path in ("/healthz", "/api/config"):
+        assert client.get(path).headers.get("cache-control") == "no-store", path
+
+
 def test_spa_served_from_built_dir(tmp_path: Path) -> None:
     """A real build (index.html + assets) is served at '/', mounted last so API routes still win."""
     (tmp_path / "index.html").write_text("<!doctype html><title>CIA</title>")
