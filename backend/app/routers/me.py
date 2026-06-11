@@ -38,10 +38,13 @@ async def client_config(settings: Settings = Depends(get_settings)) -> dict[str,
     live = not settings.is_dev_auth
     engine = db.get_engine()
     db_status = "ok" if await db.ping() else ("not_configured" if engine is None else "down")
+    # OAuth Authorization-Code flow: the SPA only needs to know auth is configured and where to
+    # start it (/api/auth/login) — the client id/secret stay server-side, unlike the old GSI flow.
     return {
         "auth_mode": "live" if live else "dev",
         "auth_email_domain": settings.auth_email_domain,
-        "google_client_id": settings.google_client_id if live else None,
+        "auth_configured": bool(settings.google_client_id and settings.google_client_secret),
+        "login_url": "/api/auth/login",
         "db": db_status,
     }
 

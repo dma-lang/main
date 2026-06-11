@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -35,16 +35,28 @@ class Settings(BaseSettings):
     # fails closed unless AUTH_MODE=dev is set explicitly — the cost switch must never be able to
     # disable authentication. "live" verifies GOOGLE ID tokens (plain Google Identity Services —
     # no Firebase, no passwords stored); "dev" is the deterministic local identity.
-    auth_mode: str = "live"  # live (Google ID token, fails closed) | dev (local identity)
+    auth_mode: str = "live"  # live (Google OAuth code flow, fails closed) | dev (local identity)
 
-    # The OAuth 2.0 WEB client id the SPA's "Sign in with Google" button uses and the ONLY
-    # audience the server accepts tokens for. A public identifier, not a secret — security is
-    # server-side verification against Google's certs, which fails closed (503 when unset).
-    # Set GOOGLE_CLIENT_ID on the service; create/copy it in GCP Console → APIs & Services →
-    # Credentials (add the run.app origin as an authorized JavaScript origin).
-    google_client_id: str = ""
+    # OAuth 2.0 Authorization-Code flow (the proven Accelerate pattern): a full-page redirect to
+    # Google and back. The backend exchanges the code using the client SECRET (server-to-server),
+    # verifies the hosted domain, and mints its own signed session cookie — so there is NO
+    # browser-side Google Identity Services and NO "Authorized JavaScript origins" to register;
+    # it works behind a load balancer / any origin (only the redirect URI is registered). Accepts
+    # the GOOGLE_OAUTH_* env names (Accelerate's) and GOOGLE_CLIENT_ID as a legacy alias.
+    google_client_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("google_oauth_client_id", "google_client_id"),
+    )
+    google_client_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("google_oauth_client_secret", "google_client_secret"),
+    )
+    session_ttl_hours: int = 12  # session cookie lifetime (matches Accelerate's JWT_TTL_HOURS)
 
-    auth_email_domain: str = "zennify.com"  # sign-in restricted to this domain; fails closed
+    auth_email_domain: str = Field(
+        default="zennify.com",  # sign-in restricted to this hosted domain; fails closed
+        validation_alias=AliasChoices("google_oauth_hosted_domain", "auth_email_domain"),
+    )
     # Break-glass bootstrap admins (always admin; the runtime grant list adds more). NoDecode +
     # the validator below accept a plain comma/semicolon env string — ADMIN_EMAILS=a@x.com,b@x.com
     # — as well as a JSON array (without NoDecode, pydantic-settings JSON-decodes in the env
@@ -90,6 +102,12 @@ class Settings(BaseSettings):
     @property
     def is_dev_auth(self) -> bool:
         return self.auth_mode.lower() == "dev"
+
+    @property
+    def session_secret(self) -> str:
+        """Key for signing session cookies — reuses the provisioned hmac_key (no new secret), with
+        a fixed dev fallback so local/hermetic sessions still verify."""
+        return self.hmac_key or "dev-session-secret-not-for-production"
 
 
 @lru_cache

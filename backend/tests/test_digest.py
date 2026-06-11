@@ -158,8 +158,10 @@ def test_config_is_public_and_honest(client: TestClient) -> None:
     r = client.get("/api/config")
     assert r.status_code == 200
     body = r.json()
-    # test env runs AUTH_MODE=dev (conftest): the SPA is told so, and no client id is sent
-    assert body["auth_mode"] == "dev" and body["google_client_id"] is None
+    # test env runs AUTH_MODE=dev (conftest): the SPA is told so; the OAuth code flow keeps the
+    # client id/secret server-side (only auth_configured + login_url are exposed)
+    assert body["auth_mode"] == "dev"
+    assert body["login_url"] == "/api/auth/login" and "google_client_id" not in body
     assert body["auth_email_domain"] == "zennify.com"
 
 

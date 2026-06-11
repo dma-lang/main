@@ -1,21 +1,15 @@
-// Login (access) — plain Google sign-in (Google Identity Services), @zennify.com, fails closed.
-// NO Firebase: Google renders its own official button (no custom popup → no popup-blocked
-// failures); its callback hands us a Google ID token, the backend verifies signature + audience +
-// domain. Layout/copy mirror the prototype's Login (dark brand panel: hero image, logo, promise
-// list; right: sign-in card). Real states: config loading/error (Retry), sign-in not configured
-// (GOOGLE_CLIENT_ID missing — actionable), dev-identity, domain-rejected (server 403 — honest,
-// with sign-out), db-not-ready (503 → run the migration job).
+// Login (access) — OAuth 2.0 Authorization-Code flow (the proven Accelerate pattern), @zennify.com,
+// fails closed. Clicking "Continue with Google" is a FULL-PAGE redirect to /api/auth/login → Google
+// consent → /api/auth/callback (server exchanges the code with the client secret, verifies the
+// hosted domain, sets a signed HttpOnly session cookie) → back into the app. No browser Google SDK,
+// no "Authorized JavaScript origins", so it works behind a load balancer / any origin. States:
+// config loading/error (Retry), sign-in unconfigured (client id/secret missing — actionable),
+// db unreachable (honest, not "run the migration job"), dev-identity, domain-rejected (callback).
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { api } from '../api/client';
-import {
-  type ClientConfig,
-  loadConfig,
-  prewarmAuth,
-  renderGoogleButton,
-  signOutUser,
-} from '../lib/auth';
+import { type ClientConfig, loadConfig } from '../lib/auth';
 import { Icon } from '../lib/icons';
 import { APP_VERSION } from '../version';
 
@@ -61,36 +55,29 @@ export function Login() {
   const [cfg, setCfg] = useState<ClientConfig | null>(null);
   const [phase, setPhase] = useState<Phase>('loading');
   const [detail, setDetail] = useState('');
-  const gsiHost = useRef<HTMLDivElement>(null);
 
-  const finish = async () => {
+  // The OAuth callback redirects back to #/login?error=… on a refusal (e.g. non-@zennify account).
+  const callbackError = (): string | null => {
+    const m = /[?&]error=([^&]+)/.exec(location.hash);
+    return m ? decodeURIComponent(m[1]) : null;
+  };
+
+  // Live sign-in is a full-page redirect to the server, which owns the entire Google handshake.
+  const startLogin = () => {
+    setPhase('signing');
+    window.location.href = cfg?.login_url ?? '/api/auth/login';
+  };
+
+  // Dev mode only: there is no Google round-trip, so /api/me resolves the dev identity directly.
+  const finishDev = async () => {
     setPhase('signing');
     setDetail('');
     try {
-      // Bounded: a hung backend must surface as a retryable error, never an infinite spinner.
-      const me = await Promise.race([
-        api.me(), // backend verifies the token + domain — fails closed (403)
-        new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error('The service did not respond within 20s — retry.')), 20_000),
-        ),
-      ]);
-      // Kill any in-flight token-less ['me'] refetch BEFORE installing the fresh identity —
-      // its stale 401 landing afterwards would flip the gate straight back to this page.
+      const me = await api.me();
       await qc.cancelQueries({ queryKey: ['me'] });
-      qc.setQueryData(['me'], me); // flips the App gate; the router mounts
+      qc.setQueryData(['me'], me);
       location.hash = '#/mission-control';
     } catch (e) {
-      const msg = String((e as Error)?.message ?? e);
-      if (msg.includes('403')) {
-        setPhase('rejected');
-        setDetail(
-          'This account is not permitted — sign in with a verified @' +
-            (cfg?.auth_email_domain ?? 'zennify.com') +
-            ' Google account.',
-        );
-        signOutUser();
-        return;
-      }
       const mapped = mapError(e);
       setPhase(mapped.phase);
       setDetail(mapped.detail);
@@ -103,13 +90,24 @@ export function Login() {
     loadConfig()
       .then(async (c) => {
         setCfg(c);
+        // A refused OAuth callback landed back here with ?error=… — show it honestly.
+        const err = callbackError();
+        if (err) {
+          setPhase('rejected');
+          setDetail(
+            err === 'domain'
+              ? `This account is not permitted — sign in with a verified @${c.auth_email_domain} Google account.`
+              : `Sign-in did not complete (${err}). Try again.`,
+          );
+          return;
+        }
         // PRE-FLIGHT: name the exact blocker before the user ever clicks, instead of letting them
-        // sign in only to hit a 5xx. The server reports both readiness signals on /api/config.
-        if (c.auth_mode === 'live' && !c.google_client_id) {
+        // start a flow that can't finish. The server reports both readiness signals on /api/config.
+        if (c.auth_mode === 'live' && c.auth_configured === false) {
           setPhase('error');
           setDetail(
-            'Sign-in is not configured on the server — set GOOGLE_CLIENT_ID on the Cloud Run ' +
-              'service (an OAuth web client id). This is NOT a database problem.',
+            'Sign-in is not configured on the server — set GOOGLE_OAUTH_CLIENT_ID and ' +
+              'GOOGLE_OAUTH_CLIENT_SECRET on the Cloud Run service. This is NOT a database problem.',
           );
           return;
         }
@@ -124,15 +122,7 @@ export function Login() {
           );
           return;
         }
-        setPhase('ready');
-        if (c.auth_mode === 'live') {
-          // Pre-warm Google's script, then let GOOGLE render the button — Google owns the click,
-          // so there is no custom popup to be blocked and nothing to time out.
-          await prewarmAuth();
-          if (gsiHost.current) {
-            await renderGoogleButton(gsiHost.current, () => void finish());
-          }
-        }
+        setPhase('ready'); // live: the redirect button is shown; dev: the continue button
       })
       .catch((e) => {
         setPhase('error');
@@ -143,8 +133,7 @@ export function Login() {
         );
       });
   };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, []);
+  useEffect(() => load(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="loginwrap">
@@ -267,27 +256,36 @@ export function Login() {
                 className="btn primary"
                 style={{ width: '100%', justifyContent: 'center', padding: 12, fontSize: 14 }}
                 disabled={phase === 'signing'}
-                onClick={() => void finish()}
+                onClick={() => void finishDev()}
               >
                 Continue to the workbench
               </button>
             </>
           )}
 
-          {cfg?.auth_mode === 'live' && (
-            <>
-              {/* Google renders its official button in here (live mode). */}
-              <div
-                ref={gsiHost}
-                style={{ minHeight: 44, display: phase === 'signing' ? 'none' : 'block' }}
-              />
-              {phase === 'signing' && (
-                <div className="row gap8" style={{ fontSize: 12.5 }}>
-                  <Icon n="refresh" s={15} cls="spin" />
-                  Signing in…
-                </div>
+          {cfg?.auth_mode === 'live' && (phase === 'ready' || phase === 'signing') && (
+            <button
+              className="btn primary"
+              style={{
+                width: '100%',
+                justifyContent: 'center',
+                gap: 10,
+                padding: 12,
+                fontSize: 14,
+              }}
+              disabled={phase === 'signing'}
+              onClick={startLogin}
+            >
+              {phase === 'signing' ? (
+                <>
+                  <Icon n="refresh" s={16} cls="spin" /> Redirecting to Google…
+                </>
+              ) : (
+                <>
+                  <Icon n="shield" s={16} /> Continue with Google
+                </>
               )}
-            </>
+            </button>
           )}
 
           {phase === 'rejected' && (

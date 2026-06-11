@@ -57,14 +57,17 @@ def test_update_preferences_persists(client: TestClient) -> None:
 
 
 def test_hermetic_llm_mode_does_not_disable_auth() -> None:
-    """The cost switch must never disable authentication: LLM_MODE=hermetic with live auth still
-    fails closed on a missing token (the dev identity needs AUTH_MODE=dev EXPLICITLY)."""
+    """The cost switch must never disable authentication: LLM_MODE=hermetic + live auth still
+    fails closed when there is no session cookie (dev identity needs AUTH_MODE=dev EXPLICITLY)."""
+    from starlette.requests import Request
+
     from app.deps import get_current_user
     from app.settings import Settings
 
     s = Settings(llm_mode="hermetic", auth_mode="live")
+    req = Request({"type": "http", "headers": [], "method": "GET", "path": "/api/me"})
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(get_current_user(authorization=None, settings=s))
+        asyncio.run(get_current_user(request=req, settings=s))
     assert exc.value.status_code == 401
 
 
@@ -101,22 +104,39 @@ def test_admin_resolution_unions_bootstrap_and_grants() -> None:
     assert _bootstrap(s) == {"boss@zennify.com"}
 
 
-def test_named_admins_are_hardcoded_defaults_and_auth_fails_closed_unconfigured() -> None:
-    """The two named admins stay baked-in defaults. Live auth uses plain Google Identity
-    Services: without GOOGLE_CLIENT_ID the verifier must fail CLOSED with an actionable 503 —
-    never accept a token whose audience we can't pin."""
-    from fastapi import HTTPException
+def test_named_admins_are_hardcoded_defaults_and_login_fails_closed_unconfigured() -> None:
+    """The two named admins stay baked-in defaults. Live OAuth: without the client id/secret the
+    login route must fail CLOSED with an actionable 503 — never start a flow it can't complete."""
+    from starlette.requests import Request
 
-    from app.deps import _verify_google
+    from app.routers.auth import auth_login
     from app.settings import Settings
 
     s = Settings()
     assert s.admin_emails == ["tom.hedgecoth@zennify.com", "mishley.otiende@zennify.com"]
-    assert s.google_client_id == ""  # set per-deployment via GOOGLE_CLIENT_ID
+    assert s.google_client_id == "" and s.google_client_secret == ""  # set per-deployment
+    req = Request({"type": "http", "headers": [], "method": "GET", "path": "/api/auth/login"})
     with pytest.raises(HTTPException) as exc:
-        _verify_google("whatever", Settings(auth_mode="live", google_client_id=""))
+        asyncio.run(auth_login(req, Settings(auth_mode="live")))
     assert exc.value.status_code == 503
-    assert "GOOGLE_CLIENT_ID" in str(exc.value.detail)
+    assert "GOOGLE_OAUTH_CLIENT" in str(exc.value.detail)
+
+
+def test_oauth_env_aliases_are_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deployment uses Accelerate's GOOGLE_OAUTH_* names; GOOGLE_CLIENT_ID stays a legacy
+    alias. Both must populate the same settings, and GOOGLE_OAUTH_HOSTED_DOMAIN sets the domain."""
+    from app.settings import Settings
+
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "id-oauth.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "GOCSPX-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_HOSTED_DOMAIN", "zennify.com")
+    s = Settings()
+    assert s.google_client_id == "id-oauth.apps.googleusercontent.com"
+    assert s.google_client_secret == "GOCSPX-secret"
+    assert s.auth_email_domain == "zennify.com"
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "id-legacy.apps.googleusercontent.com")
+    assert Settings().google_client_id == "id-legacy.apps.googleusercontent.com"
 
 
 def test_admin_emails_env_accepts_plain_lists(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,20 +153,28 @@ def test_admin_emails_env_accepts_plain_lists(monkeypatch: pytest.MonkeyPatch) -
     assert Settings().admin_emails == ["c@zennify.com"]
 
 
-def test_live_config_serves_google_client_id() -> None:
-    """GET /api/config in live auth hands the SPA the Google OAuth client id (a public
-    identifier); dev mode serves none. No Firebase block anywhere."""
+def test_live_config_advertises_oauth_login() -> None:
+    """GET /api/config tells the SPA auth is configured and where to start the redirect flow —
+    NOT the client id/secret (they stay server-side in the code flow). No Firebase, no GSI."""
     from app.routers.me import client_config
     from app.settings import Settings
 
     cfg = asyncio.run(
-        client_config(Settings(auth_mode="live", google_client_id="abc.apps.googleusercontent.com"))
+        client_config(
+            Settings(
+                auth_mode="live",
+                google_client_id="abc.apps.googleusercontent.com",
+                google_client_secret="GOCSPX-x",
+            )
+        )
     )
     assert cfg["auth_mode"] == "live"
-    assert cfg["google_client_id"] == "abc.apps.googleusercontent.com"
-    assert "firebase" not in cfg
-    dev = asyncio.run(client_config(Settings(auth_mode="dev")))
-    assert dev["auth_mode"] == "dev" and dev["google_client_id"] is None
+    assert cfg["auth_configured"] is True
+    assert cfg["login_url"] == "/api/auth/login"
+    assert "google_client_id" not in cfg and "firebase" not in cfg  # secret-free contract
+    # configured=False when the secret is missing (so the Login names the exact blocker)
+    half = asyncio.run(client_config(Settings(auth_mode="live", google_client_id="abc")))
+    assert half["auth_configured"] is False
 
 
 def test_db_not_ready_is_503_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,15 +193,81 @@ def test_db_not_ready_is_503_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "migration job" in body["message"]
 
 
-def test_google_token_transport_is_installed() -> None:
-    """REGRESSION: live sign-in verifies the Google ID token via
-    google.auth.transport.requests, which needs the `requests` package — shipped only by the
-    google-auth[requests] EXTRA. When it was missing, EVERY real sign-in 500'd with an ImportError
-    that the Login page mislabelled 'database not ready'. This guards the dependency for good."""
+def test_requests_dependency_is_installed() -> None:
+    """REGRESSION: the OAuth code exchange POSTs to Google's token endpoint with `requests`,
+    shipped only by the google-auth[requests] EXTRA. When it was missing, sign-in 500'd with an
+    ImportError the Login page mislabelled 'database not ready'. Guard the dependency for good."""
     import importlib
 
-    importlib.import_module("requests")
-    importlib.import_module("google.auth.transport.requests")  # must import, not ImportError
+    importlib.import_module("requests")  # must import, not ImportError
+
+
+@needs_db
+def test_oauth_code_flow_signs_in_zennify_and_rejects_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """END-TO-END simulation of the Accelerate-style login: /api/auth/login -> Google ->
+    /api/auth/callback (code exchange stubbed) -> signed session cookie -> /api/me. A @zennify.com
+    account signs in; any other domain is refused with NO session. No GSI, no bearer token."""
+    import base64
+    import json as _json
+
+    from app.main import create_app
+    from app.settings import Settings, get_settings
+
+    def _b64(o: dict[str, object]) -> str:
+        return base64.urlsafe_b64encode(_json.dumps(o).encode()).rstrip(b"=").decode()
+
+    def _id_token(email: str) -> str:
+        body = {"email": email, "email_verified": True, "hd": "zennify.com", "sub": "g-" + email}
+        return f"{_b64({'alg': 'RS256'})}.{_b64(body)}.sig"
+
+    captured: dict[str, str] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None: ...
+        def json(self) -> dict[str, str]:
+            return {"id_token": _id_token(captured["email"])}
+
+    def _fake_post(url: str, data: dict[str, str], timeout: int = 0) -> _Resp:
+        captured["sent_secret"] = data["client_secret"]  # the secret IS used (server-to-server)
+        return _Resp()
+
+    monkeypatch.setattr("requests.post", _fake_post)
+
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        auth_mode="live",
+        google_client_id="cid.apps.googleusercontent.com",
+        google_client_secret="GOCSPX-test",
+        hmac_key="test-session-key",
+    )
+    with TestClient(app) as c:
+        # 1) login -> 302 to Google, with a CSRF state cookie bound to this browser
+        r = c.get("/api/auth/login", follow_redirects=False)
+        assert r.status_code == 302 and "accounts.google.com" in r.headers["location"]
+        state = c.cookies.get("cia_oauth_state")
+        assert state and "hd=zennify.com" in r.headers["location"]
+
+        # 2) callback for a @zennify.com user -> session cookie set, redirect into the app
+        captured["email"] = "consultant@zennify.com"
+        r = c.get(f"/api/auth/callback?code=abc&state={state}", follow_redirects=False)
+        assert r.status_code == 302 and r.headers["location"] == "/"
+        assert c.cookies.get("cia_session") and captured["sent_secret"] == "GOCSPX-test"
+
+        # 3) /api/me now resolves the identity from the cookie alone (no token, no Google call)
+        me = c.get("/api/me")
+        assert me.status_code == 200 and me.json()["email"] == "consultant@zennify.com"
+
+        # 4) a non-domain account is refused — redirected with an error and NO session
+        c.cookies.clear()
+        c.get("/api/auth/login", follow_redirects=False)
+        state = c.cookies.get("cia_oauth_state")
+        captured["email"] = "outsider@gmail.com"
+        r = c.get(f"/api/auth/callback?code=abc&state={state}", follow_redirects=False)
+        assert r.status_code == 302 and "error=domain" in r.headers["location"]
+        assert not c.cookies.get("cia_session")
+        assert c.get("/api/me").status_code == 401  # fails closed
 
 
 def test_db_unreachable_is_honest_503_not_500(monkeypatch: pytest.MonkeyPatch) -> None:

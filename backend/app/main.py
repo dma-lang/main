@@ -91,6 +91,7 @@ def create_app() -> FastAPI:
 
     # --- API routers (register before the SPA mount so /api/* always wins) ---
     from app.routers import admin as admin_router
+    from app.routers import auth as auth_router
     from app.routers import catalogue as catalogue_router
     from app.routers import chat as chat_router
     from app.routers import clients as clients_router
@@ -105,6 +106,7 @@ def create_app() -> FastAPI:
     from app.routers import versions as versions_router
 
     app.include_router(admin_router.router)
+    app.include_router(auth_router.router)
     app.include_router(catalogue_router.router)
     app.include_router(chat_router.router)
     app.include_router(clients_router.router)
