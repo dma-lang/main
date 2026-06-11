@@ -165,6 +165,46 @@ def test_db_not_ready_is_503_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "migration job" in body["message"]
 
 
+def test_google_token_transport_is_installed() -> None:
+    """REGRESSION: live sign-in verifies the Google ID token via
+    google.auth.transport.requests, which needs the `requests` package — shipped only by the
+    google-auth[requests] EXTRA. When it was missing, EVERY real sign-in 500'd with an ImportError
+    that the Login page mislabelled 'database not ready'. This guards the dependency for good."""
+    import importlib
+
+    importlib.import_module("requests")
+    importlib.import_module("google.auth.transport.requests")  # must import, not ImportError
+
+
+def test_db_unreachable_is_honest_503_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine EXISTS but the database is UNREACHABLE (driver OperationalError): the request
+    must surface as a clean 503 whose message points at the SERVICE's Cloud SQL connection — never
+    a raw 500, and never the misleading 'run the migration job' (that's a different connection)."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.services import users
+
+    async def _boom(*_a: object, **_k: object) -> dict[str, object]:
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr(users, "upsert_user", _boom)
+    with TestClient(create_app(), raise_server_exceptions=False) as c:
+        r = c.get("/api/me")  # dev identity -> straight to the upsert -> DB error
+    assert r.status_code == 503
+    msg = r.json()["error"]["message"]
+    assert "cannot reach its database" in msg
+    # it must clarify this is the SERVICE's connection, NOT tell them to run the migration job
+    assert "NOT the migration job" in msg
+
+
+def test_config_reports_db_health_for_login_preflight() -> None:
+    """/api/config carries db status so the Login page can name the exact blocker (sign-in
+    unconfigured vs database unreachable) before the user ever clicks."""
+    with TestClient(create_app()) as c:
+        cfg = c.get("/api/config").json()
+    assert cfg["db"] in {"ok", "down", "not_configured"}
+
+
 def test_require_admin_blocks_non_admin() -> None:
     with pytest.raises(HTTPException) as exc:
         asyncio.run(require_admin(user={"uid": "u", "is_admin": False}))

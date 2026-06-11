@@ -50,6 +50,25 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _db_not_ready(request: Request, exc: DatabaseNotReadyError) -> JSONResponse:
         return JSONResponse(status_code=503, content=_envelope("unavailable", str(exc)))
 
+    # The engine exists but the DB is UNREACHABLE (driver connection error): a clean, honest 503,
+    # never a scary 500 — and the message must NOT send the operator back to the migration job
+    # (that's a different connection). This is the running SERVICE's Cloud SQL link.
+    from sqlalchemy.exc import InterfaceError, OperationalError
+
+    @app.exception_handler(OperationalError)
+    @app.exception_handler(InterfaceError)
+    async def _db_unreachable(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("database unreachable: %s", str(exc).splitlines()[0][:200])
+        return JSONResponse(
+            status_code=503,
+            content=_envelope(
+                "unavailable",
+                "the service cannot reach its database — this is the running service's Cloud SQL "
+                "connection (NOT the migration job, which is separate and may already have run). "
+                "Check that the service has --add-cloudsql-instances and a reachable instance.",
+            ),
+        )
+
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(

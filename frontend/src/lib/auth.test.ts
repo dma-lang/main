@@ -12,7 +12,10 @@ async function freshAuth(): Promise<AuthModule> {
 }
 
 function fakeJwt(exp: number): string {
-  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  // base64url via the browser's btoa (no Node Buffer / @types/node dependency) — this is browser
+  // code under test, and tokenExp() decodes it back with atob the same way.
+  const b64 = (o: object) =>
+    btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   return `${b64({ alg: 'RS256' })}.${b64({ exp, email: 'a@zennify.com' })}.sig`;
 }
 

@@ -29,12 +29,20 @@ async def client_config(settings: Settings = Depends(get_settings)) -> dict[str,
     """Public bootstrap config for the SPA login: the auth mode and, in live mode, the Google
     OAuth WEB client id the Sign-in-with-Google button uses (a public identifier by design —
     security comes from server-side token VERIFICATION, which fails closed). No Firebase: plain
-    Google Identity Services; no passwords are ever handled or stored."""
+    Google Identity Services; no passwords are ever handled or stored.
+
+    Also reports db readiness so the login page can pre-flight and name the EXACT blocker
+    (sign-in unconfigured vs database unreachable) instead of a generic, misleading error."""
+    from app import db
+
     live = not settings.is_dev_auth
+    engine = db.get_engine()
+    db_status = "ok" if await db.ping() else ("not_configured" if engine is None else "down")
     return {
         "auth_mode": "live" if live else "dev",
         "auth_email_domain": settings.auth_email_domain,
         "google_client_id": settings.google_client_id if live else None,
+        "db": db_status,
     }
 
 

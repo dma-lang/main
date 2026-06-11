@@ -36,24 +36,24 @@ const PROMISES: [string, string][] = [
   ],
 ];
 
-/** Map a sign-in/api failure to the phase + actionable message the operator needs. */
+/** Map a sign-in/api failure to the phase + actionable message the operator needs. The backend
+ * now sends an HONEST message for each cause (auth unconfigured vs database unreachable), so we
+ * SHOW IT rather than overwrite every 5xx with a single hardcoded line — the old behaviour sent
+ * operators chasing the migration job for problems that were never the database. */
 function mapError(e: unknown): { phase: Phase; detail: string } {
-  const msg = String((e as Error)?.message ?? e);
-  if (msg.startsWith('503') || msg.startsWith('500')) {
-    return {
-      phase: 'error',
-      detail:
-        'The service database is not ready — run the migration job (docs/DEPLOYMENT.md step A9), then retry.',
-    };
-  }
-  if (msg.startsWith('401')) {
+  const raw = String((e as Error)?.message ?? e);
+  const body = raw.replace(/^\d{3}:\s*/, ''); // strip the "503: " status prefix → the real message
+  if (raw.startsWith('401')) {
     return {
       phase: 'error',
       detail:
         'Google sign-in succeeded but the API rejected the token — verify GOOGLE_CLIENT_ID on the service matches the button’s client id.',
     };
   }
-  return { phase: 'error', detail: msg.slice(0, 200) };
+  if (raw.startsWith('503') || raw.startsWith('500')) {
+    return { phase: 'error', detail: body.slice(0, 260) }; // the server's honest reason
+  }
+  return { phase: 'error', detail: body.slice(0, 220) };
 }
 
 export function Login() {
@@ -103,6 +103,27 @@ export function Login() {
     loadConfig()
       .then(async (c) => {
         setCfg(c);
+        // PRE-FLIGHT: name the exact blocker before the user ever clicks, instead of letting them
+        // sign in only to hit a 5xx. The server reports both readiness signals on /api/config.
+        if (c.auth_mode === 'live' && !c.google_client_id) {
+          setPhase('error');
+          setDetail(
+            'Sign-in is not configured on the server — set GOOGLE_CLIENT_ID on the Cloud Run ' +
+              'service (an OAuth web client id). This is NOT a database problem.',
+          );
+          return;
+        }
+        if (c.db && c.db !== 'ok') {
+          setPhase('error');
+          setDetail(
+            c.db === 'not_configured'
+              ? 'The service has no database configured (DATABASE_URL) — set it and run the migration job (A9).'
+              : 'The service cannot reach its database (its Cloud SQL connection). The migration ' +
+                'job is separate and may already have run — check the service has ' +
+                '--add-cloudsql-instances and a reachable instance, then retry.',
+          );
+          return;
+        }
         setPhase('ready');
         if (c.auth_mode === 'live') {
           // Pre-warm Google's script, then let GOOGLE render the button — Google owns the click,

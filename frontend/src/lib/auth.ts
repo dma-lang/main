@@ -8,6 +8,7 @@ export interface ClientConfig {
   auth_mode: 'dev' | 'live';
   auth_email_domain: string;
   google_client_id: string | null;
+  db?: 'ok' | 'down' | 'not_configured'; // server-reported, so the Login can pre-flight the blocker
 }
 
 interface GisIdApi {
