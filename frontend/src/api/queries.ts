@@ -19,6 +19,7 @@ import {
   type WhatIfResp,
   type ChangeFlagsResp,
   type ChatResponse,
+  type DeliveryDrill,
   type GatesLog,
   type LifecycleSummary,
   type QaMetrics,
@@ -190,6 +191,13 @@ export const useSubcapStories = (version: string, id: string | null) =>
     enabled: !!version && !!id,
   });
 
+export const useSubcapDelivery = (version: string, id: string | null) =>
+  useQuery<DeliveryDrill>({
+    queryKey: ['subcap-delivery', version, id],
+    queryFn: () => api.subcapDelivery(version, id ?? ''),
+    enabled: !!version && !!id,
+  });
+
 export const useSubcapEnrichment = (version: string, id: string | null) =>
   useQuery<SubcapEnrichment>({
     queryKey: ['subcap-enrichment', version, id],
@@ -335,7 +343,8 @@ export function useProvisionActions() {
   };
   const provision = useMutation({ mutationFn: (v: string) => api.provisionVersion(v), onSuccess: invalidate });
   const carry = useMutation({ mutationFn: (v: string) => api.carryForward(v), onSuccess: invalidate });
-  return { provision, carry };
+  const activate = useMutation({ mutationFn: (v: string) => api.activateVersion(v), onSuccess: invalidate });
+  return { provision, carry, activate };
 }
 
 export const useAdmins = (enabled: boolean) =>

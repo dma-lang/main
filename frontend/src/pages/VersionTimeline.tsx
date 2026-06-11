@@ -18,18 +18,20 @@ function fmtWhen(s: string | null): string {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
+function VersionCard({ v }: { v: VersionInfo }) {
   const isAdmin = useUi((s) => s.adminView);
+  const setVersion = useUi((s) => s.setVersion);
   const uploaded = v.status === 'uploaded'; // parsed + committed, awaiting Apply & provision
+  const active = v.status === 'active'; // the ONE approved version (server-enforced)
   const summary = useSummary(uploaded ? '' : v.version_id); // no cat_<v> schema to read yet
-  const { provision } = useProvisionActions();
+  const { provision, activate } = useProvisionActions();
   const total = summary.data?.total_subcaps ?? 0;
   const pillars = summary.data?.pillars ?? [];
 
   return (
     <div
       className="card pad"
-      style={{ borderColor: current ? 'var(--border-medium)' : 'var(--border-subtle)' }}
+      style={{ borderColor: active ? 'var(--border-medium)' : 'var(--border-subtle)' }}
     >
       <div className="between" style={{ marginBottom: 8 }}>
         <div className="row gap8">
@@ -38,8 +40,8 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
               width: 30,
               height: 30,
               borderRadius: 8,
-              background: current ? 'var(--surface-overlay)' : 'var(--surface-raised)',
-              color: current ? 'var(--interactive)' : 'var(--text-tertiary)',
+              background: active ? 'var(--surface-overlay)' : 'var(--surface-raised)',
+              color: active ? 'var(--interactive)' : 'var(--text-tertiary)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -50,7 +52,8 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
           <div>
             <div className="row gap8">
               <b style={{ fontSize: 14 }}>{v.label}</b>
-              {current && <span className="chip teal">current</span>}
+              {active && <span className="chip teal">active</span>}
+              {uploaded && <span className="chip orange">awaiting approval</span>}
             </div>
             <div className="muted" style={{ fontSize: 11 }}>
               {fmtWhen(v.created_at)} · {v.status}
@@ -79,10 +82,33 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
             </button>
           ) : (
             <>
+              <button
+                className={'btn xs ' + (active ? 'primary' : 'ghost')}
+                disabled={!isAdmin || active || activate.isPending}
+                title={
+                  active
+                    ? 'This is the active catalogue'
+                    : isAdmin
+                      ? 'Make this the single ACTIVE catalogue (demotes the current one)'
+                      : 'Admin only'
+                }
+                onClick={() =>
+                  activate.mutate(v.version_id, {
+                    onSuccess: () => {
+                      setVersion(v.version_id);
+                      toast(v.version_id + ' is now the active catalogue');
+                    },
+                    onError: (e) => toast('Activate failed: ' + String(e).slice(0, 80)),
+                  })
+                }
+              >
+                <Icon n={active ? 'check' : 'zap'} s={11} />
+                {active ? 'Active' : 'Set active'}
+              </button>
               <button className="btn ghost xs" onClick={() => go('diff')}>
                 Diff
               </button>
-              {!current && (
+              {!active && (
                 <button
                   className="btn ghost xs"
                   disabled={!isAdmin}
@@ -131,7 +157,6 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
 
 export function VersionTimeline() {
   const versions = useVersions();
-  const active = useUi((s) => s.version);
   const isAdmin = useUi((s) => s.adminView);
   const rows = versions.data ?? [];
 
@@ -167,16 +192,9 @@ export function VersionTimeline() {
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
-          {rows.map((v) => {
-            const fallback = rows[rows.length - 1]?.version_id;
-            return (
-              <VersionCard
-                key={v.version_id}
-                v={v}
-                current={v.version_id === (active || fallback)}
-              />
-            );
-          })}
+          {rows.map((v) => (
+            <VersionCard key={v.version_id} v={v} />
+          ))}
         </div>
       )}
     </Page>

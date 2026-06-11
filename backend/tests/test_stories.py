@@ -226,3 +226,39 @@ def test_analysis_view_is_jira_only(carried: dict[str, Any]) -> None:
     linked, syn_carries = asyncio.run(_q())
     assert linked == 14406  # every analysis row is a real Jira story
     assert syn_carries > 0  # synthetic carries exist (visible in the library) yet never leak
+
+
+@needs_db
+def test_delivery_drilldown_clients_and_clusters(client: TestClient) -> None:
+    """The drilldown UNDER a subcap's story count: clients parsed from Jira project keys, story
+    clusters with related clients, and totals that reconcile EXACTLY with n_stories/heatmap
+    (same story_catalogue_link join — traceability)."""
+    # pick the most-delivered subcap so clients + clusters are non-trivial
+    top = client.get("/api/catalogue/v7/lifecycle").json()["top"][0]
+    sid = top["id"]
+    drill = client.get(f"/api/catalogue/v7/subcaps/{sid}/delivery").json()
+    detail = client.get(f"/api/catalogue/v7/subcaps/{sid}").json()
+
+    assert drill["subcap_id"] == sid
+    assert drill["total_stories"] == detail["n_stories"] == top["stories"]  # numbers reconcile
+    assert drill["n_clients"] >= 1
+    assert len(drill["clients"]) >= 1
+
+    c0 = drill["clients"][0]  # most-active client first
+    assert c0["stories"] >= drill["clients"][-1]["stories"]
+    assert 0 < c0["share"] <= 1
+    assert sum(c["stories"] for c in drill["clients"]) <= drill["total_stories"]
+    # per-client drilldown: its strongest stories ride along, keyed for the story library
+    assert len(c0["top"]) >= 1
+    assert c0["top"][0]["story_key"]
+
+    # clusters: every member count + sample + related-client list is internally consistent
+    for cl in drill["clusters"]:
+        assert cl["stories"] >= 3  # _MIN_CLUSTER — no fake themes
+        assert cl["label"]
+        assert len(cl["sample"]) >= 1
+        assert len(cl["clients"]) >= 1
+    assert drill["clustered_over"] <= 600
+
+    # unknown subcap is an honest 404, not an empty panel
+    assert client.get("/api/catalogue/v7/subcaps/NOPE.1/delivery").status_code == 404

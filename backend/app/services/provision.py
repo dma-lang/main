@@ -137,6 +137,11 @@ def _derive(
             cap_id,
             {"capability_id": cap_id, "category_id": s["catId"], "name": s.get("cluster", cap_id)},
         )
+        # Completeness = DATA completeness of the loaded record (filled key fields / key fields).
+        # Decay (subcaps with no Jira delivery) is a SEPARATE, live measure on the summary — the
+        # two were conflated before, leaving every pillar at a meaningless "0% complete".
+        key_fields = [s["name"], s.get("desc"), s.get("tier"), s.get("sol"), s.get("status")]
+        completeness = round(sum(1 for f in key_fields if f) / len(key_fields), 3)
         subcaps.append(
             {
                 "subcap_id": s["id"],
@@ -147,7 +152,7 @@ def _derive(
                 "tier": s.get("tier"),
                 "lifecycle_state": s.get("life", "stable"),
                 "zennify_status": s.get("status"),
-                "completeness": round(s.get("comp", 0) / 8.0, 3),
+                "completeness": completeness,
             }
         )
     return pillars, categories, list(caps.values()), subcaps
@@ -379,14 +384,27 @@ async def bring_version_online(
         )
         if enrich:
             await _seed_enrichment(conn, schema, enrich)
+        # Provisioning makes a version COMMITTABLE, not active: activation is a separate,
+        # admin-approved toggle (exactly one active). Re-provisioning the active version keeps
+        # it active; the very first provision auto-activates so a fresh workspace works.
         await conn.execute(
             text(
                 "INSERT INTO control.catalogue_version (version_id, label, schema_name, status) "
                 "VALUES (:vid, :label, :schema, 'provisioned') "
                 "ON CONFLICT (version_id) DO UPDATE SET "
-                "status = 'provisioned', schema_name = EXCLUDED.schema_name, label = EXCLUDED.label"
+                "status = CASE WHEN control.catalogue_version.status = 'active' "
+                "THEN 'active' ELSE 'provisioned' END, "
+                "schema_name = EXCLUDED.schema_name, label = EXCLUDED.label"
             ),
             {"vid": version_id, "label": label, "schema": schema},
+        )
+        await conn.execute(
+            text(
+                "UPDATE control.catalogue_version SET status = 'active' "
+                "WHERE version_id = :vid AND NOT EXISTS "
+                "(SELECT 1 FROM control.catalogue_version WHERE status = 'active')"
+            ),
+            {"vid": version_id},
         )
         # after the version row exists: register the mapping this run applied (FK on version_id)
         await _register_mapping(conn, version_id)

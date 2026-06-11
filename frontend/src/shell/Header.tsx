@@ -75,9 +75,9 @@ export function Header() {
       (parseInt(a.version_id.replace(/\D/g, ''), 10) || 0),
   );
   const versionOpts = sortedVersions.length
-    ? sortedVersions.map((v, i) => ({
+    ? sortedVersions.map((v) => ({
         v: v.version_id,
-        l: `${v.version_id} · ${i === 0 ? 'active' : 'legacy'}`,
+        l: `${v.version_id} · ${v.status === 'active' ? 'active' : 'legacy'}`,
       }))
     : [{ v: '', l: 'no catalogue yet' }];
 

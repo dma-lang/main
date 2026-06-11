@@ -245,6 +245,126 @@ async def _create_flag(conn: AsyncConnection, c: Any, version_id: str) -> None:
     )
 
 
+# ---------------------------------------------------------------------------- decay analysis
+_DECAY_KIND = "decay_missing_subcap"
+_SCAN_CAP = 25  # bound each scan run (§15); the remainder is counted, never silently dropped
+
+
+def _tokens(name: str) -> set[str]:
+    return {t for t in re.sub(r"[^a-z0-9 ]", " ", name.lower()).split() if len(t) > 2}
+
+
+async def scan_decay(version: str) -> dict[str, Any]:
+    """DECAY analysis -> change flags (explained, never auto-acted):
+
+    A) subcaps MISSING vs the previous provisioned version, each classified with an explicit
+       explanation: renamed/reassigned (same name lives under a new id — id governance: ids are
+       never recycled), recorded in the id-governance crosswalk, possibly integrated into a
+       near-matching subcap (token overlap), or removed with no successor detected.
+    Story-less decay is surfaced as gated SUGGESTIONS (suggestions.propose_decay) and the live
+    decay count on mission control — flooding the flag queue with hundreds of identical
+    "no stories" flags would bury the actionable ones."""
+    v = await resolve_version(version)
+    schema = v.schema_name
+    if not _SCHEMA_RE.match(schema):
+        raise ValueError("invalid version schema")
+    engine = db.require_engine()
+    async with engine.begin() as conn:
+        prev = (
+            await conn.execute(
+                text(
+                    "SELECT version_id, schema_name FROM control.catalogue_version "
+                    "WHERE status IN ('active','provisioned') AND version_id <> :v "
+                    "AND coalesce(nullif(regexp_replace(version_id,'[^0-9]','','g'),'')::int,0) < "
+                    "coalesce((SELECT nullif(regexp_replace(version_id,'[^0-9]','','g'),'')::int "
+                    "FROM control.catalogue_version WHERE version_id = :v), 0) "
+                    "ORDER BY coalesce(nullif(regexp_replace(version_id,'[^0-9]','','g'),'')"
+                    "::int, 0) DESC LIMIT 1"
+                ),
+                {"v": v.version_id},
+            )
+        ).first()
+        if prev is None or not _SCHEMA_RE.match(str(prev[1])):
+            return {"version": v.version_id, "created": 0, "candidates": 0, "note": "no previous"}
+        prev_ver, prev_schema = str(prev[0]), str(prev[1])
+        cur = {
+            str(r[0]): str(r[1])
+            for r in await conn.execute(text(f"SELECT subcap_id, name FROM {schema}.subcap"))
+        }
+        old = {
+            str(r[0]): str(r[1])
+            for r in await conn.execute(text(f"SELECT subcap_id, name FROM {prev_schema}.subcap"))
+        }
+        cur_by_name = {n.strip().lower(): i for i, n in cur.items()}
+        gov = {
+            str(r[0]): str(r[1])
+            for r in await conn.execute(
+                text(
+                    "SELECT from_subcap, note FROM control.version_crosswalk "
+                    "WHERE note LIKE 'id-governance:%'"
+                )
+            )
+        }
+        missing = sorted(set(old) - set(cur))
+        created = 0
+        for sid in missing[:_SCAN_CAP]:
+            name = old[sid]
+            renamed_to = cur_by_name.get(name.strip().lower())
+            if renamed_to:
+                explanation = (
+                    f"'{name}' still exists in {v.version_id} under a NEW id {renamed_to} — a "
+                    f"rename/reassignment ({sid} is retired, never recycled; id governance)."
+                )
+            elif sid in gov:
+                explanation = f"recorded in the id-governance crosswalk: {gov[sid][:180]}"
+            else:
+                toks = _tokens(name)
+                best, best_j = None, 0.0
+                for cid, cname in cur.items():
+                    ct = _tokens(cname)
+                    j = len(toks & ct) / len(toks | ct) if toks | ct else 0.0
+                    if j > best_j:
+                        best, best_j = (cid, cname), j
+                if best and best_j >= 0.5:
+                    explanation = (
+                        f"no direct successor; possibly integrated into {best[0]} "
+                        f"'{best[1]}' (name similarity {best_j:.0%}) — e.g. an L2 rename or a "
+                        "pillar restructure. A human should confirm."
+                    )
+                else:
+                    explanation = (
+                        f"removed in {v.version_id}; no successor detected (it may have been "
+                        "deduped or dropped at source). A human should confirm."
+                    )
+            exists = (
+                await conn.execute(
+                    text("SELECT 1 FROM control.change_flag WHERE kind = :k AND target_ref = :t"),
+                    {"k": _DECAY_KIND, "t": sid},
+                )
+            ).first()
+            if exists:
+                continue
+            detail = {
+                "title": f"{sid} '{name}' is missing from {v.version_id}",
+                "body": f"Present in {prev_ver}, absent in {v.version_id}. {explanation} A "
+                "decayed subcap may stay active elsewhere — decide whether anything must move.",
+                "name": name,
+                "pillar": sid[:2],
+                "version": v.version_id,
+                "previous_version": prev_ver,
+                "explanation": explanation,
+            }
+            await conn.execute(
+                text(
+                    "INSERT INTO control.change_flag (kind, severity, target_ref, detail) "
+                    "VALUES (:k, 'MED', :t, CAST(:d AS jsonb))"
+                ),
+                {"k": _DECAY_KIND, "t": sid, "d": json.dumps(detail)},
+            )
+            created += 1
+    return {"version": v.version_id, "created": created, "candidates": len(missing)}
+
+
 def _flag_row(m: dict[str, Any]) -> FlagRow:
     d = m["detail"] or {}
     before = (d.get("before") or {}).get("lifecycle_state")

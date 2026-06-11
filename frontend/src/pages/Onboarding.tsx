@@ -206,7 +206,11 @@ export function Onboarding() {
                 type="file"
                 accept=".zip,.xlsx"
                 style={{ display: 'none' }}
-                onChange={(e) => void onUpload(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  e.target.value = ''; // reset so the NEXT upload (even the same file) fires again
+                  void onUpload(f);
+                }}
               />
               <button
                 className="btn primary"
@@ -255,10 +259,38 @@ export function Onboarding() {
                   </div>
                   <div className="row wrap gap6">
                     {d.columns.map((c) => (
-                      <span key={c.source} className="chip soft" style={{ fontSize: 10.5 }}>
+                      <span
+                        key={c.source}
+                        className="chip soft"
+                        style={{ fontSize: 10.5 }}
+                        title={
+                          c.signals
+                            ? `signals — header match ${Math.round(c.signals.header_match * 100)}% · ` +
+                              `fill ${Math.round(c.signals.fill_rate * 100)}% · ` +
+                              `format ${Math.round(c.signals.format_valid * 100)}% over ` +
+                              `${c.signals.rows_scanned} rows` +
+                              (c.samples?.length ? ` · samples: ${c.samples.join(' | ')}` : '')
+                            : undefined
+                        }
+                      >
                         <span className="mono">{c.source}</span>
                         <Icon n="arrowR" s={10} />
                         <b>{c.field}</b>
+                        {typeof c.confidence === 'number' && (
+                          <span
+                            className="num"
+                            style={{
+                              color:
+                                c.confidence >= 0.9
+                                  ? 'var(--interactive)'
+                                  : c.confidence >= 0.7
+                                    ? 'var(--z-blue)'
+                                    : 'var(--z-orange)',
+                            }}
+                          >
+                            {Math.round(c.confidence * 100)}%
+                          </span>
+                        )}
                       </span>
                     ))}
                   </div>
@@ -271,6 +303,28 @@ export function Onboarding() {
                 </div>
               ))}
             </div>
+
+            {manifest.relations_detected.length > 0 && (
+              <div className="card pad" style={{ marginBottom: 14 }}>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>
+                  Detected relationships — become real FKs / link tables at provision
+                </div>
+                <div className="row wrap gap6">
+                  {manifest.relations_detected.map((r) => (
+                    <span
+                      key={r.from + r.verb + r.to}
+                      className="chip soft"
+                      style={{ fontSize: 10.5 }}
+                      title={'detected via: ' + r.via}
+                    >
+                      <span className="mono">{r.from}</span>
+                      <b style={{ color: 'var(--interactive)' }}>{r.verb}</b>
+                      <span className="mono">{r.to}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {manifest.id_reconciliations.length > 0 && (
               <div className="banner info" style={{ marginBottom: 10 }}>

@@ -142,40 +142,70 @@ export function MissionControl() {
                 </tr>
               </thead>
               <tbody>
-                {heat.data.rows.map((r) => (
-                  <tr key={r.key}>
-                    <td>
-                      <div className="row gap8">
-                        {r.pillar && <PillarDot p={r.pillar} s={7} />}
-                        <div style={{ minWidth: 0 }}>
-                          {lens === 'pillar' ? (
-                            <SC id={r.key}>{r.label}</SC>
-                          ) : (
-                            <div
-                              className="sclink"
-                              style={{ fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                              onClick={() => go('explorer')}
+                {heat.data.rows.map((r) => {
+                  // Pillar-lens rows are SUBCAPS — every part of the row drills to the trace
+                  // specifics (clients, story details, clusters); the label still peeks.
+                  const drill = lens === 'pillar' ? () => go('trace/' + r.key) : undefined;
+                  return (
+                    <tr key={r.key}>
+                      <td>
+                        <div className="row gap8">
+                          {r.pillar && <PillarDot p={r.pillar} s={7} />}
+                          <div style={{ minWidth: 0 }}>
+                            {lens === 'pillar' ? (
+                              <SC id={r.key}>{r.label}</SC>
+                            ) : (
+                              <div
+                                className="sclink"
+                                style={{ fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                onClick={() => go('explorer')}
+                              >
+                                {r.label}
+                              </div>
+                            )}
+                          </div>
+                          {drill && (
+                            <button
+                              className="linkbtn"
+                              style={{ flex: 'none', padding: 0 }}
+                              title={'Trace ' + r.key + ' — clients, stories, clusters'}
+                              onClick={drill}
                             >
-                              {r.label}
-                            </div>
+                              <Icon n="branch" s={12} />
+                            </button>
                           )}
                         </div>
-                      </div>
-                    </td>
-                    {r.cells.map((c, i) => (
-                      <td key={i} style={{ padding: '6px 3px' }}>
-                        <div
-                          className="heatcell"
-                          title={`${c} stories · ${heat.data!.axis[i]}`}
-                          style={{ height: 26, background: heatBg(c / (heat.data!.max || 1)) }}
-                        />
                       </td>
-                    ))}
-                    <td className="num" style={{ textAlign: 'right', fontSize: 12, fontWeight: 600 }}>
-                      {r.total.toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
+                      {r.cells.map((c, i) => (
+                        <td key={i} style={{ padding: '6px 3px' }}>
+                          <div
+                            className="heatcell"
+                            title={`${c} stories · ${heat.data!.axis[i]} composite${drill ? ' — click to trace' : ''}`}
+                            style={{
+                              height: 26,
+                              background: heatBg(c / (heat.data!.max || 1)),
+                              cursor: drill ? 'pointer' : 'default',
+                            }}
+                            onClick={drill}
+                          />
+                        </td>
+                      ))}
+                      <td
+                        className="num"
+                        title={drill ? 'Open the delivery drilldown for ' + r.key : undefined}
+                        style={{
+                          textAlign: 'right',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: drill ? 'pointer' : 'default',
+                        }}
+                        onClick={drill}
+                      >
+                        {r.total.toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}

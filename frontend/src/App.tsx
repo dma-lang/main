@@ -40,12 +40,14 @@ function Authed({ me }: { me: Me }) {
     // Default to the MOST RECENT catalogue version — highest version number, not latest
     // provisioned row (re-provisioning legacy v5 must never steal the default from v7).
     if (usable.length > 0 && !version) {
+      // the admin-ACTIVATED version wins; otherwise the most recent (highest numeric id)
+      const activeV = usable.find((v) => v.status === 'active');
       const newest = [...usable].sort(
         (a, b) =>
           (parseInt(b.version_id.replace(/\D/g, ''), 10) || 0) -
           (parseInt(a.version_id.replace(/\D/g, ''), 10) || 0),
       )[0];
-      setVersion(newest.version_id);
+      setVersion((activeV ?? newest).version_id);
     }
     // J1: straight after login, a workspace with NO usable catalogue lands on the automapping
     // flow (upload -> detect schema -> confirm -> provision -> carry) instead of an empty

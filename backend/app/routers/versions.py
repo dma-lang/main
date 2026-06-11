@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -10,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from app import db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_admin
 from app.versioning import Version, resolve_version
 
 router = APIRouter(prefix="/api", tags=["versions"])
@@ -141,3 +142,55 @@ async def get_version(
         status=found.status,
         schema_name=found.schema_name,
     )
+
+
+async def _activate(version: str, actor: str) -> dict[str, Any]:
+    """Make exactly ONE version active: demote the current active to 'provisioned', promote the
+    target (which must be provisioned), and audit the switch. The transaction guarantees the
+    single-active invariant."""
+    engine = db.require_engine()
+    async with engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status FROM control.catalogue_version WHERE version_id = :v"),
+                {"v": version},
+            )
+        ).first()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"version '{version}' not found")
+        if row[0] == "uploaded":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"'{version}' is uploaded but not provisioned — Apply & provision first",
+            )
+        await conn.execute(
+            text(
+                "UPDATE control.catalogue_version SET status = 'provisioned' "
+                "WHERE status = 'active' AND version_id <> :v"
+            ),
+            {"v": version},
+        )
+        await conn.execute(
+            text("UPDATE control.catalogue_version SET status = 'active' WHERE version_id = :v"),
+            {"v": version},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO control.audit_log (actor, action, target_ref, meta) "
+                "VALUES (:a, 'version_activated', :t, CAST(:m AS jsonb))"
+            ),
+            {"a": actor, "t": version, "m": json.dumps({"previous_active_demoted": True})},
+        )
+    return {"ok": True, "active": version}
+
+
+@router.post("/admin/versions/{version}/activate")
+async def activate_version(
+    version: str, admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Admin approval toggle (G1): switch the single ACTIVE catalogue version. Provisioned
+    versions are committable-but-inactive until approved here; exactly one is active."""
+    if not version or set(version) - set("abcdefghijklmnopqrstuvwxyz0123456789_"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid version id")
+    # audit_log.actor is a FK to control.users(uid) — always the uid, never the email
+    return await _activate(version, str(admin["uid"]))

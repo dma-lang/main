@@ -4,7 +4,7 @@
 // /subcaps/{id} (detail), /subcaps/{id}/stories (Delivery), /subcaps/{id}/enrichment (Maturity /
 // Use cases) and /subcaps/{id}/connections (siblings + gated news signals).
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 
 import type { SubcapDetail, SubcapEnrichment, SubcapNode } from '../api/client';
 import {
@@ -14,6 +14,7 @@ import {
   useSubcaps,
   useSubcapStories,
 } from '../api/queries';
+import { DeliveryDrillPanel } from '../components/DeliveryDrillPanel';
 import { Bar, Claim, Empty, LifeChip, Mag, PillarDot, Tier } from '../components/primitives';
 import { go, openReasoning, toast } from '../lib/events';
 import { clamp, LIFE_COLORS, PILLAR_COLORS, PILLAR_SHORT } from '../lib/helpers';
@@ -414,6 +415,11 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
                   <span className="mono" style={{ fontSize: 11, color: 'var(--text-primary)', flex: 'none' }}>
                     {st.story_key}
                   </span>
+                  {st.project_key && (
+                    <span className="chip soft" style={{ fontSize: 9, flex: 'none' }} title="Jira project (client proxy)">
+                      {st.project_key}
+                    </span>
+                  )}
                   <span
                     className="muted"
                     style={{ fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -469,6 +475,11 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
           All {total} stories in the Story library <Icon n="arrowR" s={13} />
         </button>
       )}
+      <div className="divider" />
+      <div className="eyebrow" style={{ marginBottom: 8 }}>
+        Who delivered this, and what clusters together
+      </div>
+      <DeliveryDrillPanel version={version} id={node.id} />
     </div>
   );
 }
@@ -556,6 +567,10 @@ function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
 export function SubcapWorkbench() {
   const params = useParams<{ id?: string }>();
   const routeId = params.id ?? null;
+  const loc = useLocation();
+  // ?tab=delivery (etc.) preselects a deep-dive tab — this is how peek stats / mission control
+  // drill STRAIGHT to the related user stories instead of always landing on Overview.
+  const tabParam = new URLSearchParams(loc.search).get('tab');
   const version = useUi((s) => s.version);
   const ctxPillar = useUi((s) => s.pillar);
   const subcaps = useSubcaps(version);
@@ -569,14 +584,14 @@ export function SubcapWorkbench() {
   const [tab, setTab] = useState('overview');
   const [openCat, setOpenCat] = useState<string | null>(null);
 
-  // Deep-link / back-forward: when the route id changes, focus it.
+  // Deep-link / back-forward: when the route id (or requested tab) changes, focus it.
   useEffect(() => {
     if (routeId) {
       setSel(routeId);
       setPillar(routeId.slice(0, 2));
-      setTab('overview');
+      setTab(TABS.some(([t]) => t === tabParam) ? (tabParam as string) : 'overview');
     }
-  }, [routeId]);
+  }, [routeId, tabParam]);
 
   const node = useMemo(() => all.find((x) => x.id === sel) ?? null, [all, sel]);
   const detail = useSubcap(version, sel);
@@ -626,7 +641,9 @@ export function SubcapWorkbench() {
     setTab('overview');
   };
 
-  const comp = Math.round((d?.completeness ?? 0) * 8);
+  // record completeness = filled core fields / 5 (name, description, tier, solution type,
+  // status) — computed at provision; shown as a percentage, never a magic '/8'.
+  const comp = Math.round((d?.completeness ?? 0) * 100);
   const stats: [number, string, string][] = [
     [d?.n_use_cases ?? 0, 'use cases', 'usecases'],
     [d?.n_stories ?? 0, 'stories', 'delivery'],
@@ -794,7 +811,7 @@ export function SubcapWorkbench() {
                   </div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <Ring v={comp} />
+                  <Ring v={comp} max={100} />
                   <div className="muted" style={{ fontSize: 9.5, marginTop: 2 }}>
                     complete
                   </div>

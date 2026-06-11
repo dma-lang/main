@@ -164,7 +164,7 @@ def parse_catalogue_zip(
         # DETECTED SCHEMA for the human review step: which sheet matched and how each source
         # column maps to a canonical field — plus the headers the automap did not recognise
         # (shown, never silently dropped).
-        columns = [
+        columns: list[dict[str, Any]] = [
             {"source": str(h).strip(), "field": _CAP_ALIASES[_norm_header(h)]}
             for h in header
             if h is not None and str(h).strip() and _norm_header(h) in _CAP_ALIASES
@@ -180,11 +180,28 @@ def parse_catalogue_zip(
             "columns": columns,
             "unmapped_headers": unmapped,
             "subcaps_parsed": 0,
+            "other_sheets": [n for n in wb.sheetnames if n != ws.title],
         }
         detail.append(book_detail)
+        # Per-column automap evidence (the prototype's review contract): fill rate, format
+        # validity, sample values — combined with the exact-alias header match into a confidence.
+        stats: dict[str, dict[str, Any]] = {
+            c["field"]: {"filled": 0, "ok": 0, "samples": []} for c in columns
+        }
+        rows_scanned = 0
         for row in rows:
             sid = _cell(row, idx, "id")
             name = _cell(row, idx, "name")
+            rows_scanned += 1
+            for c in columns:
+                val = _cell(row, idx, c["field"])
+                if val:
+                    st = stats[c["field"]]
+                    st["filled"] += 1
+                    if len(st["samples"]) < 3:
+                        st["samples"].append(val[:60])
+                    if c["field"] != "id" or _SUBCAP_ID_RE.match(val):
+                        st["ok"] += 1
             if not _SUBCAP_ID_RE.match(sid) or not name:
                 skipped += 1
                 continue
@@ -228,6 +245,20 @@ def parse_catalogue_zip(
                 }
             )
             book_detail["subcaps_parsed"] += 1
+        # finalise the per-column evidence: header match (exact alias) is a strong prior; fill
+        # rate and format validity are measured over THIS workbook's rows; 3 samples shown.
+        for c in columns:
+            st = stats[c["field"]]
+            fill = (st["filled"] / rows_scanned) if rows_scanned else 0.0
+            fmt = (st["ok"] / st["filled"]) if st["filled"] else 0.0
+            c["samples"] = st["samples"]
+            c["signals"] = {
+                "header_match": 1.0,  # mapped via an exact, curated alias — never fuzzy-guessed
+                "fill_rate": round(fill, 2),
+                "format_valid": round(fmt, 2),
+                "rows_scanned": rows_scanned,
+            }
+            c["confidence"] = round(0.5 + 0.3 * fill + 0.2 * fmt, 2)
     if not subcaps:
         raise ValueError("the pillar workbooks contained no subcap rows")
     pillars = {
@@ -243,7 +274,71 @@ def parse_catalogue_zip(
         "id_reconciliations": reconciliations,
         "id_conflicts": conflicts,
         "workbooks_detail": detail,  # per-book detected schema, for the automap review step
+        "relations_detected": _detect_relations(detail),
     }
+
+
+def _detect_relations(detail: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The RELATIONSHIPS the backend schema needs, detected from what the workbooks actually
+    contain (columns found + companion sheets present) — the onboarding relations review. These
+    become real FKs / link tables at provision (relation_def); nothing here is guessed."""
+    fields = {c["field"] for d in detail for c in d["columns"]}
+    sheets = " ".join(_norm_header(n) for d in detail for n in d.get("other_sheets", []))
+    rels: list[dict[str, str]] = [
+        {
+            "from": "subcap",
+            "verb": "belongs_to",
+            "to": "capability",
+            "via": "Sub-Cap ID grammar (P<pillar>C<category>.<capability>…)",
+        },
+        {"from": "capability", "verb": "belongs_to", "to": "category", "via": "id grammar"},
+        {"from": "category", "verb": "belongs_to", "to": "pillar", "via": "id grammar"},
+    ]
+    if "platforms_raw" in fields:
+        rels.append(
+            {
+                "from": "subcap",
+                "verb": "uses_platform",
+                "to": "l3_platform",
+                "via": "L3 platforms column",
+            }
+        )
+    if "persona" in sheets:
+        rels.append(
+            {"from": "subcap", "verb": "has_persona", "to": "persona", "via": "Personas sheet"}
+        )
+    if "usecase" in sheets or "usecases" in sheets:
+        rels.append(
+            {"from": "subcap", "verb": "has_usecase", "to": "use_case", "via": "Use Cases sheet"}
+        )
+    if "maturity" in sheets:
+        rels.append(
+            {
+                "from": "subcap",
+                "verb": "custom",
+                "to": "maturity_descriptor",
+                "via": "Maturity sheet",
+            }
+        )
+    if "stories" in sheets or "userstories" in sheets:
+        rels.append(
+            {
+                "from": "story",
+                "verb": "addresses",
+                "to": "subcap",
+                "via": "User Stories sheet (synthetic labelled; Jira corpus separate)",
+            }
+        )
+    if "offering" in sheets or "offerings" in sheets:
+        rels.append(
+            {
+                "from": "offering",
+                "verb": "maps_to_offering",
+                "to": "subcap",
+                "via": "Offerings sheet",
+            }
+        )
+    return rels
 
 
 def parse_synthetic_stories_zip(data: bytes) -> list[dict[str, Any]]:

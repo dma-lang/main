@@ -8,6 +8,7 @@ import { useParams } from 'react-router-dom';
 
 import type { TimelineEvent } from '../api/client';
 import { useSubcaps, useTimeline } from '../api/queries';
+import { DeliveryDrillPanel } from '../components/DeliveryDrillPanel';
 import { Claim, Dropdown, Empty, Page, PillarDot, Tier } from '../components/primitives';
 import { go, openPeek, openReasoning, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
@@ -157,6 +158,16 @@ export function Trace() {
                 </div>
               ))}
             </div>
+          </div>
+
+          <div className="card pad" style={{ marginBottom: 16 }}>
+            <div className="between" style={{ marginBottom: 10 }}>
+              <div className="h3">Delivery drilldown · clients & story clusters</div>
+              <span className="muted" style={{ fontSize: 11 }}>
+                same join as the heatmap — figures reconcile exactly
+              </span>
+            </div>
+            <DeliveryDrillPanel version={ui.version} id={activeId} />
           </div>
 
           <div className="card pad">

@@ -76,20 +76,34 @@ export function SubcapPeek({ id, onClose }: { id: string; onClose: () => void })
           >
             {(
               [
-                [(s.completeness ?? 0) + '/8', 'complete'],
-                [s.n_use_cases, 'use cases'],
-                [s.n_stories, 'stories'],
-                ['M' + matCount, 'maturity'],
-              ] as [string | number, string][]
+                // Every stat drills into the matching deep-dive tab — the count is never a dead end.
+                [Math.round((s.completeness ?? 0) * 100) + '%', 'record complete', 'overview'],
+                [s.n_use_cases, 'use cases', 'usecases'],
+                [s.n_stories, 'stories', 'delivery'],
+                ['M' + matCount, 'maturity', 'maturity'],
+              ] as [string | number, string, string][]
             ).map((k, i) => (
-              <div key={i} className="card" style={{ padding: '9px 6px', textAlign: 'center' }}>
+              <button
+                key={i}
+                className="card hov"
+                style={{ padding: '9px 6px', textAlign: 'center', cursor: 'pointer' }}
+                title={
+                  k[2] === 'delivery'
+                    ? 'Open the related user stories (clients, scores, clusters)'
+                    : 'Open the ' + k[1] + ' tab in the deep dive'
+                }
+                onClick={() => {
+                  onClose();
+                  go('subcap/' + s.id, { tab: k[2] });
+                }}
+              >
                 <div className="num" style={{ fontSize: 16, fontWeight: 700, color: 'var(--interactive)' }}>
                   {k[0]}
                 </div>
                 <div className="muted" style={{ fontSize: 9.5 }}>
                   {k[1]}
                 </div>
-              </div>
+              </button>
             ))}
           </div>
           <div className="eyebrow" style={{ marginBottom: 6 }}>

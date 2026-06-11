@@ -290,6 +290,37 @@ export interface StoryPage {
   items: StoryRow[];
 }
 
+// Delivery drilldown under a subcap's story count: clients parsed from Jira project keys +
+// deterministic story clusters listing the related clients with similar story characteristics.
+export interface ClientAgg {
+  project_key: string;
+  stories: number;
+  share: number;
+  avg_composite: number | null;
+  subverticals: string[];
+  top: StoryRow[];
+}
+
+export interface StoryCluster {
+  cluster_id: number;
+  label: string;
+  stories: number;
+  clients: string[];
+  avg_composite: number | null;
+  sample: StoryRow[];
+}
+
+export interface DeliveryDrill {
+  subcap_id: string;
+  name: string;
+  total_stories: number;
+  n_clients: number;
+  clients: ClientAgg[];
+  clusters: StoryCluster[];
+  unclustered: number;
+  clustered_over: number;
+}
+
 export interface Persona {
   persona_id: string;
   canonical_name: string;
@@ -920,12 +951,28 @@ export interface IdConflict {
   file: string;
 }
 
+export interface DetectedColumn {
+  source: string;
+  field: string;
+  confidence?: number; // 0..1 — alias match + fill rate + format validity
+  samples?: string[]; // first 3 values, for the human review
+  signals?: { header_match: number; fill_rate: number; format_valid: number; rows_scanned: number };
+}
+
 export interface WorkbookDetail {
   file: string;
   sheet: string;
-  columns: { source: string; field: string }[];
+  columns: DetectedColumn[];
   unmapped_headers: string[];
   subcaps_parsed: number;
+  other_sheets?: string[];
+}
+
+export interface DetectedRelation {
+  from: string;
+  verb: string;
+  to: string;
+  via: string;
 }
 
 export interface UploadManifest {
@@ -937,6 +984,7 @@ export interface UploadManifest {
   id_reconciliations: IdReconciliation[];
   id_conflicts: IdConflict[];
   workbooks_detail: WorkbookDetail[];
+  relations_detected: DetectedRelation[];
   skipped_rows: number;
   duplicate_rows: number;
   recorded: boolean;
@@ -1017,6 +1065,8 @@ export const api = {
     http<SubcapDetail>(`/api/catalogue/${v}/subcaps/${id}`),
   subcapStories: (v: string, id: string, page = 1, size = 8): Promise<StoryPage> =>
     http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
+  subcapDelivery: (v: string, id: string): Promise<DeliveryDrill> =>
+    http<DeliveryDrill>(`/api/catalogue/${v}/subcaps/${id}/delivery`),
   timeline: (v: string, id: string): Promise<TimelineResp> =>
     http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
   kg: (v: string, subcap: string): Promise<KgResp> =>
@@ -1147,6 +1197,8 @@ export const api = {
     }
     return res.json();
   },
+  activateVersion: (version: string): Promise<{ ok: boolean; active: string }> =>
+    http(`/api/admin/versions/${version}/activate`, { method: 'POST' }),
   carryForward: (version: string): Promise<Record<string, number | string>> =>
     http(`/api/admin/carry-forward/${version}`, { method: 'POST' }),
   admins: (): Promise<AdminRow[]> => http<AdminRow[]>('/api/admin/admins'),

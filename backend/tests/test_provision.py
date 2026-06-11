@@ -56,7 +56,9 @@ def test_provision_seeds_v7_catalogue() -> None:
             assert int(subcaps or 0) == 851
             assert int(use_cases or 0) > 0
             assert int(links or 0) > 0
-            assert version == "provisioned"
+            # 'provisioned' normally; 'active' when this was the bootstrap (first-ever) provision,
+            # which auto-activates so the workspace is never without an approved catalogue.
+            assert version in ("provisioned", "active")
         finally:
             engine = db.get_engine()
             if engine is not None:

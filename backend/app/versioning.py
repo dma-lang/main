@@ -48,7 +48,8 @@ async def get_active_version() -> Version | None:
     steal the default), created_at only as the tie-break."""
     return await _fetch(
         "WHERE status IN ('active', 'provisioned') "
-        "ORDER BY coalesce(nullif(regexp_replace(version_id, '[^0-9]', '', 'g'), '')::int, 0) "
+        "ORDER BY (status = 'active') DESC, "
+        "coalesce(nullif(regexp_replace(version_id, '[^0-9]', '', 'g'), '')::int, 0) "
         "DESC, created_at DESC",
         {},
     )

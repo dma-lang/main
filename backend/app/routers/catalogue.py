@@ -324,6 +324,143 @@ async def subcap_stories(
     return StoryPage(total=int(total), page=page, size=size, items=items)
 
 
+class ClientAgg(BaseModel):
+    """One Jira project (the corpus' client/engagement proxy) that delivered this subcap."""
+
+    project_key: str
+    stories: int
+    share: float  # of this subcap's carried stories
+    avg_composite: float | None = None
+    subverticals: list[str]
+    top: list[StoryRow]  # its strongest stories, for in-place drilldown
+
+
+class StoryCluster(BaseModel):
+    """Stories with similar characteristics, grouped deterministically (token overlap ≥ 0.5);
+    `clients` = the related engagements that delivered into the same theme."""
+
+    cluster_id: int
+    label: str
+    stories: int
+    clients: list[str]
+    avg_composite: float | None = None
+    sample: list[StoryRow]
+
+
+class DeliveryDrill(BaseModel):
+    subcap_id: str
+    name: str
+    total_stories: int
+    n_clients: int
+    clients: list[ClientAgg]
+    clusters: list[StoryCluster]
+    unclustered: int
+    clustered_over: int  # how many stories the clustering pass actually scanned (cap applies)
+
+
+# Clustering scans at most this many stories per subcap (highest composite first) — bounded
+# everything (§15); the cap is reported in the response so the analysis is honest about scope.
+_CLUSTER_SCAN_CAP = 600
+
+
+@router.get("/{version}/subcaps/{subcap_id}/delivery")
+async def subcap_delivery(
+    version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> DeliveryDrill:
+    """Drilldown UNDER the story count: which clients (Jira projects) delivered this subcap, and
+    which story themes cluster together across them. Every number is computed straight from
+    control.story_catalogue_link ∪ control.story for THIS version — the same join the mission
+    control heatmap and n_stories use, so the figures reconcile exactly (traceability)."""
+    from app.services.story_insights import cluster_stories
+
+    v = await resolve_version(version)
+    s = _schema(v)
+    link = (
+        "FROM control.story_catalogue_link l "
+        "JOIN control.story st ON st.story_key = l.story_key "
+        "WHERE l.version_id = :ver AND l.subcap_id = :sid"
+    )
+    name_sql = text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid")
+    clients_sql = text(
+        "SELECT coalesce(st.project_key, '(no project)') AS project_key, "
+        "count(*) AS stories, avg(st.composite_score)::float AS avg_composite, "
+        "array_remove(array_agg(DISTINCT st.story_sv_code), NULL) AS subverticals "
+        + link
+        + " GROUP BY coalesce(st.project_key, '(no project)') ORDER BY stories DESC, project_key"
+    )
+    top_sql = text(
+        "SELECT story_key, project_key, summary, confidence_level, composite_score, ac_score, "
+        "sd_score, story_score, story_sv_code, tier FROM ("
+        "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
+        "st.composite_score::float, st.ac_score::float, st.sd_score::float, "
+        "st.story_score::float, st.story_sv_code, st.tier, "
+        "row_number() OVER (PARTITION BY coalesce(st.project_key, '(no project)') "
+        "ORDER BY st.composite_score DESC NULLS LAST, st.story_key) AS rn " + link + ") t "
+        "WHERE rn <= 3"
+    )
+    scan_sql = text(
+        "SELECT st.story_key, st.project_key, st.summary, st.composite_score::float "
+        + link
+        + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :cap"
+    )
+    params = {"ver": v.version_id, "sid": subcap_id}
+    async with _engine().connect() as conn:
+        name_row = (await conn.execute(name_sql, {"sid": subcap_id})).first()
+        if name_row is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="subcap not found in this version"
+            )
+        total = (await conn.execute(text("SELECT count(*) " + link), params)).scalar() or 0
+        crows = (await conn.execute(clients_sql, params)).mappings().all()
+        trows = (await conn.execute(top_sql, params)).mappings().all()
+        scan = (await conn.execute(scan_sql, {**params, "cap": _CLUSTER_SCAN_CAP})).mappings().all()
+    top_by_client: dict[str, list[StoryRow]] = {}
+    for r in trows:
+        key = str(r["project_key"] or "(no project)")
+        top_by_client.setdefault(key, []).append(StoryRow.model_validate(dict(r)))
+    clients = [
+        ClientAgg(
+            project_key=str(r["project_key"]),
+            stories=int(r["stories"]),
+            share=round(int(r["stories"]) / int(total), 3) if total else 0.0,
+            avg_composite=round(r["avg_composite"], 2) if r["avg_composite"] is not None else None,
+            subverticals=sorted(str(x) for x in (r["subverticals"] or [])),
+            top=top_by_client.get(str(r["project_key"]), []),
+        )
+        for r in crows[:12]
+    ]
+    clustered = cluster_stories([dict(r) for r in scan])
+    clusters = [
+        StoryCluster(
+            cluster_id=c["cluster_id"],
+            label=c["label"],
+            stories=c["stories"],
+            clients=c["clients"],
+            avg_composite=c["avg_composite"],
+            sample=[
+                StoryRow(
+                    story_key=str(m["story_key"]),
+                    project_key=m.get("project_key"),
+                    summary=m.get("summary"),
+                    composite_score=m.get("composite_score"),
+                )
+                for m in c["sample"]
+            ],
+        )
+        for c in clustered["clusters"]
+    ]
+    return DeliveryDrill(
+        subcap_id=subcap_id,
+        name=str(name_row[0]),
+        total_stories=int(total),
+        n_clients=len(crows),
+        clients=clients,
+        clusters=clusters,
+        unclustered=int(clustered["unclustered"]),
+        clustered_over=len(scan),
+    )
+
+
 class TimelineEvent(BaseModel):
     kind: str  # news | vendor | suggestion | benchmark | trend
     date: str | None
@@ -841,11 +978,16 @@ async def summary(
 ) -> CatalogueSummary:
     v = await resolve_version(version)
     s = _schema(v)
+    # completeness = DATA completeness of the load (filled key fields, computed at provision).
+    # decay = subcaps with NO delivered JIRA story (story_catalogue_link is Jira-only by
+    # construction — synthetic stories never count). A decayed subcap can still be active; the
+    # decay scan flags it for an admin decision, it is never auto-deactivated.
     sql = text(
         "SELECT p.pillar_id, p.name, count(s.subcap_id) AS subcap_count, "
         "coalesce(avg(s.completeness), 0)::float AS completeness, "
-        "count(s.subcap_id) FILTER "
-        "(WHERE s.lifecycle_state IN ('declining', 'fading', 'dead')) AS decay "
+        "count(s.subcap_id) FILTER (WHERE NOT EXISTS ("
+        "  SELECT 1 FROM control.story_catalogue_link l "
+        "  WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id)) AS decay "
         f"FROM {s}.pillar p "
         f"LEFT JOIN {s}.category cat ON cat.pillar_id = p.pillar_id "
         f"LEFT JOIN {s}.capability cap ON cap.category_id = cat.category_id "
@@ -853,7 +995,7 @@ async def summary(
         "GROUP BY p.pillar_id, p.name ORDER BY p.pillar_id"
     )
     async with _engine().connect() as conn:
-        rows = (await conn.execute(sql)).mappings().all()
+        rows = (await conn.execute(sql, {"vid": v.version_id})).mappings().all()
         total = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap"))).scalar()
     pillars = [PillarSummary.model_validate(dict(r)) for r in rows]
     return CatalogueSummary(version_id=v.version_id, total_subcaps=int(total or 0), pillars=pillars)

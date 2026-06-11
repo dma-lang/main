@@ -292,6 +292,7 @@ async def upload_catalogue(
                         "id_reconciliations": parsed.get("id_reconciliations", []),
                         "id_conflicts": parsed.get("id_conflicts", []),
                         "workbooks_detail": parsed.get("workbooks_detail", []),
+                        "relations_detected": parsed.get("relations_detected", []),
                     }
                 ),
             },
@@ -304,9 +305,11 @@ async def upload_catalogue(
         "synthetic_stories_found": synthetic_found,
         "id_reconciliations": parsed.get("id_reconciliations", []),
         "id_conflicts": parsed.get("id_conflicts", []),
-        # the DETECTED SCHEMA per workbook (sheet, column->field mapping, unmapped headers,
-        # per-book parsed counts) — what the onboarding "Detect schema" step reviews
+        # the DETECTED SCHEMA per workbook (sheet, column->field mapping with confidence/
+        # signals/samples, unmapped headers, per-book counts) and the RELATIONSHIPS the backend
+        # schema needs — what the onboarding "Detect schema" step reviews
         "workbooks_detail": parsed.get("workbooks_detail", []),
+        "relations_detected": parsed.get("relations_detected", []),
         "skipped_rows": parsed.get("skipped_rows", 0),
         "duplicate_rows": parsed.get("duplicate_rows", 0),
         "recorded": True,

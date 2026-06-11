@@ -2,10 +2,14 @@
 // The Shell listens for these and mounts the matching modal/drawer/toast. Hash-setting drives the
 // HashRouter, so `go()` is the single navigation primitive across every surface.
 
-export function go(route: string): void {
-  // Navigation CARRIES the current filter query (AppFlow §3.1: arrival never resets context).
-  const query = window.location.hash.split('?')[1];
-  const target = '#/' + route + (query ? '?' + query : '');
+export function go(route: string, params?: Record<string, string>): void {
+  // Navigation CARRIES the current filter query (AppFlow §3.1: arrival never resets context);
+  // `params` overlays route-specific keys (e.g. { tab: 'delivery' } to land on a deep-dive tab).
+  const q = new URLSearchParams(window.location.hash.split('?')[1] ?? '');
+  q.delete('tab'); // route-local (one destination's tab must not leak into the next page)
+  for (const [k, v] of Object.entries(params ?? {})) q.set(k, v);
+  const qs = q.toString();
+  const target = '#/' + route + (qs ? '?' + qs : '');
   if (window.location.hash !== target) {
     window.location.hash = target;
   } else {
