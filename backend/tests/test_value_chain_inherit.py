@@ -96,15 +96,18 @@ def test_v5_without_vc_mapping_inherits_v7_chains(client: TestClient) -> None:
 
 
 @needs_db
-def test_v5_all_sv_is_one_consolidated_chain(client: TestClient) -> None:
-    """'All SV' CONSOLIDATES the whole catalogue into high-level stages — ONE chain, no subvert tag,
-    no single industry's stages (the user's "no retail banking, consolidate all")."""
+def test_v5_all_sv_consolidates_inherited_real_stages(client: TestClient) -> None:
+    """A mapping-less v5 'All SV' consolidates the REAL named stages INHERITED from v7 (not a
+    derived/L1 chain) — one chain, no subvert tag, P1C1.1.1 reads MARKET + BACK OFFICE OPS."""
     allv = client.get("/api/catalogue/v5/value-chain").json()
-    assert allv["source"] == "derived_consolidated"
+    assert allv["source"] == "catalogue_vc_mapping_inherited" and allv["inherited_from"] == "v7"
     assert allv["sv"] == "all" and allv["resolved_sv"] == "" and len(allv["chains"]) == 1
-    assert allv["chains"][0]["sv"] == "all"
     all_names = [c["name"] for c in allv["clusters"]]
-    assert 8 <= len(all_names) <= 40  # a clean, consolidated MECE pipeline (not 200+ granular)
+    assert "MARKET" in all_names  # real stage names, inherited from v7
+    p_stages = [
+        c["name"] for c in allv["clusters"] if any(s["id"] == "P1C1.1.1" for s in c["subcaps"])
+    ]
+    assert p_stages == ["MARKET", "BACK OFFICE OPS, COMPLIANCE & PLATFORM"]
     assert allv["subverticals"]  # the picker still lists every subvertical
 
 
@@ -119,6 +122,18 @@ def test_v5_heatmap_lenses_inherit_enrichment(client: TestClient) -> None:
 
 
 @needs_db
+def test_v5_sv_count_inherits_full_tier_set(client: TestClient) -> None:
+    """The mission-control SV count must span ALL tiers (T1 + T2), not just delivered subcaps. A
+    mapping-less v5 inherits the reference's full subcap_vcc membership, so the count is the whole
+    chain (hundreds of subcaps), not the handful with delivery."""
+    s = client.get("/api/catalogue/v5/summary?sv=CL").json()
+    assert s["total_subcaps"] > 500  # full T1+T2 chain, not the ~100 delivered (delivery-only bug)
+    assert sum(p["subcap_count"] for p in s["pillars"]) == s["total_subcaps"]
+    none = client.get("/api/catalogue/v5/summary?sv=ZZ").json()
+    assert none["total_subcaps"] == 0  # an unknown subvertical still scopes to nothing
+
+
+@needs_db
 def test_v5_without_vc_mapping_still_loads_subcaps(client: TestClient) -> None:
     """Mission-control tiles + workbench tree must NOT collapse to zero when there is no VC mapping;
     the SV scope falls back to actual delivery (story_sv_code)."""
@@ -130,3 +145,14 @@ def test_v5_without_vc_mapping_still_loads_subcaps(client: TestClient) -> None:
     # an unknown subvertical still scopes to nothing (no false membership)
     none = client.get("/api/catalogue/v5/summary?sv=ZZ").json()
     assert none["total_subcaps"] == 0
+
+
+def test_lead_stage_key_folds_overlapping_stages() -> None:
+    """Pure: overlapping stage names key to the same lead token (fold), distinct ones don't."""
+    from app.services.value_chain import lead_stage_key
+
+    assert lead_stage_key("MARKET") == "market"
+    assert lead_stage_key("MARKET INTELLIGENCE & VERTICAL TARGETING") == "market"
+    assert lead_stage_key("AG MARKET INTELLIGENCE & SEASONAL FORECASTING") == "market"
+    assert lead_stage_key("AGENCY MGMT SYSTEM & DATA") == "agency"  # distinct -> own key
+    assert lead_stage_key("MARKETING & LEAD GENERATION") == "marketing"  # not 'market'

@@ -36,6 +36,39 @@ _INDIRECT = re.compile(r"^\s*indirect\b", re.IGNORECASE)
 INDIRECT_STAGE = "Indirect linkages"
 
 
+_VC_LEAD_STOP = {
+    "ops",
+    "mgmt",
+    "and",
+    "the",
+    "of",
+    "for",
+    "to",
+    "in",
+    "on",
+    "strategy",
+    "services",
+    "platform",
+    "via",
+    "management",
+}
+
+
+def lead_stage_key(name: str) -> str:
+    """The first distinctive token of a (cleaned) stage name, used to FOLD overlapping stages from
+    other subverticals into the canonical chain on 'All SV' — e.g. "MARKET INTELLIGENCE & VERTICAL
+    TARGETING" and "MARKET & FIELD-OF-MEMBERSHIP STRATEGY" both key to ``market`` and fold into
+    "MARKET". Strips an "AG " industry prefix + stop-words; genuinely distinct stages (agency,
+    portfolio, sector …) keep their own key and stay separate."""
+    n = re.sub(r"(?i)^ag\b\s*", "", clean_stage_name(name))
+    toks = [
+        t
+        for t in re.sub(r"[^a-z0-9 ]", " ", n.lower()).split()
+        if t not in _VC_LEAD_STOP and len(t) > 2
+    ]
+    return toks[0] if toks else n.lower().strip()
+
+
 def clean_stage_name(name: str) -> str:
     """Strip trailing parenthetical explanations from a value-chain stage label, leaving the bare
     stage name (e.g. "AUTOMATION COE (SV-Specific: P3C1.3.RB1)" -> "AUTOMATION COE"). Repeats so

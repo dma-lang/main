@@ -214,7 +214,7 @@ export function ValueChain() {
     <Page
       eyebrow="A · Explore"
       title="Value chain atlas"
-      intro="The catalogue's value chain. 'All SV' consolidates the whole catalogue into high-level value-chain stages; pick a subvertical in the header to see its real, named stage chain (a version without its own mapping inherits the reference's)."
+      intro="The catalogue's value chain — the real, named stages. 'All SV' consolidates every subvertical into one chain (overlapping stages merged), and pinning a subvertical shows just its own (a version without its own mapping inherits the reference's)."
       actions={
         <button className={'btn sm ' + (radial ? 'primary' : 'ghost')} onClick={() => setRadial((r) => !r)}>
           <Icon n="route" s={13} /> {radial ? 'Pipeline' : 'Radial'}

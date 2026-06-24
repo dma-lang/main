@@ -207,17 +207,20 @@ def test_value_chain_real_names_and_sv(client: TestClient) -> None:
     rb = client.get("/api/catalogue/v7/value-chain?sv=RB").json()
     assert rb["resolved_sv"] == "RB"
     assert [c["name"] for c in rb["clusters"]] != names
-    # 'All SV' is ONE clean representative chain (the most-delivered subvertical's stages) with NO
-    # subvertical tag — never nine labelled chains, never a per-SV label.
+    # 'All SV' CONSOLIDATES the nine chains into ONE — the most-delivered subvertical's REAL named
+    # stages, overlapping stages from the others folded in. No subvertical tag, every subcap there.
+    # (The delivery-ranked canonical = RB and the user's P1C1.1.1 -> MARKET + BACK OFFICE example
+    # are asserted in test_value_chain_inherit, where the corpus is carried forward.)
     allv = client.get("/api/catalogue/v7/value-chain").json()
     assert allv["sv"] == "all" and allv["resolved_sv"] == ""
-    assert allv["sv_requested"] == "all"
+    assert allv["source"] == "catalogue_vc_mapping"  # REAL stages, not a derived/L1 chain
     assert len(allv["chains"]) == 1 and allv["chains"][0]["sv"] == "all"
-    assert len(allv["subverticals"]) > 1  # the picker still lists every subvertical
+    assert allv["total_subcaps"] == 851  # every subcap consolidated, none dropped
     all_names = [c["name"] for c in allv["clusters"]]
-    assert len(all_names) > 10  # a real, clean pipeline
+    assert len(all_names) > 10 and all(not n.startswith("VCC-") for n in all_names)  # real names
+    # every subcap is consolidated into at least one stage (none silently dropped)
+    assert any(s["id"] == "P1C1.1.1" for c in allv["clusters"] for s in c["subcaps"])
     assert all("SV-Specific" not in n and not n.endswith(")") for n in all_names)
-    # the chain folds the verbose "Indirect: …" stages into one clean stage
     assert not any(n.lower().startswith("indirect") and n != "Indirect linkages" for n in all_names)
 
 

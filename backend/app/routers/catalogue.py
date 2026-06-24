@@ -289,16 +289,20 @@ async def _sv_membership(
 ) -> tuple[str, dict[str, Any]]:
     """An EXISTS clause (+ bind params) selecting the subcaps in subvertical ``sv``, appended as
     ``... AND <clause>`` against a subcap aliased ``s``. Membership is the subcap's place in that
-    subvertical's VALUE CHAIN (cat_<v>.subcap_vcc); when the version ships NO VC mapping (subcap_vcc
-    empty — e.g. provisioned before the v7 cascade) it falls back to actual DELIVERY (stories whose
-    story_sv_code is ``sv``), so the mission-control tiles and the workbench tree still scope
-    meaningfully instead of collapsing to zero. Returns ('', {}) for the all-subvertical case."""
+    subvertical's VALUE CHAIN (cat_<v>.subcap_vcc) — the FULL set, every tier (T1 + T2). When the
+    version ships no VC mapping of its own it INHERITS the reference version's subcap_vcc (so the
+    count still spans all tiers, not just delivered ones); only a true greenfield with no reference
+    falls back to actual DELIVERY. Returns ('', {}) for the all-subvertical case."""
     if not sv or sv == "all":
         return "", {}
     has_vcc = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap_vcc"))).scalar() or 0
-    if has_vcc:
+    vc_s = s
+    if not has_vcc:
+        vc_s = await _enrichment_schema(conn, s, "subcap_vcc")  # inherit the reference's full chain
+    if has_vcc or vc_s != s:
+        # the subcap must exist in THIS version (s.subcap_id) AND be in the (own/inherited) chain
         return (
-            f" AND EXISTS (SELECT 1 FROM {s}.subcap_vcc vc "
+            f" AND EXISTS (SELECT 1 FROM {vc_s}.subcap_vcc vc "
             "WHERE vc.subcap_id = s.subcap_id AND vc.subvertical = :sv)",
             {"sv": sv},
         )
@@ -1128,7 +1132,12 @@ async def value_chain(
     with no subvertical tag — because the nine subverticals' granular stages don't merge cleanly.
     ``pillar`` filters membership."""
     from app.services import enrichment_seed
-    from app.services.value_chain import INDIRECT_STAGE, clean_stage_name, derive_value_chain
+    from app.services.value_chain import (
+        INDIRECT_STAGE,
+        clean_stage_name,
+        derive_value_chain,
+        lead_stage_key,
+    )
 
     v = await resolve_version(version)
     s = _schema(v)
@@ -1175,22 +1184,22 @@ async def value_chain(
             if has_vcc
             else []
         )
-        if sv_active and has_vcc:
-            # A PINNED subvertical renders its own REAL ordered stage chain (its own mapping, or the
-            # reference's inherited when this version shipped none). 'All SV' instead CONSOLIDATES
-            # the whole catalogue below — the 9 subverticals' granular stages don't merge cleanly,
-            # so a single representative would be one industry's chain (the user's "no retail
-            # banking"). clean_stage_name strips "(SV-Specific…)" noise + folds "Indirect: …".
-            where = ["vc.subvertical = :sv"]
-            params: dict[str, Any] = {"sv": sv}
+        if has_vcc:
+            # Real per-subvertical stages. A PINNED subvertical shows its own ordered chain. 'All
+            # SV' CONSOLIDATES the nine overlapping chains into the most-delivered subvertical's
+            # canonical chain (so P1C1.1.1 reads MARKET -> BACK OFFICE OPS, COMPLIANCE & PLATFORM,
+            # its RB stages), folding any subcap NOT in that chain in under its own stage — every
+            # subcap covered, none duplicated, NO subvertical tag. subcap_vcc + value_chain_cluster
+            # come from vc_schema (own or inherited); the subcap NAME + existence filter come from
+            # THIS version. clean_stage_name strips "(SV-Specific…)" noise + folds "Indirect: …".
+            scoped = [sv] if sv_active else subverticals
+            where = ["vc.subvertical = ANY(:svs)"]
+            params: dict[str, Any] = {"svs": scoped}
             if p_active:
                 where.append("left(vc.subcap_id, 2) = :p")
                 params["p"] = pillar
-            # subcap_vcc + value_chain_cluster come from vc_schema (own or inherited); the subcap
-            # NAME + existence filter come from THIS version (INNER join), so an inherited chain
-            # only shows subcaps that actually exist here.
             sql = text(
-                "SELECT v.vcc_id AS code, v.name, vc.stage_ord AS ord, "
+                "SELECT vc.subvertical AS sv, v.vcc_id AS code, v.name, vc.stage_ord AS ord, "
                 "vc.subcap_id, sc.name AS subcap_name, left(vc.subcap_id, 2) AS pillar "
                 f"FROM {vc_schema}.subcap_vcc vc "
                 f"JOIN {vc_schema}.value_chain_cluster v ON v.vcc_id = vc.vcc_id "
@@ -1198,50 +1207,92 @@ async def value_chain(
                 f"WHERE {' AND '.join(where)}"
             )
             rows = (await conn.execute(sql, params)).mappings().all()
-            segs: dict[str, dict[str, Any]] = {}
-            for r in rows:
-                nm = clean_stage_name(str(r["name"]))
-                g = segs.setdefault(
-                    nm,
-                    {
-                        "code": str(r["code"]),
-                        "name": nm,  # the REAL, clean, ordered stage name (the code is only an id)
-                        "ord": r["ord"] if r["ord"] is not None else 9999,
-                        "subcaps": [],
-                        "pillars": set(),
-                    },
-                )
-                if str(r["code"]) < g["code"]:
-                    g["code"] = str(r["code"])  # stable representative id across merged variants
-                if r["ord"] is not None and r["ord"] < g["ord"]:
-                    g["ord"] = r["ord"]
-                g["subcaps"].append(
-                    {
+
+            def _group(subset: Any) -> dict[str, dict[str, Any]]:
+                out_segs: dict[str, dict[str, Any]] = {}
+                for r in subset:
+                    nm = clean_stage_name(str(r["name"]))
+                    g = out_segs.setdefault(
+                        nm,
+                        {"code": str(r["code"]), "name": nm, "ord": 9999, "subcaps": {}},
+                    )
+                    if str(r["code"]) < g["code"]:
+                        g["code"] = str(r["code"])
+                    if r["ord"] is not None and r["ord"] < g["ord"]:
+                        g["ord"] = r["ord"]
+                    g["subcaps"][str(r["subcap_id"])] = {
                         "id": str(r["subcap_id"]),
                         "name": str(r["subcap_name"]),
                         "pillar": r["pillar"],
                     }
+                return out_segs
+
+            if sv_active:
+                ordered = sorted(
+                    _group(rows).values(),
+                    key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
                 )
-                g["pillars"].add(str(r["pillar"]))
-            # ordered pipeline: stage_ord then name; "Indirect linkages" always sorts LAST
+                sv_out, resolved = sv, sv
+            else:
+                # consolidate: the most-delivered subvertical's chain is canonical. Other
+                # subverticals' subcaps FOLD into it by overlap (a stage that keys to the same lead
+                # token — "MARKET INTELLIGENCE…" -> "MARKET"); genuinely distinct ones (agency,
+                # portfolio…) append as their own stage. Every subcap covered, none duplicated.
+                canonical_sv = subverticals[0]
+                canon = _group([r for r in rows if str(r["sv"]) == canonical_sv])
+                covered = {sid for g in canon.values() for sid in g["subcaps"]}
+                lead_to_canon: dict[str, str] = {}
+                for nm in canon:
+                    lead_to_canon.setdefault(lead_stage_key(nm), nm)
+
+                def _sub(r: Any) -> dict[str, Any]:
+                    return {
+                        "id": str(r["subcap_id"]),
+                        "name": str(r["subcap_name"]),
+                        "pillar": r["pillar"],
+                    }
+
+                # pass 1: fold subcaps that overlap a canonical stage by lead token
+                for r in rows:
+                    sid = str(r["subcap_id"])
+                    if sid in covered or str(r["sv"]) == canonical_sv:
+                        continue
+                    lk = lead_stage_key(clean_stage_name(str(r["name"])))
+                    if lk in lead_to_canon:
+                        canon[lead_to_canon[lk]]["subcaps"][sid] = _sub(r)
+                        covered.add(sid)
+                # pass 2: the rest become their own appended stages (grouped by clean name)
+                extra: dict[str, dict[str, Any]] = {}
+                for r in rows:
+                    sid = str(r["subcap_id"])
+                    if sid in covered or str(r["sv"]) == canonical_sv:
+                        continue
+                    cn = clean_stage_name(str(r["name"]))
+                    g = extra.setdefault(
+                        cn, {"code": str(r["code"]), "name": cn, "ord": 9999, "subcaps": {}}
+                    )
+                    if str(r["code"]) < g["code"]:
+                        g["code"] = str(r["code"])
+                    g["subcaps"][sid] = _sub(r)
+                    covered.add(sid)  # each non-canonical subcap lands in exactly one stage
+                base = max((g["ord"] for g in canon.values() if g["ord"] < 9999), default=0) + 1
+                for g in extra.values():  # extras (and Indirect) sort AFTER the canonical chain
+                    g["ord"] = base + (10000 if g["name"] == INDIRECT_STAGE else 0)
+                ordered = sorted(
+                    list(canon.values()) + list(extra.values()),
+                    key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
+                )
+                sv_out, resolved = "all", ""
             clusters: list[dict[str, Any]] = []
-            in_order = sorted(
-                segs.values(),
-                key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
-            )
-            for pos, g in enumerate(in_order, 1):
-                seen_ids: set[str] = set()
-                subs = [
-                    x
-                    for x in sorted(g["subcaps"], key=lambda y: y["id"])
-                    if not (x["id"] in seen_ids or seen_ids.add(x["id"]))  # type: ignore[func-returns-value]
-                ]
+            for pos, g in enumerate(ordered, 1):
+                subs = sorted(g["subcaps"].values(), key=lambda y: y["id"])
+                pset = {x["pillar"] for x in subs}
                 clusters.append(
                     {
                         "code": g["code"],
                         "name": g["name"],
                         "position": pos,
-                        "pillar": min(g["pillars"]) if len(g["pillars"]) == 1 else None,
+                        "pillar": next(iter(pset)) if len(pset) == 1 else None,
                         "count": len(subs),
                         "subcaps": subs,
                         "merged_from": [],
@@ -1250,25 +1301,25 @@ async def value_chain(
             total = len({x["id"] for c in clusters for x in c["subcaps"]})
             return {
                 "version": version,
-                "sv": sv,
-                "resolved_sv": sv,
-                "sv_requested": sv,
+                "sv": sv_out,
+                "resolved_sv": resolved,
+                "sv_requested": sv or "all",
                 "subverticals": subverticals,
                 "source": (
                     "catalogue_vc_mapping_inherited" if inherited else "catalogue_vc_mapping"
                 ),
                 "inherited_from": vc_schema.removeprefix("cat_") if inherited else None,
                 "chains": (
-                    [{"sv": sv, "clusters": clusters, "total_subcaps": total}] if clusters else []
+                    [{"sv": sv_out, "clusters": clusters, "total_subcaps": total}]
+                    if clusters
+                    else []
                 ),
                 "clusters": clusters,
                 "raw_clusters": len(clusters),
                 "deduped": 0,
                 "total_subcaps": total,
             }
-        # 'All SV' (or a true greenfield with no mapping anywhere): CONSOLIDATE the whole catalogue
-        # into high-level value-chain stages (capability-cluster derivation) — clean, MECE, with NO
-        # subvertical tag and no single industry's stages.
+        # TRUE greenfield (no mapping anywhere, no reference to inherit): derive from clusters.
         where_sql = " WHERE cat.pillar_id = :p" if p_active else ""
         derive_rows = (
             (
@@ -1287,22 +1338,22 @@ async def value_chain(
             .all()
         )
     out = derive_value_chain([dict(r) for r in derive_rows])
-    clusters = out.get("clusters", [])
+    derived = out.get("clusters", [])
     return {
         "version": version,
         "sv": "all",
         "resolved_sv": "",
         "sv_requested": sv or "all",
         "subverticals": subverticals,
-        "source": "derived_consolidated" if has_vcc else "derived_from_clusters",
+        "source": "derived_from_clusters",
         "inherited_from": None,
         "chains": (
-            [{"sv": "all", "clusters": clusters, "total_subcaps": int(out.get("total_subcaps", 0))}]
-            if clusters
+            [{"sv": "all", "clusters": derived, "total_subcaps": int(out.get("total_subcaps", 0))}]
+            if derived
             else []
         ),
-        "clusters": clusters,
-        "raw_clusters": len(clusters),
+        "clusters": derived,
+        "raw_clusters": len(derived),
         "deduped": int(out.get("deduped", 0)),
         "total_subcaps": int(out.get("total_subcaps", 0)),
     }
