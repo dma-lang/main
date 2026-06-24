@@ -510,7 +510,10 @@ async def _inherit_enrichment(
         if n and (best is None or n > best[0]):
             best = (int(n), vid, sname)
     if best is None:
-        return {"inherited_from": None, "inherited_subcaps": 0, "reason": "no enriched sibling"}
+        # No provisioned enriched sibling — cascade from the committed reference seed (always
+        # bundled) so it is deterministic + order-independent: a version inherits v7's enrichment
+        # even when v7 is provisioned later, or never (user ask: always cascade from v7).
+        return await _inherit_enrichment_from_seed(conn, schema, version_id)
     _n, src_ver, src_schema = best
 
     # build the subcap correspondence this_subcap -> source_subcap
@@ -609,6 +612,99 @@ async def _inherit_enrichment(
         "inherited_subcaps": len(mapping),
         "enrichment_unmapped": len(unmapped),
         "subcaps_with_platforms": int(enriched),
+    }
+
+
+async def _inherit_enrichment_from_seed(
+    conn: AsyncConnection, schema: str, version_id: str
+) -> dict[str, Any]:
+    """Enrichment cascade FALLBACK when no enriched sibling is provisioned: materialise the
+    committed reference (v7) enrichment seed onto this version's subcaps. Deterministic +
+    order-independent, so every version inherits v7's platforms / vendors / use cases / maturity /
+    offerings even if v7 is provisioned later or never — the heatmap lenses (vendor, value chain)
+    and deep dives never render empty for a base-only upload. Subcaps map through the ONE canonical
+    rule (subcap_xref)."""
+    from app.services import enrichment_seed
+
+    ref_ver = enrichment_seed.reference_version()
+    if not ref_ver or ref_ver == version_id:
+        return {"inherited_from": None, "inherited_subcaps": 0, "reason": "no reference seed"}
+    e = _load_enrichment(ref_ver)
+    if not e:
+        return {"inherited_from": None, "inherited_subcaps": 0, "reason": "no reference seed"}
+    ref_cat = _load_catalogue(ref_ver)
+    cur = [
+        dict(r)
+        for r in (
+            await conn.execute(
+                text(
+                    f"SELECT s.subcap_id AS id, cap.name AS l2, s.description AS descr "
+                    f"FROM {schema}.subcap s "
+                    f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id"
+                )
+            )
+        ).mappings()
+    ]
+    ref_index = subcap_xref.ReferenceIndex.build(
+        [
+            {"id": s["id"], "l2": s.get("cluster"), "descr": s.get("desc")}
+            for s in ref_cat.get("subcaps", [])
+        ]
+    )
+    crosswalk = {
+        str(r[0]): str(r[1])
+        for r in await conn.execute(
+            text(
+                "SELECT from_subcap, to_subcap FROM control.version_crosswalk "
+                "WHERE from_version = :v AND to_version = :r AND to_subcap IS NOT NULL"
+            ),
+            {"v": version_id, "r": ref_ver},
+        )
+    }
+    resolved, unmapped = subcap_xref.resolve_map(cur, ref_index, crosswalk)
+    if not resolved:
+        return {
+            "inherited_from": ref_ver,
+            "inherited_subcaps": 0,
+            "enrichment_unmapped": len(unmapped),
+            "reason": "no correspondence",
+        }
+    inv: dict[str, list[str]] = {}
+    for this_sub, ref_sub in resolved.items():
+        inv.setdefault(ref_sub, []).append(this_sub)
+
+    def remap(rows: list[dict[str, Any]] | None, idkey: str | None = None) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for r in rows or []:
+            for ts in inv.get(str(r["subcap_id"]), []):
+                nr = dict(r)
+                nr["subcap_id"] = ts
+                if idkey:
+                    nr[idkey] = f"{r[idkey]}:{ts}"
+                out.append(nr)
+        return out
+
+    e2: dict[str, list[dict[str, Any]]] = {
+        "vendors": e.get("vendors", []),
+        "l3_platforms": e.get("l3_platforms", []),
+        "personas": e.get("personas", []),
+        "offerings": e.get("offerings", []),
+        "subcap_platforms": remap(e.get("subcap_platforms")),
+        "subcap_personas": remap(e.get("subcap_personas")),
+        "offering_subcaps": remap(e.get("offering_subcaps")),
+        "use_cases": remap(e.get("use_cases"), "use_case_id"),
+        "maturity_descriptors": remap(e.get("maturity_descriptors"), "descriptor_id"),
+    }
+    await _seed_enrichment(conn, schema, e2)
+    enriched = (
+        await conn.execute(text(f"SELECT count(DISTINCT subcap_id) FROM {schema}.subcap_platform"))
+    ).scalar() or 0
+    return {
+        "inherited_from": ref_ver,
+        "inherited_subcaps": len(resolved),
+        "enrichment_unmapped": len(unmapped),
+        "subcaps_with_platforms": int(enriched),
+        "via": "seed",
     }
 
 
