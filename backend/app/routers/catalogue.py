@@ -310,6 +310,30 @@ async def _sv_membership(
     )
 
 
+async def _enrichment_schema(conn: AsyncConnection, s: str, table: str) -> str:
+    """The schema a lens's enrichment join should read — the version's OWN, or the reference
+    version's (v7) when the version carries no enrichment of its own (the named ``table`` is empty).
+    So the value-chain / vendor heatmap lenses INHERIT and render automatically on a base-only
+    version, instead of an empty 'run carry-forward' state (no button, no re-provision)."""
+    own = (await conn.execute(text(f"SELECT count(*) FROM {s}.{table}"))).scalar() or 0
+    if own:
+        return s
+    from app.services import enrichment_seed
+
+    ref_ver = enrichment_seed.reference_version()
+    if not ref_ver:
+        return s
+    try:
+        ref_v = await resolve_version(ref_ver)
+    except Exception:  # noqa: BLE001 - reference not provisioned -> no inheritance
+        return s
+    ref_s = _schema(ref_v)
+    if ref_s == s:
+        return s
+    ref_has = (await conn.execute(text(f"SELECT count(*) FROM {ref_s}.{table}"))).scalar() or 0
+    return ref_s if ref_has else s
+
+
 @router.get("/{version}/subcaps")
 async def list_subcaps(
     version: str,
@@ -1097,12 +1121,12 @@ async def value_chain(
     sv: str = "",
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """The value-chain atlas (A3) on the catalogue's REAL per-subvertical stage mapping
-    (cat_<v>.value_chain_cluster + subcap_vcc, from the v7 workbooks' VC-mapping sheet; cascaded
-    v7 -> v5 at provision). Segments carry the actual stage NAMES — the VCC code is only an id.
-    ``sv`` picks one subvertical's chain (stage order preserved); 'all' aggregates the distinct
-    stages across subverticals. ``pillar`` filters membership. Falls back to the live derivation
-    from capability clusters only when a version has no mapping at all."""
+    """The value-chain atlas (A3). A PINNED subvertical (``sv``) renders its REAL ordered stage
+    chain from the catalogue's per-SV mapping (cat_<v>.value_chain_cluster + subcap_vcc; a version
+    with no mapping of its own INHERITS the reference version's). 'All SV' CONSOLIDATES the whole
+    catalogue into high-level value-chain stages (capability-cluster derivation) — clean and MECE,
+    with no subvertical tag — because the nine subverticals' granular stages don't merge cleanly.
+    ``pillar`` filters membership."""
     from app.services import enrichment_seed
     from app.services.value_chain import INDIRECT_STAGE, clean_stage_name, derive_value_chain
 
@@ -1131,13 +1155,9 @@ async def value_chain(
                     ).scalar() or 0
                     if ref_has:
                         vc_schema, has_vcc, inherited = ref_s, ref_has, True
-        if has_vcc:
-            # The value chain is PER-SUBVERTICAL by nature. When a subvertical is selected we render
-            # exactly its ordered stage pipeline; when 'All SV' is selected we render EVERY
-            # subvertical's chain (delivery-ranked), never locking the page to a single one. The
-            # subvertical list is delivery-ranked (real Jira concentration) so the picker order and
-            # the 'all' rendering order match.
-            subverticals = [
+        # delivery-ranked subverticals for the picker (from the own/inherited VC mapping)
+        subverticals = (
+            [
                 str(r[0])
                 for r in await conn.execute(
                     text(
@@ -1152,9 +1172,17 @@ async def value_chain(
                     {"vid": v.version_id},
                 )
             ]
-            targets = [sv] if sv_active else subverticals
-            where = ["vc.subvertical = ANY(:svs)"]
-            params: dict[str, Any] = {"svs": targets}
+            if has_vcc
+            else []
+        )
+        if sv_active and has_vcc:
+            # A PINNED subvertical renders its own REAL ordered stage chain (its own mapping, or the
+            # reference's inherited when this version shipped none). 'All SV' instead CONSOLIDATES
+            # the whole catalogue below — the 9 subverticals' granular stages don't merge cleanly,
+            # so a single representative would be one industry's chain (the user's "no retail
+            # banking"). clean_stage_name strips "(SV-Specific…)" noise + folds "Indirect: …".
+            where = ["vc.subvertical = :sv"]
+            params: dict[str, Any] = {"sv": sv}
             if p_active:
                 where.append("left(vc.subcap_id, 2) = :p")
                 params["p"] = pillar
@@ -1162,7 +1190,7 @@ async def value_chain(
             # NAME + existence filter come from THIS version (INNER join), so an inherited chain
             # only shows subcaps that actually exist here.
             sql = text(
-                "SELECT vc.subvertical AS sv, v.vcc_id AS code, v.name, vc.stage_ord AS ord, "
+                "SELECT v.vcc_id AS code, v.name, vc.stage_ord AS ord, "
                 "vc.subcap_id, sc.name AS subcap_name, left(vc.subcap_id, 2) AS pillar "
                 f"FROM {vc_schema}.subcap_vcc vc "
                 f"JOIN {vc_schema}.value_chain_cluster v ON v.vcc_id = vc.vcc_id "
@@ -1170,13 +1198,9 @@ async def value_chain(
                 f"WHERE {' AND '.join(where)}"
             )
             rows = (await conn.execute(sql, params)).mappings().all()
-            # group: subvertical -> CLEAN stage name -> segment. clean_stage_name strips
-            # "(SV-Specific: …)"/"(Ag)"-style noise (defensively, for data provisioned before the
-            # provision-time clean) and MERGES variants that share a stage name into one card.
-            by_sv: dict[str, dict[str, dict[str, Any]]] = {}
+            segs: dict[str, dict[str, Any]] = {}
             for r in rows:
                 nm = clean_stage_name(str(r["name"]))
-                segs = by_sv.setdefault(str(r["sv"]), {})
                 g = segs.setdefault(
                     nm,
                     {
@@ -1199,85 +1223,89 @@ async def value_chain(
                     }
                 )
                 g["pillars"].add(str(r["pillar"]))
-
-            def _ordered(segs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-                # ordered pipeline: stage_ord then name (deterministic); position is the chain step.
-                # "Indirect linkages" (the merged cross-vertical spillover) always sorts LAST.
-                out_c: list[dict[str, Any]] = []
-                in_order = sorted(
-                    segs.values(),
-                    key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
-                )
-                for pos, g in enumerate(in_order, 1):
-                    seen_ids: set[str] = set()
-                    subs = [
-                        x
-                        for x in sorted(g["subcaps"], key=lambda y: y["id"])
-                        if not (x["id"] in seen_ids or seen_ids.add(x["id"]))  # type: ignore[func-returns-value]
-                    ]
-                    out_c.append(
-                        {
-                            "code": g["code"],
-                            "name": g["name"],
-                            "position": pos,
-                            "pillar": min(g["pillars"]) if len(g["pillars"]) == 1 else None,
-                            "count": len(subs),
-                            "subcaps": subs,
-                            "merged_from": [],
-                        }
-                    )
-                return out_c
-
-            order = targets if sv_active else subverticals
-            chains: list[dict[str, Any]] = []
-            for svc in order:
-                sv_segs = by_sv.get(svc)
-                if not sv_segs:
-                    continue
-                cl = _ordered(sv_segs)
-                chains.append(
+            # ordered pipeline: stage_ord then name; "Indirect linkages" always sorts LAST
+            clusters: list[dict[str, Any]] = []
+            in_order = sorted(
+                segs.values(),
+                key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
+            )
+            for pos, g in enumerate(in_order, 1):
+                seen_ids: set[str] = set()
+                subs = [
+                    x
+                    for x in sorted(g["subcaps"], key=lambda y: y["id"])
+                    if not (x["id"] in seen_ids or seen_ids.add(x["id"]))  # type: ignore[func-returns-value]
+                ]
+                clusters.append(
                     {
-                        "sv": svc,
-                        "clusters": cl,
-                        "total_subcaps": len({x["id"] for c in cl for x in c["subcaps"]}),
+                        "code": g["code"],
+                        "name": g["name"],
+                        "position": pos,
+                        "pillar": min(g["pillars"]) if len(g["pillars"]) == 1 else None,
+                        "count": len(subs),
+                        "subcaps": subs,
+                        "merged_from": [],
                     }
                 )
-            # backward-compat flat `clusters`: the single chain when one sv, else every stage
-            flat = (
-                chains[0]["clusters"]
-                if len(chains) == 1
-                else [c for ch in chains for c in ch["clusters"]]
-            )
+            total = len({x["id"] for c in clusters for x in c["subcaps"]})
             return {
                 "version": version,
-                "sv": sv if sv_active else "all",
-                "resolved_sv": sv if sv_active else "",  # only set when ONE chain is pinned
-                "sv_requested": sv or "all",
+                "sv": sv,
+                "resolved_sv": sv,
+                "sv_requested": sv,
                 "subverticals": subverticals,
                 "source": (
                     "catalogue_vc_mapping_inherited" if inherited else "catalogue_vc_mapping"
                 ),
                 "inherited_from": vc_schema.removeprefix("cat_") if inherited else None,
-                "chains": chains,
-                "clusters": flat,
-                "raw_clusters": len(flat),
-                "deduped": 0,
-                "total_subcaps": len(
-                    {x["id"] for ch in chains for c in ch["clusters"] for x in c["subcaps"]}
+                "chains": (
+                    [{"sv": sv, "clusters": clusters, "total_subcaps": total}] if clusters else []
                 ),
+                "clusters": clusters,
+                "raw_clusters": len(clusters),
+                "deduped": 0,
+                "total_subcaps": total,
             }
-        # FALLBACK: no mapping shipped with this version — derive from capability clusters.
+        # 'All SV' (or a true greenfield with no mapping anywhere): CONSOLIDATE the whole catalogue
+        # into high-level value-chain stages (capability-cluster derivation) — clean, MECE, with NO
+        # subvertical tag and no single industry's stages.
         where_sql = " WHERE cat.pillar_id = :p" if p_active else ""
-        sql = text(
-            "SELECT s.subcap_id, s.name, cat.pillar_id AS pillar, cat.name AS cluster, "
-            "cap.name AS category " + _JOINS.format(s=s) + where_sql + " ORDER BY s.subcap_id"
+        derive_rows = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT s.subcap_id, s.name, cat.pillar_id AS pillar, cat.name AS cluster, "
+                        "cap.name AS category "
+                        + _JOINS.format(s=s)
+                        + where_sql
+                        + " ORDER BY s.subcap_id"
+                    ),
+                    {"p": pillar},
+                )
+            )
+            .mappings()
+            .all()
         )
-        rows = (await conn.execute(sql, {"p": pillar})).mappings().all()
-    out = derive_value_chain([dict(r) for r in rows])
-    out["version"] = version
-    out["sv"] = sv or "all"
-    out["source"] = "derived_from_clusters"
-    return out
+    out = derive_value_chain([dict(r) for r in derive_rows])
+    clusters = out.get("clusters", [])
+    return {
+        "version": version,
+        "sv": "all",
+        "resolved_sv": "",
+        "sv_requested": sv or "all",
+        "subverticals": subverticals,
+        "source": "derived_consolidated" if has_vcc else "derived_from_clusters",
+        "inherited_from": None,
+        "chains": (
+            [{"sv": "all", "clusters": clusters, "total_subcaps": int(out.get("total_subcaps", 0))}]
+            if clusters
+            else []
+        ),
+        "clusters": clusters,
+        "raw_clusters": len(clusters),
+        "deduped": int(out.get("deduped", 0)),
+        "total_subcaps": int(out.get("total_subcaps", 0)),
+    }
 
 
 @router.get("/{version}/summary")
@@ -1404,36 +1432,40 @@ async def heatmap(
     if lens not in _LENS_GROUP:
         lens = "pillar"
     key_expr, label_expr, join_tmpl = _LENS_GROUP[lens]
-    join = join_tmpl.format(s=s)
-    where = ["l.version_id = :ver"]
-    params: dict[str, Any] = {"ver": v.version_id, "lim": limit}
-    if pillar != "all":
-        where.append("left(sc.subcap_id, 2) = :pil")
-        params["pil"] = pillar
-    if lens == "value-chain":
-        # the value-chain lens scopes by the CHAIN's subvertical (in the join), not the story's sv
-        params["vc_sv"] = sv
-    elif sv != "all":
-        where.append("st.story_sv_code = :sv")
-        params["sv"] = sv
-    band = "least(6, greatest(1, width_bucket(st.composite_score, 1, 5, 6)))"
-    cells = ", ".join(
-        f"count(DISTINCT st.story_key) FILTER (WHERE {band} = {k}) AS c{k}" for k in range(1, 7)
-    )
-    # Only the pillar lens (rows = individual subcaps) carries a pillar colour; for the other
-    # lenses a group spans pillars, so pillar is NULL and is not a grouping key.
-    pillar_sel = "left(sc.subcap_id, 2)" if lens == "pillar" else "NULL"
-    group_by = "key, label, pillar" if lens == "pillar" else "key, label"
-    sql = text(
-        f"SELECT {key_expr} AS key, {label_expr} AS label, "
-        f"{pillar_sel} AS pillar, count(DISTINCT st.story_key) AS total, {cells} "
-        f"FROM control.story_catalogue_link l "
-        f"JOIN control.story st ON st.story_key = l.story_key "
-        f"JOIN {s}.subcap sc ON sc.subcap_id = l.subcap_id{join} "
-        f"WHERE {' AND '.join(where)} "
-        f"GROUP BY {group_by} ORDER BY total DESC LIMIT :lim"
-    )
+    # the value-chain + vendor lenses read enrichment (subcap_vcc / subcap_platform); a version
+    # without its own inherits the reference's so the heatmap renders automatically, never empty.
+    _lens_table = {"value-chain": "subcap_vcc", "vendor": "subcap_platform"}
     async with _engine().connect() as conn:
+        ench_s = await _enrichment_schema(conn, s, _lens_table[lens]) if lens in _lens_table else s
+        join = join_tmpl.format(s=ench_s)
+        where = ["l.version_id = :ver"]
+        params: dict[str, Any] = {"ver": v.version_id, "lim": limit}
+        if pillar != "all":
+            where.append("left(sc.subcap_id, 2) = :pil")
+            params["pil"] = pillar
+        if lens == "value-chain":
+            # the value-chain lens scopes by the CHAIN's subvertical (in the join), not the story sv
+            params["vc_sv"] = sv
+        elif sv != "all":
+            where.append("st.story_sv_code = :sv")
+            params["sv"] = sv
+        band = "least(6, greatest(1, width_bucket(st.composite_score, 1, 5, 6)))"
+        cells = ", ".join(
+            f"count(DISTINCT st.story_key) FILTER (WHERE {band} = {k}) AS c{k}" for k in range(1, 7)
+        )
+        # Only the pillar lens (rows = individual subcaps) carries a pillar colour; for the other
+        # lenses a group spans pillars, so pillar is NULL and is not a grouping key.
+        pillar_sel = "left(sc.subcap_id, 2)" if lens == "pillar" else "NULL"
+        group_by = "key, label, pillar" if lens == "pillar" else "key, label"
+        sql = text(
+            f"SELECT {key_expr} AS key, {label_expr} AS label, "
+            f"{pillar_sel} AS pillar, count(DISTINCT st.story_key) AS total, {cells} "
+            f"FROM control.story_catalogue_link l "
+            f"JOIN control.story st ON st.story_key = l.story_key "
+            f"JOIN {s}.subcap sc ON sc.subcap_id = l.subcap_id{join} "
+            f"WHERE {' AND '.join(where)} "
+            f"GROUP BY {group_by} ORDER BY total DESC LIMIT :lim"
+        )
         rows = (await conn.execute(sql, params)).mappings().all()
     out: list[HeatmapRow] = []
     gmax = 0

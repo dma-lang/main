@@ -42,9 +42,11 @@ def provisioned() -> Iterator[None]:
         engine = db.get_engine()
         assert engine is not None
         async with engine.begin() as conn:
-            # simulate v5 provisioned BEFORE the VC cascade: no VC mapping of its own
+            # simulate v5 provisioned BEFORE the cascade: no VC mapping AND no platform enrichment
+            # of its own, so the atlas + the value-chain/vendor heatmap lenses must INHERIT v7.
             await conn.execute(text("DELETE FROM cat_v5.subcap_vcc"))
             await conn.execute(text("DELETE FROM cat_v5.value_chain_cluster"))
+            await conn.execute(text("DELETE FROM cat_v5.subcap_platform"))
         await db.dispose_engine()
 
     async def _teardown() -> None:
@@ -94,13 +96,26 @@ def test_v5_without_vc_mapping_inherits_v7_chains(client: TestClient) -> None:
 
 
 @needs_db
-def test_v5_all_sv_inherits_every_chain(client: TestClient) -> None:
-    """'All SV' on a mapping-less v5 still lists every subvertical's chain (inherited), not one."""
+def test_v5_all_sv_is_one_consolidated_chain(client: TestClient) -> None:
+    """'All SV' CONSOLIDATES the whole catalogue into high-level stages — ONE chain, no subvert tag,
+    no single industry's stages (the user's "no retail banking, consolidate all")."""
     allv = client.get("/api/catalogue/v5/value-chain").json()
-    assert allv["source"] == "catalogue_vc_mapping_inherited"
-    assert allv["resolved_sv"] == "" and len(allv["chains"]) > 1
-    all_names = [c["name"] for ch in allv["chains"] for c in ch["clusters"]]
-    assert not any(n.lower().startswith("indirect") and n != "Indirect linkages" for n in all_names)
+    assert allv["source"] == "derived_consolidated"
+    assert allv["sv"] == "all" and allv["resolved_sv"] == "" and len(allv["chains"]) == 1
+    assert allv["chains"][0]["sv"] == "all"
+    all_names = [c["name"] for c in allv["clusters"]]
+    assert 8 <= len(all_names) <= 40  # a clean, consolidated MECE pipeline (not 200+ granular)
+    assert allv["subverticals"]  # the picker still lists every subvertical
+
+
+@needs_db
+def test_v5_heatmap_lenses_inherit_enrichment(client: TestClient) -> None:
+    """The value-chain + vendor heatmap lenses INHERIT v7's enrichment when v5 has none of its own,
+    so Mission Control renders automatically — no 'run carry-forward' empty state, no button."""
+    for lens in ("value-chain", "vendor"):
+        h = client.get(f"/api/catalogue/v5/heatmap?lens={lens}").json()
+        assert len(h["rows"]) > 0, f"{lens} lens should inherit and render, not be empty"
+        assert sum(r["total"] for r in h["rows"]) > 0
 
 
 @needs_db

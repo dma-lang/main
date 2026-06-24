@@ -207,16 +207,18 @@ def test_value_chain_real_names_and_sv(client: TestClient) -> None:
     rb = client.get("/api/catalogue/v7/value-chain?sv=RB").json()
     assert rb["resolved_sv"] == "RB"
     assert [c["name"] for c in rb["clusters"]] != names
-    # 'All SV' lists EVERY subvertical's chain (per-SV by nature), pinning none
+    # 'All SV' is ONE clean representative chain (the most-delivered subvertical's stages) with NO
+    # subvertical tag — never nine labelled chains, never a per-SV label.
     allv = client.get("/api/catalogue/v7/value-chain").json()
     assert allv["sv"] == "all" and allv["resolved_sv"] == ""
     assert allv["sv_requested"] == "all"
-    assert {ch["sv"] for ch in allv["chains"]} == set(allv["subverticals"])
-    assert len(allv["chains"]) == len(allv["subverticals"]) > 1
-    # the order of rendered chains follows the delivery-ranked subvertical list
-    assert [ch["sv"] for ch in allv["chains"]] == allv["subverticals"]
-    all_names = [c["name"] for ch in allv["chains"] for c in ch["clusters"]]
+    assert len(allv["chains"]) == 1 and allv["chains"][0]["sv"] == "all"
+    assert len(allv["subverticals"]) > 1  # the picker still lists every subvertical
+    all_names = [c["name"] for c in allv["clusters"]]
+    assert len(all_names) > 10  # a real, clean pipeline
     assert all("SV-Specific" not in n and not n.endswith(")") for n in all_names)
+    # the chain folds the verbose "Indirect: …" stages into one clean stage
+    assert not any(n.lower().startswith("indirect") and n != "Indirect linkages" for n in all_names)
 
 
 @needs_db

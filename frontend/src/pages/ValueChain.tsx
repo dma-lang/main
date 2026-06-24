@@ -201,8 +201,6 @@ export function ValueChain() {
 
   const res = useValueChain(version, pillar, ui.sv);
   const data = res.data;
-  // both the version's OWN mapping and an inherited reference (v7) mapping are the REAL named chain
-  const real = !!data?.source?.startsWith('catalogue_vc_mapping');
   // prefer the per-subvertical chains; fall back to wrapping the flat clusters (derived path)
   const chains: ValueChainGroup[] =
     data?.chains && data.chains.length > 0
@@ -216,11 +214,7 @@ export function ValueChain() {
     <Page
       eyebrow="A · Explore"
       title="Value chain atlas"
-      intro={
-        real
-          ? "The catalogue's own value chain — the real, named stages for each subvertical, in order, from the v7 VC-mapping sheet (cascaded to versions without their own, e.g. v5). Pick a subvertical in the header to focus one chain, or 'All SV' to see every industry's chain."
-          : "Value-chain stages derived live from this version's own capability structure — used only when a version ships no VC mapping of its own."
-      }
+      intro="The catalogue's value chain. 'All SV' consolidates the whole catalogue into high-level value-chain stages; pick a subvertical in the header to see its real, named stage chain (a version without its own mapping inherits the reference's)."
       actions={
         <button className={'btn sm ' + (radial ? 'primary' : 'ghost')} onClick={() => setRadial((r) => !r)}>
           <Icon n="route" s={13} /> {radial ? 'Pipeline' : 'Radial'}
@@ -235,14 +229,13 @@ export function ValueChain() {
             </button>
           ))}
         </div>
-        {/* pick the value chain directly from the subverticals in the VC mapping; 'All SV' lists
-            every subvertical's chain rather than locking to one */}
-        {real && (data?.subverticals?.length ?? 0) > 0 && (
+        {/* 'All SV' consolidates the whole catalogue; pick a subvertical for its real named chain */}
+        {(data?.subverticals?.length ?? 0) > 0 && (
           <Dropdown
             label="All SV"
             value={ui.sv}
             options={[
-              { v: 'all', l: 'All SV — every chain' },
+              { v: 'all', l: 'All SV — consolidated' },
               ...(data?.subverticals ?? []).map((c) => ({ v: c, l: SV_NAME[c] ?? c })),
             ]}
             onChange={ui.setSv}
