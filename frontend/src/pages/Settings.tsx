@@ -196,9 +196,8 @@ const LENSES = [
   { v: 'pillar', l: 'Pillar' },
   { v: 'value-chain', l: 'Value chain' },
   { v: 'subvertical', l: 'Subvertical' },
-  { v: 'maturity', l: 'Maturity' },
+  { v: 'maturity', l: 'Tier coverage' },
   { v: 'vendor', l: 'Vendor' },
-  { v: 'lifecycle', l: 'Lifecycle' },
 ];
 const PERSONAS = [
   { v: 'Pillar lead', l: 'Pillar lead' },

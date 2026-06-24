@@ -79,6 +79,8 @@ def test_carry_summary(carried: dict[str, Any]) -> None:
     assert carried["catalogue_ref_links"] == 1929  # additional links actually landed
     assert carried["catalogue_refs_unresolved"] == 160  # counted, never invented as stories
     assert carried["jira_linked_subcaps"] == 318  # up from the corpus' own 87
+    # v7 IS the corpus mapping, so the cross-version inheritance pass is a no-op here.
+    assert carried["inherited_v7_links"] == 0
 
 
 @needs_db
@@ -271,3 +273,34 @@ def test_delivery_drilldown_clients_and_clusters(client: TestClient) -> None:
 
     # unknown subcap is an honest 404, not an empty panel
     assert client.get("/api/catalogue/v7/subcaps/NOPE.1/delivery").status_code == 404
+
+
+def test_invert_to_reference_carries_v7_corpus_onto_drifted_ids() -> None:
+    """Hermetic (no DB): a version whose ids drifted from v7 (renamed, same capabilities) inherits
+    the v7 corpus mapping. Each target subcap resolves to its v7 counterpart by capability name, and
+    the inverted map lets a corpus story on the v7 id land on the drifted id — the v5 heatmap fix.
+    """
+    from app.services import subcap_xref
+    from app.services.stories import _invert_to_reference
+
+    ref = subcap_xref.ReferenceIndex.build(
+        [
+            {"id": "P1C1.1.1", "l2": "Strategy Foundation", "descr": "digital strategy document"},
+            {"id": "P2C3.5.1", "l2": "Case Management", "descr": "case intake and classification"},
+        ]
+    )
+    # a drifted version: SAME capabilities, DIFFERENT subcap ids -> resolve via L2 capability name
+    drifted = [
+        {"id": "P1C9.3.WM1", "l2": "Strategy Foundation", "descr": "digital strategy document"},
+        {"id": "P2C8.9.RB2", "l2": "Case Management", "descr": "case intake and classification"},
+    ]
+    # a corpus story mapped to the v7 id now carries onto the drifted target subcap
+    assert _invert_to_reference(drifted, ref) == {
+        "P1C1.1.1": ["P1C9.3.WM1"],
+        "P2C3.5.1": ["P2C8.9.RB2"],
+    }
+    # a shared-id version maps each subcap to itself: native carry already covers it, so the
+    # inherited pass is a harmless ON CONFLICT no-op there (never double-counts).
+    assert _invert_to_reference(
+        [{"id": "P2C3.5.1", "l2": "Case Management", "descr": "x"}], ref
+    ) == {"P2C3.5.1": ["P2C3.5.1"]}

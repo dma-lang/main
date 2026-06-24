@@ -344,12 +344,14 @@ function UseTab({ enr }: { enr: SubcapEnrichment | undefined }) {
   );
 }
 
-const SCORES: [string, keyof StoryRowScores][] = [
-  ['Acceptance criteria', 'ac_score'],
-  ['Solution design', 'sd_score'],
-  ['Story score', 'story_score'],
-];
-type StoryRowScores = { ac_score: number | null; sd_score: number | null; story_score: number | null };
+const SCORES: [string, 'composite_score' | 'ac_score' | 'sd_score' | 'story_score' | 'delivery_score'][] =
+  [
+    ['Composite', 'composite_score'],
+    ['Acceptance criteria', 'ac_score'],
+    ['Solution design', 'sd_score'],
+    ['Story score', 'story_score'],
+    ['Delivery', 'delivery_score'],
+  ];
 
 function scoreColor(v: number): string {
   return v >= 3 ? 'var(--interactive)' : v >= 2 ? 'var(--z-blue)' : 'var(--z-orange)';
@@ -484,16 +486,71 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
                   className="fade-in"
                   style={{ padding: '4px 14px 14px', borderTop: '1px solid var(--border-subtle)' }}
                 >
-                  <div className="muted" style={{ fontSize: 11.5, margin: '10px 0' }}>
-                    Delivered against <b style={{ color: 'var(--text-secondary)' }}>{node.name}</b>
-                    {st.story_sv_code ? ` · ${st.story_sv_code}` : ''} · confidence{' '}
-                    {st.confidence_level ?? 'n/a'}.
+                  {/* full summary, not truncated */}
+                  <div
+                    style={{
+                      fontSize: 12.5,
+                      lineHeight: 1.45,
+                      margin: '10px 0',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    {st.summary || 'No summary recorded.'}
                   </div>
-                  <div className="row gap16" style={{ maxWidth: 460 }}>
+                  {/* delivery metadata pulled from the Jira corpus */}
+                  <div className="row wrap gap6" style={{ marginBottom: 10 }}>
+                    {st.epic_key && (
+                      <span className="chip soft" style={{ fontSize: 9.5 }} title="Jira epic">
+                        epic {st.epic_key}
+                      </span>
+                    )}
+                    {st.project_key && (
+                      <span className="chip soft" style={{ fontSize: 9.5 }} title="Jira project (client proxy)">
+                        {st.project_key}
+                      </span>
+                    )}
+                    {st.story_sv_code && (
+                      <span className="chip soft" style={{ fontSize: 9.5 }} title="subvertical">
+                        {st.story_sv_code}
+                      </span>
+                    )}
+                    {st.tier && (
+                      <span className="chip soft" style={{ fontSize: 9.5 }} title="capability tier">
+                        {st.tier}
+                      </span>
+                    )}
+                    {st.reusability_layer && (
+                      <span className="chip soft" style={{ fontSize: 9.5 }} title="reusability layer">
+                        {st.reusability_layer}
+                      </span>
+                    )}
+                    {st.population && (
+                      <span className="chip soft" style={{ fontSize: 9.5 }} title="population segment">
+                        pop {st.population}
+                      </span>
+                    )}
+                    {st.confidence_level && (
+                      <span
+                        className={'chip ' + (st.confidence_level === 'HIGH' ? 'teal' : 'soft')}
+                        style={{ fontSize: 9.5 }}
+                        title="mapping confidence"
+                      >
+                        {st.confidence_level}
+                      </span>
+                    )}
+                  </div>
+                  {(st.category_name || st.cap_name) && (
+                    <div className="muted" style={{ fontSize: 11, marginBottom: 12 }}>
+                      {[st.category_name, st.cap_name].filter(Boolean).join(' · ')} →{' '}
+                      <b style={{ color: 'var(--text-secondary)' }}>{node.name}</b>
+                    </div>
+                  )}
+                  {/* graded sub-scores incl. composite + delivery */}
+                  <div className="row wrap gap16" style={{ maxWidth: 640 }}>
                     {SCORES.map(([label, key]) => {
                       const v = st[key];
                       return (
-                        <div key={key} style={{ flex: 1 }}>
+                        <div key={key} style={{ minWidth: 110, flex: 1 }}>
                           <div className="between" style={{ fontSize: 11, marginBottom: 4 }}>
                             <span className="muted">{label}</span>
                             <b className="num">{v != null ? v.toFixed(1) : 'n/a'}</b>

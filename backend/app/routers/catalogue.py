@@ -82,14 +82,20 @@ class CatalogueSummary(BaseModel):
 class StoryRow(BaseModel):
     story_key: str
     project_key: str | None = None
+    epic_key: str | None = None
     summary: str | None = None
     confidence_level: str | None = None
     composite_score: float | None = None
     ac_score: float | None = None
     sd_score: float | None = None
     story_score: float | None = None
+    delivery_score: float | None = None
     story_sv_code: str | None = None
     tier: str | None = None
+    cap_name: str | None = None
+    category_name: str | None = None
+    reusability_layer: str | None = None
+    population: str | None = None
     is_synthetic: bool = False
 
 
@@ -359,6 +365,8 @@ async def subcap_stories(
         "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
         "st.composite_score::float AS composite_score, st.ac_score::float AS ac_score, "
         "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
+        "st.delivery_score::float AS delivery_score, st.epic_key, st.cap_name, "
+        "st.category_name, st.reusability_layer, st.population, "
         "st.story_sv_code, st.tier, st.is_synthetic "
         + where
         + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
@@ -1180,11 +1188,11 @@ async def summary(
 ) -> CatalogueSummary:
     v = await resolve_version(version)
     s = _schema(v)
-    # COMPLETENESS (user definition) = (total subcaps - decayed subcaps) / total subcaps, i.e. the
-    # share of subcaps backed by real Jira delivery. decay = subcaps with NO delivered Jira story
-    # (story_catalogue_link is Jira-only by construction — synthetic stories never count). A decayed
-    # subcap can stay active; it is flagged HIGH for an admin to mark inactive or keep, never
-    # auto-deactivated. A description rewrite is neither decay nor incompleteness.
+    # COMPLETENESS = (total - decayed) / total. decay = subcaps with NO mapped story at all — Jira
+    # OR the per-version synthetic corpus (story_subcap_carry, status confirmed/review). So coverage
+    # means "has any delivery evidence" and approaches 100%; the concentration heatmaps stay real-
+    # Jira-only (story_catalogue_link). A decayed subcap can stay active; it is flagged HIGH for an
+    # admin to mark inactive or keep, never auto-deactivated.
     # `sv` scopes EVERYTHING to the subcaps that participate in that subvertical's value chain
     # (cat_<v>.subcap_vcc, from the catalogue's own per-SV mapping) — so the mission-control tiles
     # genuinely change when the subvertical toggle changes.
@@ -1197,12 +1205,14 @@ async def summary(
     sql = text(
         "SELECT p.pillar_id, p.name, count(s.subcap_id) AS subcap_count, "
         "coalesce(count(s.subcap_id) FILTER (WHERE EXISTS ("
-        "  SELECT 1 FROM control.story_catalogue_link l "
-        "  WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id))::float "
+        "  SELECT 1 FROM control.story_subcap_carry c "
+        "  WHERE c.target_version = :vid AND c.carried_to_subcap = s.subcap_id "
+        "  AND c.status IN ('confirmed', 'review')))::float "
         "/ nullif(count(s.subcap_id), 0), 0) AS completeness, "
         "count(s.subcap_id) FILTER (WHERE NOT EXISTS ("
-        "  SELECT 1 FROM control.story_catalogue_link l "
-        "  WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id)) AS decay "
+        "  SELECT 1 FROM control.story_subcap_carry c "
+        "  WHERE c.target_version = :vid AND c.carried_to_subcap = s.subcap_id "
+        "  AND c.status IN ('confirmed', 'review'))) AS decay "
         f"FROM {s}.pillar p "
         f"LEFT JOIN {s}.category cat ON cat.pillar_id = p.pillar_id "
         f"LEFT JOIN {s}.capability cap ON cap.category_id = cat.category_id "
@@ -1249,7 +1259,6 @@ class HeatmapResp(BaseModel):
 _LENS_GROUP: dict[str, tuple[str, str, str]] = {
     # lens -> (group-key expr, label expr, extra FROM/JOIN)
     "pillar": ("sc.subcap_id", "sc.name", ""),  # rows = most-delivered subcaps
-    "lifecycle": ("sc.lifecycle_state::text", "sc.lifecycle_state::text", ""),
     "maturity": ("coalesce(sc.tier,'untiered')", "coalesce(sc.tier,'untiered')", ""),
     "subvertical": (
         "coalesce(st.story_sv_code,'(unscoped)')",
@@ -1264,10 +1273,15 @@ _LENS_GROUP: dict[str, tuple[str, str, str]] = {
         " JOIN {s}.vendor ven ON ven.vendor_id = l3.vendor_id",
     ),
     "value-chain": (
-        # the REAL stage names (same labels as the atlas) — the VCC code is only an id
+        # REAL stage names (same labels as the atlas) — the VCC code is only an id. The chain is
+        # PER-SUBVERTICAL, so scope to the active one (or, when 'all', the most-covered) rather than
+        # fanning Jira delivery across every subvertical's chain at once.
         "vcl.name",
         "vcl.name",
         " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id"
+        " AND vcc.subvertical = coalesce(nullif(:vc_sv, 'all'),"
+        " (SELECT subvertical FROM {s}.subcap_vcc GROUP BY subvertical"
+        " ORDER BY count(DISTINCT subcap_id) DESC, subvertical LIMIT 1))"
         " JOIN {s}.value_chain_cluster vcl ON vcl.vcc_id = vcc.vcc_id",
     ),
 }
@@ -1297,7 +1311,10 @@ async def heatmap(
     if pillar != "all":
         where.append("left(sc.subcap_id, 2) = :pil")
         params["pil"] = pillar
-    if sv != "all":
+    if lens == "value-chain":
+        # the value-chain lens scopes by the CHAIN's subvertical (in the join), not the story's sv
+        params["vc_sv"] = sv
+    elif sv != "all":
         where.append("st.story_sv_code = :sv")
         params["sv"] = sv
     band = "least(6, greatest(1, width_bucket(st.composite_score, 1, 5, 6)))"

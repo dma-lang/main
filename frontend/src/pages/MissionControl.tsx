@@ -26,8 +26,7 @@ const LENS_TITLE: Record<string, string> = {
   'value-chain': 'value-chain clusters',
   subvertical: 'subverticals',
   vendor: 'platform vendors',
-  maturity: 'leverage tiers',
-  lifecycle: 'lifecycle states',
+  maturity: 'tier coverage',
 };
 
 export function MissionControl() {
