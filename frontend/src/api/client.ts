@@ -281,14 +281,20 @@ export interface SubcapDetail {
 export interface StoryRow {
   story_key: string;
   project_key: string | null;
+  epic_key?: string | null;
   summary: string | null;
   confidence_level: string | null;
   composite_score: number | null;
   ac_score: number | null;
   sd_score: number | null;
   story_score: number | null;
+  delivery_score?: number | null;
   story_sv_code: string | null;
   tier: string | null;
+  cap_name?: string | null;
+  category_name?: string | null;
+  reusability_layer?: string | null;
+  population?: string | null;
   is_synthetic?: boolean;
 }
 

@@ -82,14 +82,20 @@ class CatalogueSummary(BaseModel):
 class StoryRow(BaseModel):
     story_key: str
     project_key: str | None = None
+    epic_key: str | None = None
     summary: str | None = None
     confidence_level: str | None = None
     composite_score: float | None = None
     ac_score: float | None = None
     sd_score: float | None = None
     story_score: float | None = None
+    delivery_score: float | None = None
     story_sv_code: str | None = None
     tier: str | None = None
+    cap_name: str | None = None
+    category_name: str | None = None
+    reusability_layer: str | None = None
+    population: str | None = None
     is_synthetic: bool = False
 
 
@@ -359,6 +365,8 @@ async def subcap_stories(
         "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
         "st.composite_score::float AS composite_score, st.ac_score::float AS ac_score, "
         "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
+        "st.delivery_score::float AS delivery_score, st.epic_key, st.cap_name, "
+        "st.category_name, st.reusability_layer, st.population, "
         "st.story_sv_code, st.tier, st.is_synthetic "
         + where
         + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
