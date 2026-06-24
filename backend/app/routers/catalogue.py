@@ -1081,7 +1081,8 @@ async def value_chain(
     from capability clusters only when a version has no mapping at all."""
     from app.services.value_chain import derive_value_chain
 
-    s = _schema(await resolve_version(version))
+    v = await resolve_version(version)
+    s = _schema(v)
     p_active = bool(pillar and pillar != "all")
     sv_active = bool(sv and sv != "all")
     async with _engine().connect() as conn:
@@ -1089,14 +1090,21 @@ async def value_chain(
         if has_vcc:
             # The value chain is PER-SUBVERTICAL by nature — render exactly one subvertical's
             # ordered stage pipeline. Use the requested sv; if 'all'/empty, resolve to the
-            # most-covered subvertical deterministically and tell the UI which one (resolved_sv).
+            # MOST-DELIVERED subvertical (real Jira concentration, NOT a 2-subcap margin) and tell
+            # the UI which one (resolved_sv). The list is delivery-ranked so the picker matches.
             subverticals = [
                 str(r[0])
                 for r in await conn.execute(
                     text(
-                        f"SELECT subvertical FROM {s}.subcap_vcc "
-                        "GROUP BY subvertical ORDER BY count(DISTINCT subcap_id) DESC, subvertical"
-                    )
+                        f"SELECT vcc.sv AS subvertical FROM "
+                        f"(SELECT DISTINCT subvertical AS sv FROM {s}.subcap_vcc) vcc "
+                        "LEFT JOIN (SELECT st.story_sv_code AS sv, "
+                        "count(DISTINCT st.story_key) AS n FROM control.story_catalogue_link l "
+                        "JOIN control.story st ON st.story_key = l.story_key "
+                        "WHERE l.version_id = :vid GROUP BY st.story_sv_code) d ON d.sv = vcc.sv "
+                        "ORDER BY coalesce(d.n, 0) DESC, vcc.sv"
+                    ),
+                    {"vid": v.version_id},
                 )
             ]
             resolved_sv = sv if sv_active else (subverticals[0] if subverticals else "")
@@ -1280,8 +1288,12 @@ _LENS_GROUP: dict[str, tuple[str, str, str]] = {
         "vcl.name",
         " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id"
         " AND vcc.subvertical = coalesce(nullif(:vc_sv, 'all'),"
-        " (SELECT subvertical FROM {s}.subcap_vcc GROUP BY subvertical"
-        " ORDER BY count(DISTINCT subcap_id) DESC, subvertical LIMIT 1))"
+        " (SELECT st.story_sv_code FROM control.story_catalogue_link l2"
+        " JOIN control.story st ON st.story_key = l2.story_key"
+        " WHERE l2.version_id = :ver AND st.story_sv_code IN"
+        " (SELECT DISTINCT subvertical FROM {s}.subcap_vcc)"
+        " GROUP BY st.story_sv_code ORDER BY count(DISTINCT st.story_key) DESC,"
+        " st.story_sv_code LIMIT 1))"
         " JOIN {s}.value_chain_cluster vcl ON vcl.vcc_id = vcc.vcc_id",
     ),
 }
