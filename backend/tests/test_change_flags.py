@@ -79,7 +79,9 @@ def test_change_flag_lifecycle(client: TestClient) -> None:
     flags = body["flags"]
     assert len(flags) >= 2
     assert sum(body["counts"].values()) == len(flags)
-    f = flags[0]
+    # the combined scan raises several kinds (contradictions, decay, unscoped-subvertical
+    # proposals); pick the contradiction explicitly rather than assuming the severity ordering.
+    f = next(x for x in flags if x["kind"] == "contradicted_evidence")
     assert f["kind"] == "contradicted_evidence"
     assert f["gate_failed"] == "G6_contradiction"
     assert f["before"] in ("declining", "fading", "dead")
@@ -119,8 +121,10 @@ def test_change_flag_lifecycle(client: TestClient) -> None:
     again = client.post(f"/api/change-flags/{f['id']}/approve").json()
     assert again["resolved"] is False and again["status"] == "approved"
 
-    # reject needs a reason; defer snoozes out of the open inbox
-    second, third = flags[1]["id"], flags[2]["id"]
+    # reject needs a reason; defer snoozes out of the open inbox (pick two OTHER open flags than
+    # the contradiction we just approved — positional indices aren't stable across flag kinds)
+    others = [x for x in flags if x["id"] != f["id"]]
+    second, third = others[0]["id"], others[1]["id"]
     assert client.post(f"/api/change-flags/{second}/reject", json={"reason": ""}).status_code == 400
     rejected = client.post(
         f"/api/change-flags/{second}/reject", json={"reason": "legacy wind-down, expected"}

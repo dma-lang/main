@@ -21,6 +21,12 @@ schedules:
     job: weekly_trends
     batch: true
 
+  unscoped_subvertical_detect:
+    description: Weekly scan for clients delivering outside the 9 subverticals -> infer + gate a candidate new subvertical -> Change Flags.
+    cron: "45 6 * * MON"          # Monday 06:45 UTC (after trends)
+    job: weekly_unscoped_subverticals
+    batch: true
+
   vendor_scan:
     description: Weekly vendor-development ingest -> 8-type classification -> subcap impact.
     cron: "0 7 * * MON"           # Monday 07:00 UTC

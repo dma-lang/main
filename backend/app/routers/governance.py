@@ -18,6 +18,7 @@ from sqlalchemy import text
 from app import db
 from app.deps import get_current_user, require_admin
 from app.services import change_flags as flags_svc
+from app.services import subverticals as subverticals_svc
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
@@ -225,17 +226,32 @@ async def change_flags(
 async def scan_flags(
     version: str, _admin: dict[str, Any] = Depends(require_admin)
 ) -> dict[str, Any]:
-    """Run BOTH flag analyses: lifecycle-vs-delivery contradictions (G6) and the decay analysis
-    (subcaps missing vs the previous version, each with an explicit explanation)."""
+    """Run ALL flag analyses: lifecycle-vs-delivery contradictions (G6), the decay analysis
+    (subcaps missing vs the previous version), and unscoped-subvertical discovery (clients
+    delivering outside the nine subverticals) — each gated and explained, nothing auto-acted."""
     contradiction = await flags_svc.scan(version)
     decay = await flags_svc.scan_decay(version)
+    unscoped = await subverticals_svc.detect_unscoped_subverticals(version)
     return {
         "version": version,
-        "created": int(contradiction["created"]) + int(decay["created"]),
-        "candidates": int(contradiction["candidates"]) + int(decay["candidates"]),
+        "created": int(contradiction["created"]) + int(decay["created"]) + int(unscoped["created"]),
+        "candidates": int(contradiction["candidates"])
+        + int(decay["candidates"])
+        + int(unscoped["candidates"]),
         "contradiction": contradiction,
         "decay": decay,
+        "unscoped_subverticals": unscoped,
     }
+
+
+@router.post("/admin/change-flags/scan-subverticals/{version}")
+async def scan_subverticals(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Unscoped-subvertical discovery on its own: cluster real-Jira delivery from clients outside
+    the nine modelled subverticals, infer + gate a candidate new subvertical for each (volume-
+    stratified, overlap-guarded), and queue it in the Change-Flags / Notifications inbox."""
+    return await subverticals_svc.detect_unscoped_subverticals(version)
 
 
 @router.post("/change-flags/{flag_id}/approve")

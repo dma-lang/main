@@ -251,6 +251,7 @@ async def _create_flag(conn: AsyncConnection, c: Any, version_id: str) -> None:
 # whether to mark the subcap inactive — nothing is ever auto-deactivated.
 _DECAY_KIND = "decay_missing_subcap"  # removed-from-previous (kept stable for existing rows)
 _DECAY_NO_DELIVERY = "decay_no_delivery"  # in this version but zero real Jira stories
+_UNSCOPED_KIND = "unscoped_subvertical"  # proposed new subvertical (services/subverticals.py)
 _INACTIVE_STATE = "dead"  # "mark inactive" target lifecycle
 _LIVE_STATES = ("emerging", "rising", "stable")  # believed active -> decay is the real decision
 _NO_DELIVERY_CAP = 1000  # generous: surface ALL decayed subcaps (v7 ~765) in one scan
@@ -563,6 +564,32 @@ async def approve(flag_id: str, actor: str) -> FlagResult:
                 "change_flag.approve",
                 target,
                 {"flag_id": flag_id, "acknowledged": "removal", "version": detail.get("version")},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE control.change_flag SET status = 'approved', resolved_at = now() "
+                    "WHERE flag_id = :id"
+                ),
+                {"id": flag_id},
+            )
+            return FlagResult(resolved=True, status="approved")
+
+        if flag["kind"] == _UNSCOPED_KIND:
+            # Accepting a proposed NEW subvertical ACKNOWLEDGES it as a candidate to model
+            # (audited); it never auto-creates a subvertical (a structural change a human makes in
+            # the mapping studio). The grounded delivery that justified it stays on the chain.
+            await _audit(
+                conn,
+                actor,
+                "change_flag.approve",
+                target,
+                {
+                    "flag_id": flag_id,
+                    "accepted": "subvertical_proposal",
+                    "code": detail.get("code"),
+                    "name": detail.get("name"),
+                    "version": detail.get("version"),
+                },
             )
             await conn.execute(
                 text(

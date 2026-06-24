@@ -11,6 +11,7 @@ import {
   type ClientRow,
   type DiffResp,
   type HeatmapResp,
+  type UnscopedSubverticalsResp,
   type MappingResp,
   type SowDetail,
   type SowDoc,
@@ -82,6 +83,13 @@ export const useHeatmap = (version: string, lens: string, pillar: string, sv: st
   useQuery<HeatmapResp>({
     queryKey: ['heatmap', version, lens, pillar, sv],
     queryFn: () => api.heatmap(version, lens, pillar, sv),
+    enabled: !!version,
+  });
+
+export const useUnscopedSubverticals = (version: string) =>
+  useQuery<UnscopedSubverticalsResp>({
+    queryKey: ['unscoped-subverticals', version],
+    queryFn: () => api.unscopedSubverticals(version),
     enabled: !!version,
   });
 

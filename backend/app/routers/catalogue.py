@@ -1411,6 +1411,127 @@ async def heatmap(
     return HeatmapResp(lens=lens, axis=_BAND_AXIS, rows=out, max=gmax)
 
 
+# the nine modelled subverticals — anything else (or NULL) is unscoped delivery
+_MODELLED_SV_SQL = "'RB','CU','CL','CIB','FC','AM','RIA','IC','IB'"
+
+
+class UnscopedCandidate(BaseModel):
+    flag_id: str
+    chain_id: str | None = None
+    client: str  # the Jira project_key driving this unscoped delivery
+    code: str | None = None  # provisional subvertical code
+    name: str  # proposed (provisional) subvertical name
+    severity: str
+    status: str
+    stories: int
+    cells: list[int]  # 6 composite-score bands — the ORANGE heatmap row
+    pillars: list[str] = []
+    top_capabilities: list[dict[str, Any]] = []
+    overlap_sv: str | None = None
+    overlap: float = 0.0
+    claim_label: str | None = None
+    source_tier: str | None = None
+    ers: float | None = None
+    samples: list[str] = []
+
+
+class UnscopedSubverticalsResp(BaseModel):
+    version: str
+    axis: list[str]  # the 6 composite-score band labels (same axis as the heatmap)
+    candidates: list[UnscopedCandidate]
+    max: int  # global max cell, for intensity scaling
+
+
+@router.get("/{version}/unscoped-subverticals")
+async def unscoped_subverticals(
+    version: str,
+    status_filter: str = Query("open", alias="status"),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> UnscopedSubverticalsResp:
+    """Mission-control drilldown: the AI-identified candidate subverticals we have NOT scoped — the
+    gated proposals from services/subverticals (clients delivering outside the nine). Each carries
+    its own 6-band cell strip (rendered ORANGE on the heatmap), volume-stratified, with the client
+    names, capability profile, overlap check and trust envelope for the drilldown."""
+    v = await resolve_version(version)
+    async with _engine().connect() as conn:
+        where = "WHERE kind = 'unscoped_subvertical'"
+        params: dict[str, Any] = {}
+        if status_filter:
+            where += " AND status = :st"
+            params["st"] = status_filter
+        flags = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT flag_id, chain_id, severity, status, target_ref, detail "
+                        f"FROM control.change_flag {where} ORDER BY "
+                        "CASE severity WHEN 'BLOCKING' THEN 0 WHEN 'HIGH' THEN 1 "
+                        "WHEN 'MED' THEN 2 ELSE 3 END, (detail->>'stories')::int DESC NULLS LAST"
+                    ),
+                    params,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        clients = [str(f["target_ref"]) for f in flags]
+        cells_by_client: dict[str, list[int]] = {}
+        if clients:
+            band = "least(6, greatest(1, width_bucket(composite_score, 1, 5, 6)))"
+            cell_cols = ", ".join(
+                f"count(*) FILTER (WHERE band = {k}) AS c{k}" for k in range(1, 7)
+            )
+            crows = (
+                (
+                    await conn.execute(
+                        text(
+                            f"SELECT client, {cell_cols} FROM (SELECT project_key AS client, "
+                            f"{band} AS band FROM control.story WHERE NOT is_synthetic "
+                            "AND project_key = ANY(:clients) AND (story_sv_code IS NULL "
+                            f"OR story_sv_code NOT IN ({_MODELLED_SV_SQL}))) q GROUP BY client"
+                        ),
+                        {"clients": clients},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            cells_by_client = {
+                str(r["client"]): [int(r[f"c{k}"]) for k in range(1, 7)] for r in crows
+            }
+    candidates: list[UnscopedCandidate] = []
+    gmax = 0
+    for f in flags:
+        d = f["detail"] or {}
+        client = str(f["target_ref"])
+        cells = cells_by_client.get(client, [0, 0, 0, 0, 0, 0])
+        gmax = max(gmax, *cells)
+        candidates.append(
+            UnscopedCandidate(
+                flag_id=str(f["flag_id"]),
+                chain_id=str(f["chain_id"]) if f["chain_id"] else None,
+                client=client,
+                code=d.get("code"),
+                name=str(d.get("name") or client),
+                severity=str(f["severity"]),
+                status=str(f["status"]),
+                stories=int(d.get("stories", sum(cells))),
+                cells=cells,
+                pillars=list(d.get("pillars", [])),
+                top_capabilities=list(d.get("top_capabilities", [])),
+                overlap_sv=d.get("overlap_sv"),
+                overlap=float(d.get("overlap", 0.0)),
+                claim_label=d.get("claim_label"),
+                source_tier=d.get("source_tier"),
+                ers=d.get("ers"),
+                samples=list(d.get("samples", [])),
+            )
+        )
+    return UnscopedSubverticalsResp(
+        version=v.version_id, axis=_BAND_AXIS, candidates=candidates, max=gmax
+    )
+
+
 _PLATFORMS_SQL = (
     "SELECT l.l3_id, l.name, v.name AS vendor, l.category, "
     "count(DISTINCT sp.subcap_id) AS subcap_count, "

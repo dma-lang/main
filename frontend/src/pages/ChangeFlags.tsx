@@ -27,6 +27,7 @@ const KIND_LABEL: Record<string, string> = {
   decay_no_delivery: 'Decay · no Jira delivery',
   decay_missing_subcap: 'Decay · removed from a previous version',
   evidence_gate_failure: 'Evidence gate failures',
+  unscoped_subvertical: 'New subvertical proposals',
 };
 const RENDER_CAP = 120;
 
@@ -177,9 +178,14 @@ export function ChangeFlags() {
                     <Icon n="eye" s={13} /> Reasoning
                   </button>
                 )}
-                {f.target && !f.target.includes(':') && (
+                {f.target && !f.target.includes(':') && f.kind !== 'unscoped_subvertical' && (
                   <button className="linkbtn" onClick={() => f.target && go('subcap/' + f.target)}>
                     Open subcap
+                  </button>
+                )}
+                {f.kind === 'unscoped_subvertical' && (
+                  <button className="linkbtn" onClick={() => go('mission-control')}>
+                    View on mission control
                   </button>
                 )}
                 {f.target?.startsWith('news:') && (

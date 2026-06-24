@@ -68,6 +68,34 @@ export interface HeatmapResp {
   max: number;
 }
 
+// AI-identified candidate subverticals we have NOT scoped (gated proposals from the unscoped-Jira
+// detector) — rendered as the ORANGE heatmap + drilldown on mission control.
+export interface UnscopedCandidate {
+  flag_id: string;
+  chain_id: string | null;
+  client: string; // the Jira project_key driving this unscoped delivery
+  code: string | null; // provisional subvertical code
+  name: string; // proposed (provisional) subvertical name
+  severity: string;
+  status: string;
+  stories: number;
+  cells: number[]; // 6 composite-score bands — the orange heatmap row
+  pillars: string[];
+  top_capabilities: { name: string; n: number }[];
+  overlap_sv: string | null;
+  overlap: number;
+  claim_label: string | null;
+  source_tier: string | null;
+  ers: number | null;
+  samples: string[];
+}
+export interface UnscopedSubverticalsResp {
+  version: string;
+  axis: string[];
+  candidates: UnscopedCandidate[];
+  max: number;
+}
+
 export interface TimelineEvent {
   kind: string;
   date: string | null;
@@ -1075,6 +1103,8 @@ export const api = {
     const qs = new URLSearchParams({ lens, pillar, sv });
     return http<HeatmapResp>(`/api/catalogue/${v}/heatmap?${qs.toString()}`);
   },
+  unscopedSubverticals: (v: string): Promise<UnscopedSubverticalsResp> =>
+    http<UnscopedSubverticalsResp>(`/api/catalogue/${v}/unscoped-subverticals`),
   subcaps: (v: string, sv = 'all'): Promise<SubcapNode[]> =>
     http<SubcapNode[]>(`/api/catalogue/${v}/subcaps?sv=${sv}`),
   valueChain: (v: string, pillar = '', sv = ''): Promise<ValueChainResp> => {

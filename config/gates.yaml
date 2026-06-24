@@ -63,6 +63,12 @@ matching:
 knowledge_graph:
   semantically_similar_min_cosine: 0.85
 
+# Unscoped-subvertical discovery (clients delivering outside the 9 modelled subverticals).
+# A candidate is proposed only with real volume AND when the client is not already an existing SV.
+unscoped_subverticals:
+  min_stories: 25                # real-Jira volume floor for a client to be a candidate (filters noise)
+  overlap_max: 0.5              # client already >= this fraction an existing SV -> not a NEW subvertical
+
 # Trend detection signal weights + emergence cutoff (trends are earned, not counted).
 trends:
   weight_velocity: 0.35

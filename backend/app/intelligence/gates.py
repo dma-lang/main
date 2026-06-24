@@ -131,6 +131,19 @@ def benchmarks_config() -> BenchmarkConfig:
     return cfg
 
 
+def unscoped_subverticals_config() -> tuple[int, float]:
+    """(min_stories, overlap_max) for unscoped-subvertical discovery: the real-Jira volume floor a
+    client must clear to be a candidate new subvertical, and the fraction at/above which the client
+    is judged to already BE an existing subvertical (so its unscoped delivery is not proposed as
+    new). Config, not code: recalibrated from analyst feedback without a deploy."""
+    section = load_gate_config().get("unscoped_subverticals") or {}
+    min_stories = int(section.get("min_stories", 25))
+    overlap_max = float(section.get("overlap_max", 0.5))
+    if min_stories < 1 or not 0 < overlap_max <= 1:
+        raise ValueError("gates.yaml: invalid unscoped_subverticals thresholds")
+    return min_stories, overlap_max
+
+
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
     """Run G5 + G7 over a grounded answer; return the gate_results jsonb and the verdict."""
     g5 = retrieval_count > 0 and citation_count > 0
