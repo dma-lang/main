@@ -16,7 +16,11 @@ from app.settings import get_settings
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: alembic.ini only configures root/sqlalchemy/alembic, so the
+    # default (True) would DISABLE every other logger — incl. the app's "cia" logger — for the rest
+    # of the process. In the test suite that silenced "cia" after any migration ran, breaking a
+    # later caplog assertion; in-process it would mute app logs after a migrate. Keep them alive.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = None
 

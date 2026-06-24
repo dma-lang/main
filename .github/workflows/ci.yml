@@ -65,6 +65,8 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+          # the lockfile lives in frontend/, and working-directory doesn't apply to `uses:` steps
+          cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
