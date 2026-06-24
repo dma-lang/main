@@ -1,7 +1,13 @@
 // Mission control (A1) — ported from the prototype, wired to /api/catalogue/{v}/summary.
 // Pillar tiles render real counts/completeness/decay; the concentration heatmap + flag/suggestion
 // KPIs light up once their data lands (F5 stories / F7 evidence).
-import { useChangeFlags, useHeatmap, useSuggestions, useSummary } from '../api/queries';
+import {
+  useChangeFlags,
+  useHeatmap,
+  useSuggestions,
+  useSummary,
+  useVersions,
+} from '../api/queries';
 import { Bar, Empty, Page, PillarDot, SC } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { heatBg, PILLAR_COLORS } from '../lib/helpers';
@@ -34,6 +40,10 @@ export function MissionControl() {
   const heat = useHeatmap(version, lens, pillar, sv);
   const flagsQ = useChangeFlags('open');
   const pendingQ = useSuggestions('pending');
+  const versionsQ = useVersions();
+  const liveVersions = (versionsQ.data ?? []).filter(
+    (v) => v.status === 'provisioned' || v.status === 'active',
+  );
   const pillars = summary.data?.pillars ?? [];
   const total = summary.data?.total_subcaps ?? 0;
   const fc = flagsQ.data?.counts;
@@ -224,7 +234,9 @@ export function MissionControl() {
               <div className="kl">Suggestions pending</div>
             </div>
             <div className="kpi" style={{ padding: '14px 15px' }}>
-              <div className="kv" style={{ fontSize: 24 }}>{version ? '1/1' : '—'}</div>
+              <div className="kv" style={{ fontSize: 24 }}>
+                {versionsQ.data ? liveVersions.length : '—'}
+              </div>
               <div className="kl">Versions provisioned</div>
             </div>
             <div className="kpi" style={{ padding: '14px 15px' }}>

@@ -162,10 +162,10 @@ export const useDiff = (a: string, b: string) =>
     retry: false, // an unprovisioned version is a designed 404 state, not a retryable fault
   });
 
-export const useSubcaps = (version: string) =>
+export const useSubcaps = (version: string, sv = 'all') =>
   useQuery<SubcapNode[]>({
-    queryKey: ['subcaps', version],
-    queryFn: () => api.subcaps(version),
+    queryKey: ['subcaps', version, sv],
+    queryFn: () => api.subcaps(version, sv),
     enabled: !!version,
   });
 

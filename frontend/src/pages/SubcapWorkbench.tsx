@@ -621,7 +621,8 @@ export function SubcapWorkbench() {
   const tabParam = new URLSearchParams(loc.search).get('tab');
   const version = useUi((s) => s.version);
   const ctxPillar = useUi((s) => s.pillar);
-  const subcaps = useSubcaps(version);
+  const ctxSv = useUi((s) => s.sv); // header subvertical — scopes the tree like mission control
+  const subcaps = useSubcaps(version, ctxSv);
   const all = useMemo(() => subcaps.data ?? [], [subcaps.data]);
 
   const [pillar, setPillar] = useState<string>(
@@ -631,6 +632,12 @@ export function SubcapWorkbench() {
   const [sel, setSel] = useState<string | null>(routeId);
   const [tab, setTab] = useState('overview');
   const [openCat, setOpenCat] = useState<string | null>(null);
+
+  // Keep the tree's pillar in step with the header pillar toggle (arriving from mission control
+  // with P2 selected lands on P2; the local pills still switch within the page).
+  useEffect(() => {
+    if (!routeId && ctxPillar !== 'all') setPillar(ctxPillar);
+  }, [ctxPillar, routeId]);
 
   // Deep-link / back-forward: when the route id (or requested tab) changes, focus it.
   useEffect(() => {
@@ -822,6 +829,12 @@ export function SubcapWorkbench() {
                 );
               })
             )}
+            {!searching && tree.length === 0 && (
+              <div className="muted" style={{ padding: 14, fontSize: 12 }}>
+                No {pillar} subcaps{ctxSv && ctxSv !== 'all' ? ` in the ${ctxSv} value chain` : ''}.
+                {ctxSv && ctxSv !== 'all' ? ' Switch the subvertical in the header to widen.' : ''}
+              </div>
+            )}
           </div>
         </div>
 
@@ -858,10 +871,10 @@ export function SubcapWorkbench() {
                     </span>
                   </div>
                 </div>
-                <div style={{ textAlign: 'center' }}>
+                <div style={{ textAlign: 'center' }} title="Record coverage — share of core fields populated on this subcap (name, description, tier, solution type, status). Distinct from mission-control delivery completeness.">
                   <Ring v={comp} max={100} />
                   <div className="muted" style={{ fontSize: 9.5, marginTop: 2 }}>
-                    complete
+                    record coverage
                   </div>
                 </div>
               </div>
@@ -888,6 +901,15 @@ export function SubcapWorkbench() {
                     </span>
                   </button>
                 ))}
+                {enr?.inherited_from && (
+                  <span
+                    className="chip soft"
+                    style={{ fontSize: 9.5, alignSelf: 'center' }}
+                    title={`Use-case / platform / maturity counts are shown from the ${enr.inherited_from} reference catalogue (this version carries none of its own), mapped by subcap id.`}
+                  >
+                    <Icon n="branch" s={10} /> enriched from {enr.inherited_from}
+                  </span>
+                )}
               </div>
             </div>
 

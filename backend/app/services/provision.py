@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app import db
+from app.services import subcap_xref
 
 _BACKEND = Path(__file__).resolve().parents[2]  # backend/ (app/services/provision.py -> backend)
 _SEED_DIR = _BACKEND / "seed"
@@ -384,16 +385,51 @@ def _load_vc_mapping(version_id: str) -> dict[str, Any] | None:
 
 
 async def _seed_value_chain(
-    conn: AsyncConnection, schema: str, vc: dict[str, Any]
+    conn: AsyncConnection, schema: str, version_id: str, vc: dict[str, Any]
 ) -> dict[str, Any]:
-    """Seed value_chain_cluster + subcap_vcc from the mapping (filtered to this version's own
-    subcap ids, so a cascaded mapping never invents subcaps). vcc ids are deterministic
-    (VCC-NN over the sorted distinct stage names)."""
-    own_ids = {
-        str(r[0])
-        for r in (await conn.execute(text(f"SELECT subcap_id FROM {schema}.subcap"))).all()
-    }
-    rows = [m for m in vc.get("mapping", []) if str(m["subcap_id"]) in own_ids]
+    """Seed value_chain_cluster + subcap_vcc from the mapping. The version's OWN mapping keys on its
+    own subcap ids; a CASCADED mapping (e.g. v5 borrowing v7's) is remapped through the ONE
+    canonical rule (services/subcap_xref) so a renamed/id-drifted subcap still gets its chain.
+    vcc ids are deterministic (VCC-NN over the sorted distinct stage names)."""
+    from app.services import enrichment_seed
+
+    own = [
+        dict(r)
+        for r in (
+            await conn.execute(
+                text(
+                    f"SELECT s.subcap_id AS id, cap.name AS l2, s.description AS descr "
+                    f"FROM {schema}.subcap s "
+                    f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id"
+                )
+            )
+        ).mappings()
+    ]
+    own_ids = {r["id"] for r in own}
+    cascaded = vc.get("cascaded_from")
+    if not cascaded:
+        rows = [m for m in vc.get("mapping", []) if str(m["subcap_id"]) in own_ids]
+    else:
+        ref_ver, ref_index = enrichment_seed.reference_subcap_index()
+        crosswalk = {
+            str(a): str(b)
+            for a, b in await conn.execute(
+                text(
+                    "SELECT from_subcap, to_subcap FROM control.version_crosswalk "
+                    "WHERE from_version = :v AND to_version = :r AND to_subcap IS NOT NULL"
+                ),
+                {"v": version_id, "r": ref_ver},
+            )
+        }
+        resolved, _unmapped = subcap_xref.resolve_map(own, ref_index, crosswalk)
+        ref_by_sub: dict[str, list[dict[str, Any]]] = {}
+        for m in vc.get("mapping", []):
+            ref_by_sub.setdefault(str(m["subcap_id"]), []).append(m)
+        rows = [
+            {"subcap_id": sid, "sv": m["sv"], "stages": m["stages"]}
+            for sid, ref_id in resolved.items()
+            for m in ref_by_sub.get(ref_id, [])
+        ]
     if not rows:
         return {"vc_stages": 0, "vc_links": 0, "vc_cascaded_from": vc.get("cascaded_from")}
     names = sorted({s for m in rows for s in m["stages"]})
@@ -437,17 +473,6 @@ async def _seed_value_chain(
     }
 
 
-def _toks(s: str | None) -> set[str]:
-    return {t for t in re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split() if len(t) > 2}
-
-
-def _near(a: str | None, b: str | None, thr: float = 0.25) -> bool:
-    ta, tb = _toks(a), _toks(b)
-    if not ta or not tb:
-        return False  # need both to claim a description match
-    return len(ta & tb) / len(ta | tb) >= thr
-
-
 async def _inherit_enrichment(
     conn: AsyncConnection, schema: str, version_id: str
 ) -> dict[str, Any]:
@@ -455,12 +480,11 @@ async def _inherit_enrichment(
     which ships base-only) inherits platforms / use cases / maturity / personas / offerings from
     the richest sibling version (e.g. v7), mapped per subcap so the deep dive is never empty.
 
-    Mapping (most-specific first, so NO subcap is left without enrichment when a counterpart
-    exists): exact subcap id -> id-governance crosswalk -> L2 capability name + near description
-    -> L2 capability name (same capability) -> same category. Dimension tables (vendor, platform,
-    persona, offering) are copied wholesale; the per-subcap links/children are copied with the
-    subcap id remapped. The capability metadata is genuinely shared across catalogue versions, so
-    this is enrichment reuse, not fabrication — and it is recorded in the provision report."""
+    Subcaps are mapped through the ONE canonical rule (services/subcap_xref) every enrichment path
+    shares, so this baked data agrees with the read-time fallback. Dimension tables (vendor,
+    platform, persona, offering) are copied wholesale; the per-subcap links/children are copied
+    with the subcap id remapped. Genuinely-unmapped subcaps get nothing (counted, never fabricated)
+    — the capability metadata is real reuse, recorded in the provision report."""
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid schema")
     uc = (await conn.execute(text(f"SELECT count(*) FROM {schema}.use_case"))).scalar() or 0
@@ -499,13 +523,7 @@ async def _inherit_enrichment(
         return [dict(r) for r in (await conn.execute(text(sql))).mappings()]
 
     cur = await _subcaps(schema)
-    srows = await _subcaps(src_schema)
-    src_ids = {r["id"] for r in srows}
-    src_by_l2: dict[str, list[dict[str, Any]]] = {}
-    src_by_cat: dict[str, str] = {}
-    for r in srows:
-        src_by_l2.setdefault((r["l2"] or "").strip().lower(), []).append(r)
-        src_by_cat.setdefault(r["cat"], r["id"])
+    ref_index = subcap_xref.ReferenceIndex.build(await _subcaps(src_schema))
     crosswalk = {
         str(r[0]): str(r[1])
         for r in await conn.execute(
@@ -516,22 +534,15 @@ async def _inherit_enrichment(
             {"a": version_id, "b": src_ver},
         )
     }
-    mapping: list[dict[str, str]] = []
-    for r in cur:
-        sid = r["id"]
-        tgt = None
-        if sid in src_ids:
-            tgt = sid
-        elif sid in crosswalk and crosswalk[sid] in src_ids:
-            tgt = crosswalk[sid]
-        else:
-            cands = src_by_l2.get((r["l2"] or "").strip().lower(), [])
-            near = next((c["id"] for c in cands if _near(r["descr"], c["descr"])), None)
-            tgt = near or (cands[0]["id"] if cands else src_by_cat.get(r["cat"]))
-        if tgt:
-            mapping.append({"this_sub": sid, "src_sub": tgt})
+    resolved, unmapped = subcap_xref.resolve_map(cur, ref_index, crosswalk)
+    mapping = [{"this_sub": sid, "src_sub": tgt} for sid, tgt in sorted(resolved.items())]
     if not mapping:
-        return {"inherited_from": src_ver, "inherited_subcaps": 0, "reason": "no correspondence"}
+        return {
+            "inherited_from": src_ver,
+            "inherited_subcaps": 0,
+            "enrichment_unmapped": len(unmapped),
+            "reason": "no correspondence",
+        }
 
     # dimensions copied wholesale (FK order: vendor -> l3_platform / offering; persona standalone)
     for tbl, cols in (
@@ -596,6 +607,7 @@ async def _inherit_enrichment(
     return {
         "inherited_from": src_ver,
         "inherited_subcaps": len(mapping),
+        "enrichment_unmapped": len(unmapped),
         "subcaps_with_platforms": int(enriched),
     }
 
@@ -656,7 +668,7 @@ async def bring_version_online(
         # own cascades the reference's for the subcap ids it shares (user ask: v7 -> v5).
         vc = _load_vc_mapping(version_id)
         vc_stats = (
-            await _seed_value_chain(conn, schema, vc)
+            await _seed_value_chain(conn, schema, version_id, vc)
             if vc
             else {"vc_stages": 0, "vc_links": 0, "vc_cascaded_from": None}
         )
@@ -716,6 +728,7 @@ async def bring_version_online(
         "offerings": int(offerings or 0),
         "enrichment_inherited_from": inherited.get("inherited_from"),
         "enrichment_inherited_subcaps": inherited.get("inherited_subcaps", 0),
+        "enrichment_unmapped": inherited.get("enrichment_unmapped", 0),
         "vc_stages": vc_stats["vc_stages"],
         "vc_links": vc_stats["vc_links"],
         "vc_cascaded_from": vc_stats["vc_cascaded_from"],

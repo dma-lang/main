@@ -300,16 +300,38 @@ async def _catalogue_ref_pass(conn: Any, schema: str, target_version: str) -> di
         )
     ).all()
     if not rows:
-        # a version with no refs of its own (e.g. v5) borrows the reference catalogue's refs for
-        # the subcap ids it shares — the same identity rule the enrichment fallback uses
-        from app.services.enrichment_seed import story_refs_map
+        # a version with no refs of its own (e.g. v5) borrows the reference catalogue's refs,
+        # resolving each subcap through the ONE canonical rule the enrichment paths share
+        # (services/subcap_xref) — so the borrowed refs land on the same subcaps the enrichment did
+        from app.services import subcap_xref
+        from app.services.enrichment_seed import reference_subcap_index, story_refs_map
 
         ref_map = story_refs_map()
-        own_ids = {
-            str(r[0])
-            for r in (await conn.execute(text(f"SELECT subcap_id FROM {schema}.subcap"))).all()
+        ref_ver, ref_index = reference_subcap_index()
+        cur = [
+            dict(r)
+            for r in (
+                await conn.execute(
+                    text(
+                        f"SELECT s.subcap_id AS id, cap.name AS l2, s.description AS descr "
+                        f"FROM {schema}.subcap s "
+                        f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id"
+                    )
+                )
+            ).mappings()
+        ]
+        crosswalk = {
+            str(a): str(b)
+            for a, b in await conn.execute(
+                text(
+                    "SELECT from_subcap, to_subcap FROM control.version_crosswalk "
+                    "WHERE from_version = :v AND to_version = :r AND to_subcap IS NOT NULL"
+                ),
+                {"v": target_version, "r": ref_ver},
+            )
         }
-        rows = [(sid, refs) for sid, refs in ref_map.items() if sid in own_ids]
+        mapping, _unmapped = subcap_xref.resolve_map(cur, ref_index, crosswalk)
+        rows = [(sid, ref_map[ref_id]) for sid, ref_id in mapping.items() if ref_id in ref_map]
     real = {
         str(r[0]): str(r[1] or "")
         for r in await conn.execute(

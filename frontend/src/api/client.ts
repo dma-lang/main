@@ -237,11 +237,12 @@ export interface ValueChainSubcap {
   id: string;
   name: string;
   pillar: string;
-  stage: string;
+  stage?: string;
 }
 export interface ValueChainCluster {
   code: string;
   name: string; // the REAL stage name (the code is only an id)
+  position?: number; // chain step (1..N) in the real per-SV pipeline
   pillar: string | null;
   count: number;
   subcaps: ValueChainSubcap[];
@@ -251,6 +252,9 @@ export interface ValueChainCluster {
 export interface ValueChainResp {
   version: string;
   sv: string;
+  resolved_sv?: string; // the subvertical actually rendered (the chain is per-SV)
+  sv_requested?: string;
+  subverticals?: string[]; // subverticals that carry a chain in this version
   source?: string; // catalogue_vc_mapping (real per-SV stages) | derived_from_clusters
   clusters: ValueChainCluster[];
   raw_clusters: number;
@@ -1059,8 +1063,8 @@ export const api = {
     const qs = new URLSearchParams({ lens, pillar, sv });
     return http<HeatmapResp>(`/api/catalogue/${v}/heatmap?${qs.toString()}`);
   },
-  subcaps: (v: string): Promise<SubcapNode[]> =>
-    http<SubcapNode[]>(`/api/catalogue/${v}/subcaps`),
+  subcaps: (v: string, sv = 'all'): Promise<SubcapNode[]> =>
+    http<SubcapNode[]>(`/api/catalogue/${v}/subcaps?sv=${sv}`),
   valueChain: (v: string, pillar = '', sv = ''): Promise<ValueChainResp> => {
     const qs = new URLSearchParams();
     if (pillar && pillar !== 'all') qs.set('pillar', pillar);

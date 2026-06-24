@@ -185,20 +185,27 @@ def test_subcap_connections(client: TestClient) -> None:
 
 @needs_db
 def test_value_chain_real_names_and_sv(client: TestClient) -> None:
-    """A3 on the catalogue's REAL VC mapping (v7 sheet 21): per-subvertical chains with the actual
-    stage NAMES (the VCC code is only an id), in chain order; FC is Farm Credit."""
+    """A3 = the catalogue's REAL VC mapping (v7 sheet 21) as a per-subvertical ORDERED pipeline:
+    actual stage NAMES (the VCC code is only an id), each with a 1..N position in chain order; FC
+    is Farm Credit."""
     fc = client.get("/api/catalogue/v7/value-chain?sv=FC").json()
     assert fc["source"] == "catalogue_vc_mapping"
+    assert fc["resolved_sv"] == "FC"
     assert len(fc["clusters"]) > 10
     names = [c["name"] for c in fc["clusters"]]
     assert all(not n.startswith("VCC-") for n in names)  # names are names, never codes
     assert any("AG " in n or "FARM" in n.upper() or "FCA" in n for n in names)  # Farm Credit
+    # the pipeline is ORDERED: positions ascend 1, 2, 3, …
+    positions = [c["position"] for c in fc["clusters"]]
+    assert positions == sorted(positions) and positions[0] == 1
     # a different subvertical has a different chain
     rb = client.get("/api/catalogue/v7/value-chain?sv=RB").json()
+    assert rb["resolved_sv"] == "RB"
     assert [c["name"] for c in rb["clusters"]] != names
-    # 'all' aggregates distinct stages across subverticals
+    # 'All SV' resolves to a real, single subvertical (the chain is per-SV by nature)
     allv = client.get("/api/catalogue/v7/value-chain").json()
-    assert len(allv["clusters"]) >= len(fc["clusters"])
+    assert allv["resolved_sv"] in allv["subverticals"]
+    assert allv["sv_requested"] == "all"
 
 
 @needs_db
@@ -212,6 +219,11 @@ def test_summary_changes_by_subvertical(client: TestClient) -> None:
     # unknown SV scopes to zero rather than silently showing everything
     none = client.get("/api/catalogue/v7/summary?sv=ZZ").json()
     assert none["total_subcaps"] == 0
+    # the workbench TREE must scope to the same SV membership, so its count matches the summary
+    tree_all = client.get("/api/catalogue/v7/subcaps").json()
+    tree_fc = client.get("/api/catalogue/v7/subcaps?sv=FC").json()
+    assert len(tree_all) == allv["total_subcaps"]
+    assert len(tree_fc) == fc["total_subcaps"]
 
 
 @needs_db

@@ -77,7 +77,7 @@ export function SubcapPeek({ id, onClose }: { id: string; onClose: () => void })
             {(
               [
                 // Every stat drills into the matching deep-dive tab — the count is never a dead end.
-                [Math.round((s.completeness ?? 0) * 100) + '%', 'record complete', 'overview'],
+                [Math.round((s.completeness ?? 0) * 100) + '%', 'record coverage', 'overview'],
                 [s.n_use_cases, 'use cases', 'usecases'],
                 [s.n_stories, 'stories', 'delivery'],
                 ['M' + matCount, 'maturity', 'maturity'],

@@ -280,17 +280,29 @@ _FILL_SCORE = (
 
 @router.get("/{version}/subcaps")
 async def list_subcaps(
-    version: str, _user: dict[str, Any] = Depends(get_current_user)
+    version: str,
+    sv: str = Query("all"),
+    _user: dict[str, Any] = Depends(get_current_user),
 ) -> list[SubcapNode]:
+    """The capability tree. ``sv`` scopes it to the subcaps that participate in that subvertical's
+    value chain (cat_<v>.subcap_vcc) — so the workbench tree count matches mission control instead
+    of always showing all 851."""
     s = _schema(await resolve_version(version))
+    sv_filter = (
+        f" AND EXISTS (SELECT 1 FROM {s}.subcap_vcc vc "
+        "WHERE vc.subcap_id = s.subcap_id AND vc.subvertical = :sv)"
+        if sv and sv != "all"
+        else ""
+    )
     sql = text(
         "SELECT s.subcap_id AS id, s.name, cat.pillar_id AS pillar, cat.category_id AS cat_id, "
         "cat.name AS cat_name, cap.name AS cluster, s.lifecycle_state AS life, false AS is_new "
         + _JOINS.format(s=s)
+        + (" WHERE 1=1" + sv_filter if sv_filter else "")
         + " ORDER BY s.subcap_id"
     )
     async with _engine().connect() as conn:
-        rows = (await conn.execute(sql)).mappings().all()
+        rows = (await conn.execute(sql, {"sv": sv} if sv_filter else {})).mappings().all()
     return [SubcapNode.model_validate(dict(r)) for r in rows]
 
 
@@ -323,7 +335,7 @@ async def get_subcap(
         if not d["n_use_cases"] or not d["n_platforms"]:
             from app.services import enrichment_seed
 
-            ref_id = await _map_to_reference(conn, v.version_id, subcap_id)
+            ref_id = await _map_to_reference(conn, s, v.version_id, subcap_id)
             c = enrichment_seed.counts_for(ref_id)
             d["n_use_cases"] = d["n_use_cases"] or c["use_cases"]
             d["n_platforms"] = d["n_platforms"] or c["platforms"]
@@ -622,26 +634,44 @@ async def subcap_timeline(
     )
 
 
-async def _map_to_reference(conn: AsyncConnection, version_id: str, subcap_id: str) -> str:
-    """Map a subcap to its counterpart in the reference catalogue (v7) for enrichment fallback —
-    by SUBCAP ID first (the user's ask), then the diff/id-governance crosswalk. Returns the
-    reference subcap id (the same id when the version already uses v7 ids, e.g. an uploaded v7)."""
+async def _map_to_reference(
+    conn: AsyncConnection, schema: str, version_id: str, subcap_id: str
+) -> str:
+    """Map a subcap to its counterpart in the reference catalogue (v7) for enrichment fallback,
+    through the ONE canonical rule every enrichment path shares (services/subcap_xref): exact id ->
+    crosswalk -> L2-capability name + near description -> L2-capability name. Returns the reference
+    subcap id (the same id when the version already uses v7 ids), so the read-time fallback matches
+    what provisioning bakes — stat tiles and tabs never disagree."""
     from app.services import enrichment_seed
+    from app.services.subcap_xref import resolve
 
-    ref = enrichment_seed.reference_version()
-    if not ref or version_id == ref:
-        return subcap_id
-    row = (
+    ref_ver, ref_index = enrichment_seed.reference_subcap_index()
+    if not ref_ver or version_id == ref_ver or subcap_id in ref_index.ids:
+        return subcap_id  # this IS the reference, or already a reference id
+    meta = (
+        await conn.execute(
+            text(
+                f"SELECT cap.name AS l2, s.description AS descr FROM {schema}.subcap s "
+                f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id "
+                "WHERE s.subcap_id = :sid"
+            ),
+            {"sid": subcap_id},
+        )
+    ).first()
+    cw = (
         await conn.execute(
             text(
                 "SELECT to_subcap FROM control.version_crosswalk "
                 "WHERE from_version = :v AND to_version = :r AND from_subcap = :sid "
                 "AND to_subcap IS NOT NULL LIMIT 1"
             ),
-            {"v": version_id, "r": ref, "sid": subcap_id},
+            {"v": version_id, "r": ref_ver, "sid": subcap_id},
         )
     ).first()
-    return str(row[0]) if row else subcap_id
+    crosswalk = {subcap_id: str(cw[0])} if cw else {}
+    l2 = meta[0] if meta else None
+    descr = meta[1] if meta else None
+    return resolve(subcap_id, l2, descr, ref_index, crosswalk) or subcap_id
 
 
 @router.get("/{version}/subcaps/{subcap_id}/enrichment")
@@ -692,7 +722,7 @@ async def subcap_enrichment(
         # fall back to the reference catalogue ONLY for the facets this version lacks
         inherited_from: str | None = None
         if not (personas and platforms and use_cases and maturity and offerings):
-            ref_id = await _map_to_reference(conn, v.version_id, subcap_id)
+            ref_id = await _map_to_reference(conn, s, v.version_id, subcap_id)
             seed = enrichment_seed.enrichment_for(ref_id)
             ref_ver = enrichment_seed.reference_version()
             if not personas and seed["personas"]:
@@ -1049,18 +1079,27 @@ async def value_chain(
     async with _engine().connect() as conn:
         has_vcc = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap_vcc"))).scalar() or 0
         if has_vcc:
-            where = ["1=1"]
-            params: dict[str, Any] = {}
-            if sv_active:
-                where.append("vc.subvertical = :sv")
-                params["sv"] = sv
+            # The value chain is PER-SUBVERTICAL by nature — render exactly one subvertical's
+            # ordered stage pipeline. Use the requested sv; if 'all'/empty, resolve to the
+            # most-covered subvertical deterministically and tell the UI which one (resolved_sv).
+            subverticals = [
+                str(r[0])
+                for r in await conn.execute(
+                    text(
+                        f"SELECT subvertical FROM {s}.subcap_vcc "
+                        "GROUP BY subvertical ORDER BY count(DISTINCT subcap_id) DESC, subvertical"
+                    )
+                )
+            ]
+            resolved_sv = sv if sv_active else (subverticals[0] if subverticals else "")
+            where = ["vc.subvertical = :sv"]
+            params: dict[str, Any] = {"sv": resolved_sv}
             if p_active:
                 where.append("left(vc.subcap_id, 2) = :p")
                 params["p"] = pillar
             sql = text(
-                "SELECT v.vcc_id AS code, v.name, vc.subcap_id, sc.name AS subcap_name, "
-                "left(vc.subcap_id, 2) AS pillar, min(vc.stage_ord) OVER "
-                "(PARTITION BY v.vcc_id) AS ord "
+                "SELECT v.vcc_id AS code, v.name, vc.stage_ord AS ord, vc.subcap_id, "
+                "sc.name AS subcap_name, left(vc.subcap_id, 2) AS pillar "
                 f"FROM {s}.subcap_vcc vc "
                 f"JOIN {s}.value_chain_cluster v ON v.vcc_id = vc.vcc_id "
                 f"JOIN {s}.subcap sc ON sc.subcap_id = vc.subcap_id "
@@ -1073,10 +1112,9 @@ async def value_chain(
                     str(r["code"]),
                     {
                         "code": str(r["code"]),
-                        "name": str(r["name"]),  # the REAL stage name, never just the code
+                        "name": str(r["name"]),  # the REAL ordered stage name, never just the code
                         "ord": r["ord"] if r["ord"] is not None else 9999,
                         "subcaps": [],
-                        "merged_from": [],
                         "pillars": set(),
                     },
                 )
@@ -1089,17 +1127,19 @@ async def value_chain(
                 )
                 g["pillars"].add(str(r["pillar"]))
             clusters = []
-            for g in sorted(segs.values(), key=lambda x: (x["ord"], x["name"])):
+            # ordered pipeline: stage_ord then name (deterministic); position is the chain step
+            for pos, g in enumerate(sorted(segs.values(), key=lambda x: (x["ord"], x["name"])), 1):
                 seen_ids: set[str] = set()
                 subs = [
                     x
-                    for x in g["subcaps"]
+                    for x in sorted(g["subcaps"], key=lambda y: y["id"])
                     if not (x["id"] in seen_ids or seen_ids.add(x["id"]))  # type: ignore[func-returns-value]
                 ]
                 clusters.append(
                     {
                         "code": g["code"],
                         "name": g["name"],
+                        "position": pos,
                         "pillar": min(g["pillars"]) if len(g["pillars"]) == 1 else None,
                         "count": len(subs),
                         "subcaps": subs,
@@ -1108,7 +1148,10 @@ async def value_chain(
                 )
             return {
                 "version": version,
-                "sv": sv or "all",
+                "sv": resolved_sv or "all",
+                "resolved_sv": resolved_sv,
+                "sv_requested": sv or "all",
+                "subverticals": subverticals,
                 "source": "catalogue_vc_mapping",
                 "clusters": clusters,
                 "raw_clusters": len(clusters),

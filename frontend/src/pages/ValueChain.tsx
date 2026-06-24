@@ -1,8 +1,10 @@
-// Value chain atlas (A3) — DYNAMIC. Segments are DERIVED LIVE from the active catalogue version's
-// own capability categories (GET /api/catalogue/{v}/value-chain): deduped (same segment, different
-// spelling -> one) and smart-clustered (near-duplicate names merged, shown transparently). v5 and
-// v7 each derive their own chain from their own data — nothing hardcoded. Click a segment to see
-// its stages (the finer capabilities) and subcaps; chips deep-link/peek into the workbench.
+// Value chain atlas (A3) — the catalogue's REAL value chain, rendered as the prototype's
+// left-to-right ORDERED PIPELINE. Stages come from the v7 VC-mapping sheet (cat_<v>.subcap_vcc),
+// per subvertical, in chain order (stage_ord) — cascaded v7 -> v5 at provision. The chain is
+// per-subvertical by nature, so the page renders ONE subvertical's pipeline, driven by the header
+// subvertical toggle (if 'All SV', the backend resolves the most-covered one and tells us which).
+// The stage NAME is the headline; the VCC code is only an internal id. Pillar pills are the header
+// pillar. Click a stage to list its subcaps (peek / deep-dive).
 import { useEffect, useState } from 'react';
 
 import type { ValueChainCluster } from '../api/client';
@@ -11,9 +13,24 @@ import { Empty, Page, PillarDot } from '../components/primitives';
 import { go, openPeek } from '../lib/events';
 import { heatBg } from '../lib/helpers';
 import { Icon } from '../lib/icons';
-import { useUi } from '../state/store';
+import { type Pillar, useUi } from '../state/store';
 
-// Radial view — wedge radius ∝ subcap count, fed by the live clusters.
+const PILLARS: Pillar[] = ['all', 'P1', 'P2', 'P3', 'P4'];
+
+// subvertical code -> friendly name (matches the header; FC is Farm Credit, per the data).
+const SV_NAME: Record<string, string> = {
+  RB: 'Retail banking',
+  CU: 'Credit unions',
+  CL: 'Commercial lending',
+  CIB: 'Corporate & investment banking',
+  FC: 'Farm credit / ag lending',
+  AM: 'Asset & wealth management',
+  RIA: 'RIA / broker-dealer',
+  IC: 'Insurance carriers',
+  IB: 'Insurance brokerages',
+};
+
+// Radial view — wedge radius ∝ subcap count, in chain order.
 function RadialWheel({ segs }: { segs: ValueChainCluster[] }) {
   const cx = 200;
   const cy = 200;
@@ -41,16 +58,8 @@ function RadialWheel({ segs }: { segs: ValueChainCluster[] }) {
                 stroke="var(--surface-base)"
                 strokeWidth="2"
               />
-              <text
-                x={lx}
-                y={ly}
-                fontSize="8.5"
-                fontWeight="700"
-                fill="var(--text-tertiary)"
-                textAnchor="middle"
-                dominantBaseline="middle"
-              >
-                {s.name.length > 16 ? s.name.slice(0, 15) + '…' : s.name}
+              <text x={lx} y={ly} fontSize="8" fontWeight="700" fill="var(--text-tertiary)" textAnchor="middle" dominantBaseline="middle">
+                {s.name.length > 14 ? s.name.slice(0, 13) + '…' : s.name}
               </text>
             </g>
           );
@@ -67,57 +76,37 @@ function RadialWheel({ segs }: { segs: ValueChainCluster[] }) {
   );
 }
 
-const PILLARS = ['all', 'P1', 'P2', 'P3', 'P4'];
-const PILLAR_LABEL: Record<string, string> = {
-  P1: 'P1 · Strategy, governance & culture',
-  P2: 'P2 · Customer experience & engagement',
-  P3: 'P3 · Process automation & operations',
-  P4: 'P4 · Data & AI enablement',
-};
-
-// The real VC mapping has no finer stage split (a cluster IS a stage), so the drilldown groups
-// the stage's subcaps by pillar — with the member ids carried so filtering stays exact.
-function groupByPillar(c: ValueChainCluster): { name: string; count: number; ids?: Set<string> }[] {
-  const by = new Map<string, Set<string>>();
-  for (const s of c.subcaps) {
-    const k = s.pillar ?? s.id.slice(0, 2);
-    if (!by.has(k)) by.set(k, new Set());
-    by.get(k)!.add(s.id);
-  }
-  return [...by.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([pl, ids]) => ({ name: PILLAR_LABEL[pl] ?? pl, count: ids.size, ids }));
-}
-
 export function ValueChain() {
   const ui = useUi();
   const version = ui.version;
-  const [pillar, setPillar] = useState('all');
+  const pillar = ui.pillar; // header-linked
+  const setPillar = ui.setPillar;
   const [radial, setRadial] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
 
   const res = useValueChain(version, pillar, ui.sv);
   const data = res.data;
   const clusters = data?.clusters ?? [];
-  useEffect(() => setOpen(clusters[0]?.code ?? null), [version, pillar, ui.sv]); // eslint-disable-line react-hooks/exhaustive-deps
+  const real = data?.source === 'catalogue_vc_mapping';
+  const resolvedSv = data?.resolved_sv ?? '';
+  const svAuto = real && (!ui.sv || ui.sv === 'all'); // header SV is 'All' -> backend auto-picked
 
-  const current = clusters.find((c) => c.code === open) ?? null;
+  // focus the first stage when the version / pillar / resolved subvertical changes
+  useEffect(() => setOpen(clusters[0]?.code ?? null), [version, pillar, resolvedSv]); // eslint-disable-line react-hooks/exhaustive-deps
+  const current = clusters.find((c) => c.code === open) ?? clusters[0] ?? null;
 
   return (
     <Page
       eyebrow="A · Explore"
       title="Value chain atlas"
       intro={
-        data?.source === 'catalogue_vc_mapping'
-          ? 'The catalogue\'s own value chain — real, named stages per subvertical from the v7 VC-mapping sheet (cascaded to versions without their own, e.g. v5). Pick a subvertical in the header to see that industry\'s chain in order.'
-          : 'Value-chain segments derived live from this catalogue version\'s own capability structure — used only when a version ships no VC mapping of its own.'
+        real
+          ? "The catalogue's own value chain — the real, named stages for a subvertical, in order, from the v7 VC-mapping sheet (cascaded to versions without their own, e.g. v5). Switch the subvertical in the header to see that industry's chain."
+          : "Value-chain stages derived live from this version's own capability structure — used only when a version ships no VC mapping of its own."
       }
       actions={
-        <button
-          className={'btn sm ' + (radial ? 'primary' : 'ghost')}
-          onClick={() => setRadial((r) => !r)}
-        >
-          <Icon n="route" s={13} /> {radial ? 'Grid' : 'Radial'}
+        <button className={'btn sm ' + (radial ? 'primary' : 'ghost')} onClick={() => setRadial((r) => !r)}>
+          <Icon n="route" s={13} /> {radial ? 'Pipeline' : 'Radial'}
         </button>
       }
     >
@@ -129,14 +118,19 @@ export function ValueChain() {
             </button>
           ))}
         </div>
+        {real && resolvedSv && (
+          <span className="chip teal" style={{ fontSize: 11 }}>
+            <Icon n="route" s={11} /> {SV_NAME[resolvedSv] ?? resolvedSv} value chain
+          </span>
+        )}
+        {svAuto && (
+          <span className="muted" style={{ fontSize: 11 }}>
+            showing the most-covered subvertical — pick one in the header to switch
+          </span>
+        )}
         {data && (
-          <span className="muted" style={{ fontSize: 12 }}>
-            {clusters.length} value-chain segments · {data.total_subcaps} subcaps
-            {data.deduped > 0 && (
-              <span className="chip teal" style={{ marginLeft: 8, fontSize: 10 }}>
-                {data.deduped} duplicate/similar merged
-              </span>
-            )}
+          <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>
+            {clusters.length} stages · {data.total_subcaps} subcaps
           </span>
         )}
       </div>
@@ -145,102 +139,86 @@ export function ValueChain() {
         <Empty
           icon="route"
           title="No value chain yet"
-          desc="Provision a catalogue version (upload its workbooks) and the value-chain segments derive automatically from its categories."
+          desc="Provision a catalogue version (upload its workbooks) and its value-chain stages appear here, in order, per subvertical."
         />
       ) : radial ? (
         <RadialWheel segs={clusters} />
       ) : (
         <>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-              gap: 8,
-              marginBottom: 16,
-            }}
-          >
-            {clusters.map((c) => {
-              const on = c.code === open;
-              return (
-                <div
-                  key={c.code}
-                  onClick={() => setOpen(c.code)}
-                  className="card hov"
-                  style={{
-                    padding: '11px 12px 13px',
-                    cursor: 'pointer',
-                    borderColor: on ? 'var(--border-strong)' : 'var(--border-subtle)',
-                    background: on ? 'var(--surface-overlay)' : 'var(--surface-base)',
-                  }}
-                >
-                  <div className="row gap6" style={{ marginBottom: 5 }}>
-                    <span className="mono" style={{ fontSize: 9.5, color: 'var(--z-slate)', fontWeight: 700 }}>
-                      {c.code}
-                    </span>
-                    {c.pillar && <PillarDot p={c.pillar} s={7} />}
+          {/* the ORDERED pipeline — left-to-right, stage NAME headline, ordinal not code */}
+          <div className="card pad" style={{ marginBottom: 14, overflowX: 'auto' }}>
+            <div className="row" style={{ gap: 0, alignItems: 'stretch', minWidth: 'min-content' }}>
+              {clusters.map((c, i) => {
+                const on = c.code === open;
+                return (
+                  <div key={c.code} className="row" style={{ gap: 0, alignItems: 'center' }}>
+                    <button
+                      onClick={() => setOpen(c.code)}
+                      className="card hov"
+                      style={{
+                        width: 150,
+                        minHeight: 96,
+                        textAlign: 'left',
+                        padding: '10px 12px',
+                        cursor: 'pointer',
+                        flex: 'none',
+                        borderColor: on ? 'var(--interactive)' : 'var(--border-subtle)',
+                        background: on ? 'var(--surface-overlay)' : 'var(--surface-base)',
+                      }}
+                    >
+                      <div className="row gap6" style={{ marginBottom: 5 }}>
+                        <span className="num" style={{ fontSize: 10, fontWeight: 700, color: 'var(--interactive)' }}>
+                          {String(c.position ?? i + 1).padStart(2, '0')}
+                        </span>
+                        {c.pillar && <PillarDot p={c.pillar} s={6} />}
+                      </div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, lineHeight: 1.25, minHeight: 42 }}>
+                        {c.name}
+                      </div>
+                      <div className="num" style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {c.count}
+                        <span className="muted" style={{ fontSize: 9.5, fontWeight: 400 }}> subcaps</span>
+                      </div>
+                    </button>
+                    {i < clusters.length - 1 && (
+                      <Icon n="chevR" s={14} cls="" style={{ color: 'var(--text-tertiary)', flex: 'none', margin: '0 2px' }} />
+                    )}
                   </div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, minHeight: 32, lineHeight: 1.2 }}>
-                    {c.name}
-                  </div>
-                  <div className="num" style={{ fontSize: 21, fontWeight: 700, color: 'var(--interactive)' }}>
-                    {c.count}
-                  </div>
-                  <div className="muted" style={{ fontSize: 10 }}>
-                    subcaps{c.merged_from.length ? ` · ${c.merged_from.length} merged` : ''}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
 
           {current && (
             <div className="card pad fade-in">
               <div className="between" style={{ marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
                 <div className="row gap8">
-                  <span className="chip soft mono">{current.code}</span>
+                  <span className="num chip teal" style={{ fontSize: 11 }}>
+                    Stage {String(current.position ?? 1).padStart(2, '0')}
+                  </span>
                   <b style={{ fontSize: 15 }}>{current.name}</b>
                   {current.pillar && <span className="chip soft">{current.pillar}</span>}
-                  <span className="muted" style={{ fontSize: 12 }}>{current.count} subcaps</span>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {current.count} subcaps{real && resolvedSv ? ` · ${SV_NAME[resolvedSv] ?? resolvedSv}` : ''}
+                  </span>
                 </div>
               </div>
-              {current.merged_from.length > 0 && (
-                <div className="banner info" style={{ marginBottom: 12 }}>
-                  <Icon n="branch" s={13} />
-                  Merged duplicate/similar segments into this one:{' '}
-                  {current.merged_from.join(' · ')}
-                </div>
-              )}
-              <div style={{ display: 'grid', gap: 10 }}>
-                {(
-                  (current.stages as { name: string; count: number; ids?: Set<string> }[] | undefined) ??
-                  groupByPillar(current)
-                ).map((st) => (
-                  <div key={st.name}>
-                    <div className="row gap8" style={{ marginBottom: 6 }}>
-                      <span className="eyebrow" style={{ margin: 0 }}>
-                        {st.name}
-                      </span>
-                      <span className="muted" style={{ fontSize: 11 }}>
-                        {st.count}
-                      </span>
-                    </div>
-                    <div className="row wrap gap6">
-                      {current.subcaps
-                        .filter((s) => (st.ids ? st.ids.has(s.id) : s.stage === st.name))
-                        .map((s) => (
-                          <span
-                            key={s.id}
-                            className="chip soft mono"
-                            style={{ cursor: 'pointer', fontSize: 10.5 }}
-                            title={s.name}
-                            onClick={() => openPeek(s.id)}
-                            onDoubleClick={() => go('subcap/' + s.id)}
-                          >
-                            {s.id}
-                          </span>
-                        ))}
-                    </div>
-                  </div>
+              <div className="eyebrow" style={{ marginBottom: 8 }}>
+                Subcaps in this stage — click to peek, double-click to open the deep dive
+              </div>
+              <div className="row wrap gap6">
+                {current.subcaps.map((s) => (
+                  <span
+                    key={s.id}
+                    className="chip soft"
+                    style={{ cursor: 'pointer', fontSize: 11 }}
+                    title={s.id}
+                    onClick={() => openPeek(s.id)}
+                    onDoubleClick={() => go('subcap/' + s.id)}
+                  >
+                    {s.pillar && <PillarDot p={s.pillar} s={6} />}
+                    {s.name}
+                  </span>
                 ))}
               </div>
             </div>

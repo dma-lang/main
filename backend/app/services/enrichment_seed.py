@@ -129,6 +129,28 @@ def counts_for(subcap_id: str) -> dict[str, int]:
 
 
 @functools.lru_cache(maxsize=1)
+def reference_subcap_index() -> tuple[str, Any]:
+    """(ref_version, subcap_xref.ReferenceIndex) over the reference catalogue's own subcaps
+    (id, L2 capability name, description) — so the read-time fallback resolves a subcap to its
+    reference counterpart with the SAME rule provisioning bakes with. Built once, cached."""
+    from app.services import subcap_xref
+
+    ref = reference_version()
+    if not ref:
+        return "", subcap_xref.ReferenceIndex.build([])
+    path = _SEED_DIR / f"catalogue_{ref}.json.gz"
+    if not path.exists():
+        return "", subcap_xref.ReferenceIndex.build([])
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        cat = json.load(fh)
+    rows = [
+        {"id": s["id"], "l2": s.get("cluster"), "descr": s.get("desc")}
+        for s in cat.get("subcaps", [])
+    ]
+    return ref, subcap_xref.ReferenceIndex.build(rows)
+
+
+@functools.lru_cache(maxsize=1)
 def story_refs_map() -> dict[str, list[str]]:
     """subcap_id -> the reference catalogue's own Jira story refs (from catalogue_<ref>.json.gz),
     for versions that carry none of their own. Uses the same extraction provisioning applies."""
