@@ -19,9 +19,8 @@ const LENSES = [
   { v: 'pillar', l: 'Lens: Pillar' },
   { v: 'value-chain', l: 'Lens: Value chain' },
   { v: 'subvertical', l: 'Lens: Subvertical' },
-  { v: 'maturity', l: 'Lens: Maturity' },
+  { v: 'maturity', l: 'Lens: Tier coverage' },
   { v: 'vendor', l: 'Lens: Vendor' },
-  { v: 'lifecycle', l: 'Lens: Lifecycle' },
 ];
 
 // 9 canonical subverticals — codes match the DATA (corpus story_sv_code / tier suffixes and the

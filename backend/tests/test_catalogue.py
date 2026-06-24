@@ -76,7 +76,7 @@ def test_heatmap_contract(client: TestClient) -> None:
     """Mission-control concentration heatmap: valid shape for every lens, a 6-band score axis, and
     every row's cells length 6. (Rows are empty until carry-forward seeds stories; the data path is
     exercised against the carried dev DB.) An unknown lens falls back to pillar."""
-    for lens in ("pillar", "lifecycle", "maturity", "subvertical", "vendor", "value-chain"):
+    for lens in ("pillar", "maturity", "subvertical", "vendor", "value-chain"):
         body = client.get(f"/api/catalogue/v7/heatmap?lens={lens}").json()
         assert body["lens"] == lens
         assert len(body["axis"]) == 6
@@ -84,6 +84,8 @@ def test_heatmap_contract(client: TestClient) -> None:
         for row in body["rows"]:
             assert len(row["cells"]) == 6
             assert row["total"] == sum(row["cells"]) or row["total"] >= max(row["cells"])
+    # the lifecycle lens was removed; like any unknown lens it falls back to pillar
+    assert client.get("/api/catalogue/v7/heatmap?lens=lifecycle").json()["lens"] == "pillar"
     assert client.get("/api/catalogue/v7/heatmap?lens=bogus").json()["lens"] == "pillar"
 
 
