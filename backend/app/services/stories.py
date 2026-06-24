@@ -271,6 +271,11 @@ async def carry_forward(
         # authors' mapping, T1, citation-verified (G7 style: only resolvable refs link; the
         # unresolved are counted, never invented).
         ref_stats = await _catalogue_ref_pass(conn, schema, target_version)
+        # A drifted version (e.g. v5: ids renamed vs v7) shares enrichment with v7 by capability
+        # NAME, not id — so the id-only corpus carry above leaves its delivery (and the mission-
+        # control heatmap) empty even though the deep-dive details inherit. Carry the v7 corpus
+        # mapping onto the resolved subcaps (the SAME rule enrichment uses), via='inherited_v7'.
+        inherit_stats = await _corpus_inherit_pass(conn, schema, target_version)
 
     confirmed = sum(1 for c in carries if c["status"] == "confirmed")
     unmapped = sum(1 for c in carries if c["status"] == "unmapped")
@@ -284,6 +289,7 @@ async def carry_forward(
         "unmapped": unmapped,
         "distinct_subcaps": distinct,
         **ref_stats,
+        **inherit_stats,
     }
 
 
@@ -391,3 +397,115 @@ async def _catalogue_ref_pass(conn: Any, schema: str, target_version: str) -> di
         "catalogue_refs_unresolved": unresolved,
         "jira_linked_subcaps": int(n_linked),
     }
+
+
+def _invert_to_reference(
+    target_subcaps: list[dict[str, Any]],
+    ref_index: Any,
+    crosswalk: dict[str, str] | None = None,
+) -> dict[str, list[str]]:
+    """Inverse of the target->reference subcap map: ``{reference_subcap_id -> [target ids]}``.
+
+    The corpus is mapped against the reference catalogue (v7). A version whose ids drifted (mapped
+    to v7 by capability name, not id) has each of its subcaps resolved to its v7 counterpart through
+    the ONE canonical rule (services/subcap_xref), then inverted — so a corpus story on a v7 subcap
+    can be carried onto the drifted version's matching subcap(s). Pure (unit-tested without a DB).
+    """
+    from app.services import subcap_xref
+
+    mapping, _unmapped = subcap_xref.resolve_map(target_subcaps, ref_index, crosswalk)
+    inv: dict[str, list[str]] = {}
+    for tgt_id, ref_id in mapping.items():
+        inv.setdefault(ref_id, []).append(tgt_id)
+    for ids in inv.values():
+        ids.sort()
+    return inv
+
+
+async def _corpus_inherit_pass(conn: Any, schema: str, target_version: str) -> dict[str, int]:
+    """Carry the canonical Jira corpus onto a DRIFTED version by inheritance from the reference.
+
+    carry_forward's id rules (native exact/base id, then lexical NN) only place a corpus story on a
+    target subcap that SHARES the v7 id. A version whose ids drifted (e.g. v5 — same capabilities,
+    renamed ids) therefore inherits v7's enrichment (via subcap_xref) but NO delivery, leaving the
+    Mission-control heatmap empty. This pass closes that gap: it resolves each target subcap to its
+    v7 counterpart (the SAME rule enrichment uses), inverts the map, and carries every corpus story
+    from its v7 subcap onto the target's matching subcap(s), recorded honestly as via='inherited_v7'
+    (confirmed, so it feeds the analysis view, but distinguishable from native delivery). Additive
+    and idempotent: ON CONFLICT DO NOTHING never disturbs a native carry. The reference version
+    itself inherits nothing (it IS the corpus map)."""
+    from app.services.enrichment_seed import reference_subcap_index
+
+    ref_ver, ref_index = reference_subcap_index()
+    if not ref_ver or target_version == ref_ver:
+        return {"inherited_v7_links": 0, "inherited_v7_subcaps": 0}
+    cur = [
+        dict(r)
+        for r in (
+            await conn.execute(
+                text(
+                    f"SELECT s.subcap_id AS id, cap.name AS l2, s.description AS descr "
+                    f"FROM {schema}.subcap s "
+                    f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id"
+                )
+            )
+        ).mappings()
+    ]
+    crosswalk = {
+        str(a): str(b)
+        for a, b in await conn.execute(
+            text(
+                "SELECT from_subcap, to_subcap FROM control.version_crosswalk "
+                "WHERE from_version = :v AND to_version = :r AND to_subcap IS NOT NULL"
+            ),
+            {"v": target_version, "r": ref_ver},
+        )
+    }
+    inv = _invert_to_reference(cur, ref_index, crosswalk)
+    if not inv:
+        return {"inherited_v7_links": 0, "inherited_v7_subcaps": 0}
+    corpus = (
+        await conn.execute(
+            text(
+                "SELECT story_key, sub_cap_id FROM control.story "
+                "WHERE NOT is_synthetic AND sub_cap_id IS NOT NULL"
+            )
+        )
+    ).all()
+    links: list[dict[str, Any]] = []
+    touched: set[str] = set()
+    for story_key, sc in corpus:
+        raw = str(sc).strip()
+        base, _sv = normalize_id(raw)
+        targets = inv.get(raw) or inv.get(base)  # the v7 id may be subvertical-suffixed
+        if not targets:
+            continue
+        for tgt in targets:
+            tbase, tsv = normalize_id(tgt)
+            links.append(
+                {
+                    "story_key": str(story_key),
+                    "source_version": ref_ver,
+                    "mapped_in_source": raw,
+                    "base_subcap": tbase,
+                    "subvertical": tsv,
+                    "target_version": target_version,
+                    "carried_to_subcap": tgt,
+                    "similarity": 1.0,
+                    "status": "confirmed",
+                    "via": "inherited_v7",
+                }
+            )
+            touched.add(tgt)
+    if links:
+        await conn.execute(_CARRY, links)
+    inserted = (
+        await conn.execute(
+            text(
+                "SELECT count(*) FROM control.story_subcap_carry "
+                "WHERE target_version = :tv AND via = 'inherited_v7'"
+            ),
+            {"tv": target_version},
+        )
+    ).scalar() or 0
+    return {"inherited_v7_links": int(inserted), "inherited_v7_subcaps": len(touched)}
