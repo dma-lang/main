@@ -284,6 +284,32 @@ _FILL_SCORE = (
 )
 
 
+async def _sv_membership(
+    conn: AsyncConnection, s: str, version_id: str, sv: str
+) -> tuple[str, dict[str, Any]]:
+    """An EXISTS clause (+ bind params) selecting the subcaps in subvertical ``sv``, appended as
+    ``... AND <clause>`` against a subcap aliased ``s``. Membership is the subcap's place in that
+    subvertical's VALUE CHAIN (cat_<v>.subcap_vcc); when the version ships NO VC mapping (subcap_vcc
+    empty — e.g. provisioned before the v7 cascade) it falls back to actual DELIVERY (stories whose
+    story_sv_code is ``sv``), so the mission-control tiles and the workbench tree still scope
+    meaningfully instead of collapsing to zero. Returns ('', {}) for the all-subvertical case."""
+    if not sv or sv == "all":
+        return "", {}
+    has_vcc = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap_vcc"))).scalar() or 0
+    if has_vcc:
+        return (
+            f" AND EXISTS (SELECT 1 FROM {s}.subcap_vcc vc "
+            "WHERE vc.subcap_id = s.subcap_id AND vc.subvertical = :sv)",
+            {"sv": sv},
+        )
+    return (
+        " AND EXISTS (SELECT 1 FROM control.story_catalogue_link l "
+        "JOIN control.story st ON st.story_key = l.story_key "
+        "WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id AND st.story_sv_code = :sv)",
+        {"sv": sv, "vid": version_id},
+    )
+
+
 @router.get("/{version}/subcaps")
 async def list_subcaps(
     version: str,
@@ -292,23 +318,21 @@ async def list_subcaps(
 ) -> list[SubcapNode]:
     """The capability tree. ``sv`` scopes it to the subcaps that participate in that subvertical's
     value chain (cat_<v>.subcap_vcc) — so the workbench tree count matches mission control instead
-    of always showing all 851."""
-    s = _schema(await resolve_version(version))
-    sv_filter = (
-        f" AND EXISTS (SELECT 1 FROM {s}.subcap_vcc vc "
-        "WHERE vc.subcap_id = s.subcap_id AND vc.subvertical = :sv)"
-        if sv and sv != "all"
-        else ""
-    )
-    sql = text(
-        "SELECT s.subcap_id AS id, s.name, cat.pillar_id AS pillar, cat.category_id AS cat_id, "
-        "cat.name AS cat_name, cap.name AS cluster, s.lifecycle_state AS life, false AS is_new "
-        + _JOINS.format(s=s)
-        + (" WHERE 1=1" + sv_filter if sv_filter else "")
-        + " ORDER BY s.subcap_id"
-    )
+    of always showing all 851. A version without a VC mapping scopes by delivery (story_sv_code)
+    instead, so the tree never collapses to zero."""
+    v = await resolve_version(version)
+    s = _schema(v)
     async with _engine().connect() as conn:
-        rows = (await conn.execute(sql, {"sv": sv} if sv_filter else {})).mappings().all()
+        sv_filter, sv_params = await _sv_membership(conn, s, v.version_id, sv)
+        sql = text(
+            "SELECT s.subcap_id AS id, s.name, cat.pillar_id AS pillar, cat.category_id AS cat_id, "
+            "cat.name AS cat_name, cap.name AS cluster, s.lifecycle_state AS life, "
+            "false AS is_new "
+            + _JOINS.format(s=s)
+            + (" WHERE 1=1" + sv_filter if sv_filter else "")
+            + " ORDER BY s.subcap_id"
+        )
+        rows = (await conn.execute(sql, sv_params)).mappings().all()
     return [SubcapNode.model_validate(dict(r)) for r in rows]
 
 
@@ -1079,7 +1103,8 @@ async def value_chain(
     ``sv`` picks one subvertical's chain (stage order preserved); 'all' aggregates the distinct
     stages across subverticals. ``pillar`` filters membership. Falls back to the live derivation
     from capability clusters only when a version has no mapping at all."""
-    from app.services.value_chain import clean_stage_name, derive_value_chain
+    from app.services import enrichment_seed
+    from app.services.value_chain import INDIRECT_STAGE, clean_stage_name, derive_value_chain
 
     v = await resolve_version(version)
     s = _schema(v)
@@ -1087,6 +1112,25 @@ async def value_chain(
     sv_active = bool(sv and sv != "all")
     async with _engine().connect() as conn:
         has_vcc = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap_vcc"))).scalar() or 0
+        # A version with no VC mapping of its OWN (e.g. v5 provisioned before the cascade) INHERITS
+        # the reference version's (v7) chains — the same catalogue truth, scoped to this version's
+        # subcaps — rather than deriving ad-hoc L1 clusters. Only a true greenfield (no reference
+        # mapping at all) falls through to the live derivation.
+        vc_schema, inherited = s, False
+        if not has_vcc:
+            ref_ver = enrichment_seed.reference_version()
+            if ref_ver and ref_ver != v.version_id:
+                try:
+                    ref_v = await resolve_version(ref_ver)
+                except Exception:  # noqa: BLE001 - reference not provisioned -> derive fallback
+                    ref_v = None
+                if ref_v is not None:
+                    ref_s = _schema(ref_v)
+                    ref_has = (
+                        await conn.execute(text(f"SELECT count(*) FROM {ref_s}.subcap_vcc"))
+                    ).scalar() or 0
+                    if ref_has:
+                        vc_schema, has_vcc, inherited = ref_s, ref_has, True
         if has_vcc:
             # The value chain is PER-SUBVERTICAL by nature. When a subvertical is selected we render
             # exactly its ordered stage pipeline; when 'All SV' is selected we render EVERY
@@ -1098,7 +1142,7 @@ async def value_chain(
                 for r in await conn.execute(
                     text(
                         f"SELECT vcc.sv AS subvertical FROM "
-                        f"(SELECT DISTINCT subvertical AS sv FROM {s}.subcap_vcc) vcc "
+                        f"(SELECT DISTINCT subvertical AS sv FROM {vc_schema}.subcap_vcc) vcc "
                         "LEFT JOIN (SELECT st.story_sv_code AS sv, "
                         "count(DISTINCT st.story_key) AS n FROM control.story_catalogue_link l "
                         "JOIN control.story st ON st.story_key = l.story_key "
@@ -1114,11 +1158,14 @@ async def value_chain(
             if p_active:
                 where.append("left(vc.subcap_id, 2) = :p")
                 params["p"] = pillar
+            # subcap_vcc + value_chain_cluster come from vc_schema (own or inherited); the subcap
+            # NAME + existence filter come from THIS version (INNER join), so an inherited chain
+            # only shows subcaps that actually exist here.
             sql = text(
                 "SELECT vc.subvertical AS sv, v.vcc_id AS code, v.name, vc.stage_ord AS ord, "
                 "vc.subcap_id, sc.name AS subcap_name, left(vc.subcap_id, 2) AS pillar "
-                f"FROM {s}.subcap_vcc vc "
-                f"JOIN {s}.value_chain_cluster v ON v.vcc_id = vc.vcc_id "
+                f"FROM {vc_schema}.subcap_vcc vc "
+                f"JOIN {vc_schema}.value_chain_cluster v ON v.vcc_id = vc.vcc_id "
                 f"JOIN {s}.subcap sc ON sc.subcap_id = vc.subcap_id "
                 f"WHERE {' AND '.join(where)}"
             )
@@ -1154,9 +1201,13 @@ async def value_chain(
                 g["pillars"].add(str(r["pillar"]))
 
             def _ordered(segs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-                # ordered pipeline: stage_ord then name (deterministic); position is the chain step
+                # ordered pipeline: stage_ord then name (deterministic); position is the chain step.
+                # "Indirect linkages" (the merged cross-vertical spillover) always sorts LAST.
                 out_c: list[dict[str, Any]] = []
-                in_order = sorted(segs.values(), key=lambda x: (x["ord"], x["name"]))
+                in_order = sorted(
+                    segs.values(),
+                    key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
+                )
                 for pos, g in enumerate(in_order, 1):
                     seen_ids: set[str] = set()
                     subs = [
@@ -1203,7 +1254,10 @@ async def value_chain(
                 "resolved_sv": sv if sv_active else "",  # only set when ONE chain is pinned
                 "sv_requested": sv or "all",
                 "subverticals": subverticals,
-                "source": "catalogue_vc_mapping",
+                "source": (
+                    "catalogue_vc_mapping_inherited" if inherited else "catalogue_vc_mapping"
+                ),
+                "inherited_from": vc_schema.removeprefix("cat_") if inherited else None,
                 "chains": chains,
                 "clusters": flat,
                 "raw_clusters": len(flat),
@@ -1241,43 +1295,32 @@ async def summary(
     # admin to mark inactive or keep, never auto-deactivated.
     # `sv` scopes EVERYTHING to the subcaps that participate in that subvertical's value chain
     # (cat_<v>.subcap_vcc, from the catalogue's own per-SV mapping) — so the mission-control tiles
-    # genuinely change when the subvertical toggle changes.
-    sv_filter = (
-        f" AND EXISTS (SELECT 1 FROM {s}.subcap_vcc vc "
-        "WHERE vc.subcap_id = s.subcap_id AND vc.subvertical = :sv)"
-        if sv != "all"
-        else ""
-    )
-    sql = text(
-        "SELECT p.pillar_id, p.name, count(s.subcap_id) AS subcap_count, "
-        "coalesce(count(s.subcap_id) FILTER (WHERE EXISTS ("
-        "  SELECT 1 FROM control.story_subcap_carry c "
-        "  WHERE c.target_version = :vid AND c.carried_to_subcap = s.subcap_id "
-        "  AND c.status IN ('confirmed', 'review')))::float "
-        "/ nullif(count(s.subcap_id), 0), 0) AS completeness, "
-        "count(s.subcap_id) FILTER (WHERE NOT EXISTS ("
-        "  SELECT 1 FROM control.story_subcap_carry c "
-        "  WHERE c.target_version = :vid AND c.carried_to_subcap = s.subcap_id "
-        "  AND c.status IN ('confirmed', 'review'))) AS decay "
-        f"FROM {s}.pillar p "
-        f"LEFT JOIN {s}.category cat ON cat.pillar_id = p.pillar_id "
-        f"LEFT JOIN {s}.capability cap ON cap.category_id = cat.category_id "
-        f"LEFT JOIN {s}.subcap s ON s.capability_id = cap.capability_id{sv_filter} "
-        "GROUP BY p.pillar_id, p.name ORDER BY p.pillar_id"
-    )
-    params: dict[str, Any] = {"vid": v.version_id}
-    if sv != "all":
-        params["sv"] = sv
+    # genuinely change when the subvertical toggle changes. A version without a VC mapping scopes
+    # by delivery (story_sv_code) instead, so the tiles never collapse to zero (_sv_membership).
     async with _engine().connect() as conn:
-        rows = (await conn.execute(sql, params)).mappings().all()
-        if sv != "all":
-            total_sql = text(
-                f"SELECT count(DISTINCT subcap_id) FROM {s}.subcap_vcc WHERE subvertical = :sv"
-            )
-            total = (await conn.execute(total_sql, {"sv": sv})).scalar()
-        else:
-            total = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap"))).scalar()
+        sv_filter, sv_params = await _sv_membership(conn, s, v.version_id, sv)
+        sql = text(
+            "SELECT p.pillar_id, p.name, count(s.subcap_id) AS subcap_count, "
+            "coalesce(count(s.subcap_id) FILTER (WHERE EXISTS ("
+            "  SELECT 1 FROM control.story_subcap_carry c "
+            "  WHERE c.target_version = :vid AND c.carried_to_subcap = s.subcap_id "
+            "  AND c.status IN ('confirmed', 'review')))::float "
+            "/ nullif(count(s.subcap_id), 0), 0) AS completeness, "
+            "count(s.subcap_id) FILTER (WHERE NOT EXISTS ("
+            "  SELECT 1 FROM control.story_subcap_carry c "
+            "  WHERE c.target_version = :vid AND c.carried_to_subcap = s.subcap_id "
+            "  AND c.status IN ('confirmed', 'review'))) AS decay "
+            f"FROM {s}.pillar p "
+            f"LEFT JOIN {s}.category cat ON cat.pillar_id = p.pillar_id "
+            f"LEFT JOIN {s}.capability cap ON cap.category_id = cat.category_id "
+            f"LEFT JOIN {s}.subcap s ON s.capability_id = cap.capability_id{sv_filter} "
+            "GROUP BY p.pillar_id, p.name ORDER BY p.pillar_id"
+        )
+        rows = (await conn.execute(sql, {"vid": v.version_id, **sv_params})).mappings().all()
     pillars = [PillarSummary.model_validate(dict(r)) for r in rows]
+    # total = the filtered pillar counts (so it ALWAYS reconciles with the tiles, and a version
+    # without a VC mapping reports its delivery-scoped count rather than a subcap_vcc zero).
+    total = sum(p.subcap_count for p in pillars)
     return CatalogueSummary(version_id=v.version_id, total_subcaps=int(total or 0), pillars=pillars)
 
 

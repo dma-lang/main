@@ -288,7 +288,8 @@ export interface ValueChainResp {
   resolved_sv?: string; // set only when ONE subvertical is pinned (empty for 'All SV')
   sv_requested?: string;
   subverticals?: string[]; // subverticals that carry a chain in this version (delivery-ranked)
-  source?: string; // catalogue_vc_mapping (real per-SV stages) | derived_from_clusters
+  source?: string; // catalogue_vc_mapping[_inherited] (real per-SV stages) | derived_from_clusters
+  inherited_from?: string | null; // the reference version this chain was inherited from (e.g. v7)
   chains?: ValueChainGroup[]; // one ordered pipeline per subvertical (all of them for 'All SV')
   clusters: ValueChainCluster[]; // backward-compat flat list (the derived fallback uses only this)
   raw_clusters: number;

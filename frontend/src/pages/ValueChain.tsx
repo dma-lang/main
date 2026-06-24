@@ -162,7 +162,7 @@ function ChainSection({
                   <b style={{ fontSize: 15 }}>{current.name}</b>
                   {current.pillar && <span className="chip soft">{current.pillar}</span>}
                   <span className="muted" style={{ fontSize: 12 }}>
-                    {current.count} subcaps · {SV_NAME[chain.sv] ?? chain.sv}
+                    {current.count} subcaps
                   </span>
                 </div>
               </div>
@@ -201,7 +201,8 @@ export function ValueChain() {
 
   const res = useValueChain(version, pillar, ui.sv);
   const data = res.data;
-  const real = data?.source === 'catalogue_vc_mapping';
+  // both the version's OWN mapping and an inherited reference (v7) mapping are the REAL named chain
+  const real = !!data?.source?.startsWith('catalogue_vc_mapping');
   // prefer the per-subvertical chains; fall back to wrapping the flat clusters (derived path)
   const chains: ValueChainGroup[] =
     data?.chains && data.chains.length > 0
@@ -246,6 +247,11 @@ export function ValueChain() {
             ]}
             onChange={ui.setSv}
           />
+        )}
+        {data?.inherited_from && (
+          <span className="chip teal" style={{ fontSize: 11 }}>
+            <Icon n="route" s={11} /> inherited from {data.inherited_from}
+          </span>
         )}
         {data && chains.length > 0 && (
           <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>

@@ -29,15 +29,23 @@ _MERGE_JACCARD = 0.6  # >= this token overlap => the same value-chain segment
 # trailing parenthetical "explanation" on a VC stage label, e.g. "(SV-Specific: P3C1.8.IB1)",
 # "(applicable via …)", "(Indirect: …)", "(Ag)" — noise the atlas/lens must not show.
 _TRAIL_PAREN = re.compile(r"\s*\([^()]*\)\s*$")
+# a verbose cross-vertical "Indirect: …" stage (a subcap only INDIRECTLY relevant to this
+# subvertical) — there are ~20 of these one-subcap sentences; collapse them all into one clean,
+# legit stage instead of cluttering the chain with prose.
+_INDIRECT = re.compile(r"^\s*indirect\b", re.IGNORECASE)
+INDIRECT_STAGE = "Indirect linkages"
 
 
 def clean_stage_name(name: str) -> str:
     """Strip trailing parenthetical explanations from a value-chain stage label, leaving the bare
     stage name (e.g. "AUTOMATION COE (SV-Specific: P3C1.3.RB1)" -> "AUTOMATION COE"). Repeats so
     multiple trailing groups are removed; idempotent; never returns empty (keeps the original if
-    stripping would empty it). Used at provision (canonical) and read (defensive) so the atlas page
+    stripping would empty it). Verbose "Indirect: …" cross-vertical stages collapse into one clean
+    "Indirect linkages" stage. Used at provision (canonical) and read (defensive) so the atlas page
     and the mission-control value-chain lens both show clean, mergeable stage names."""
     out = (name or "").strip()
+    if _INDIRECT.match(out):
+        return INDIRECT_STAGE
     while True:
         nxt = _TRAIL_PAREN.sub("", out).strip()
         if nxt == out or not nxt:
