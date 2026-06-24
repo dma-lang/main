@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 
 import type { ValueChainCluster } from '../api/client';
 import { useValueChain } from '../api/queries';
-import { Empty, Page, PillarDot } from '../components/primitives';
+import { Dropdown, Empty, Page, PillarDot } from '../components/primitives';
 import { go, openPeek } from '../lib/events';
 import { heatBg } from '../lib/helpers';
 import { Icon } from '../lib/icons';
@@ -118,6 +118,19 @@ export function ValueChain() {
             </button>
           ))}
         </div>
+        {/* pick the value chain directly from the subverticals in the VC mapping (the page no
+            longer auto-locks to one — choose 'All SV' to let it resolve the most-covered) */}
+        {real && (data?.subverticals?.length ?? 0) > 0 && (
+          <Dropdown
+            label="All SV"
+            value={ui.sv}
+            options={[
+              { v: 'all', l: 'All SV — most-covered' },
+              ...(data?.subverticals ?? []).map((c) => ({ v: c, l: SV_NAME[c] ?? c })),
+            ]}
+            onChange={ui.setSv}
+          />
+        )}
         {real && resolvedSv && (
           <span className="chip teal" style={{ fontSize: 11 }}>
             <Icon n="route" s={11} /> {SV_NAME[resolvedSv] ?? resolvedSv} value chain
@@ -125,7 +138,7 @@ export function ValueChain() {
         )}
         {svAuto && (
           <span className="muted" style={{ fontSize: 11 }}>
-            showing the most-covered subvertical — pick one in the header to switch
+            auto-picked the most-covered chain — choose a subvertical above to pin it
           </span>
         )}
         {data && (
