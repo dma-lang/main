@@ -109,9 +109,13 @@ async def active_catalogue_version() -> str | None:
         async with _engine.connect() as conn:
             result = await conn.execute(
                 text(
+                    # the admin-ACTIVATED version wins; else highest numeric version id (never
+                    # created_at — re-provisioning legacy v5 must not steal the default from v7)
                     "SELECT version_id FROM control.catalogue_version "
                     "WHERE status IN ('active', 'provisioned') "
-                    "ORDER BY created_at DESC LIMIT 1"
+                    "ORDER BY (status = 'active') DESC, "
+                    "coalesce(nullif(regexp_replace(version_id, '[^0-9]', '', 'g'), "
+                    "''), '0')::int DESC, created_at DESC LIMIT 1"
                 )
             )
             row = result.first()

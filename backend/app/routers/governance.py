@@ -225,7 +225,17 @@ async def change_flags(
 async def scan_flags(
     version: str, _admin: dict[str, Any] = Depends(require_admin)
 ) -> dict[str, Any]:
-    return await flags_svc.scan(version)
+    """Run BOTH flag analyses: lifecycle-vs-delivery contradictions (G6) and the decay analysis
+    (subcaps missing vs the previous version, each with an explicit explanation)."""
+    contradiction = await flags_svc.scan(version)
+    decay = await flags_svc.scan_decay(version)
+    return {
+        "version": version,
+        "created": int(contradiction["created"]) + int(decay["created"]),
+        "candidates": int(contradiction["candidates"]) + int(decay["candidates"]),
+        "contradiction": contradiction,
+        "decay": decay,
+    }
 
 
 @router.post("/change-flags/{flag_id}/approve")

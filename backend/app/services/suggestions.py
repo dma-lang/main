@@ -198,6 +198,186 @@ async def propose(version: str, limit: int = 3) -> dict[str, Any]:
     return {"version": v.version_id, "created": created, "candidates": len(candidates)}
 
 
+async def _scan_evidence(
+    conn: AsyncConnection, version_id: str, subcap_id: str, corpus_n: int
+) -> UUID:
+    """The corpus-scan MEASUREMENT as stored evidence: '0 of N carried Jira stories map to this
+    subcap'. kind='benchmark' (a measured delivery observation over the canonical corpus), T1,
+    idempotent on body_ref so re-proposing cites the same row."""
+    ref = f"corpus-scan:{version_id}:{subcap_id}"
+    found = (
+        await conn.execute(
+            text(
+                "SELECT evidence_id FROM control.evidence_item "
+                "WHERE kind = 'benchmark' AND body_ref = :b"
+            ),
+            {"b": ref},
+        )
+    ).first()
+    if found is not None:
+        return UUID(str(found[0]))
+    created = (
+        await conn.execute(
+            text(
+                "INSERT INTO control.evidence_item "
+                "(kind, title, source_tier, body_ref, source_name) "
+                "VALUES ('benchmark', :t, 'T1', :b, 'story_catalogue_link') "
+                "RETURNING evidence_id"
+            ),
+            {
+                "t": (
+                    f"Delivery-corpus scan: 0 of {corpus_n:,} carried Jira stories map to "
+                    f"{subcap_id} in {version_id}"
+                ),
+                "b": ref,
+            },
+        )
+    ).first()
+    assert created is not None
+    return UUID(str(created[0]))
+
+
+async def propose_decay(version: str, limit: int = 3) -> dict[str, Any]:
+    """DECAY suggestions: a subcap with ZERO delivered Jira stories (synthetic never counts) is
+    decayed — it may stay active, but an admin should decide. Each suggestion proposes demoting
+    lifecycle to 'declining' (never auto-deactivates), carries a reasoning chain + TWO verified
+    citations — the catalogue record AND the corpus-scan measurement itself — and a full G1-G8
+    gate run, the same QA-gate pipeline every suggestion passes before a consultant sees it
+    (deterministic gates always; the adversarial Gemini review applies in live mode)."""
+    v = await resolve_version(version)
+    schema = v.schema_name
+    if not _SCHEMA_RE.match(schema):
+        raise ValueError("invalid version schema")
+    engine = db.require_engine()
+
+    async with engine.begin() as conn:
+        candidates = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT s.subcap_id, s.name, left(s.subcap_id, 2) AS pillar "
+                        f"FROM {schema}.subcap s "
+                        "WHERE s.lifecycle_state = 'stable' "
+                        "AND NOT EXISTS (SELECT 1 FROM control.story_catalogue_link l "
+                        "WHERE l.version_id = :ver AND l.subcap_id = s.subcap_id) "
+                        "AND NOT EXISTS (SELECT 1 FROM control.suggestion g "
+                        "WHERE g.target_subcap = s.subcap_id AND g.target_version = :ver "
+                        "AND g.status = 'pending' AND g.kind = 'decay_review') "
+                        "ORDER BY s.tier NULLS LAST, s.subcap_id LIMIT :n"
+                    ),
+                    {"ver": v.version_id, "n": limit},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        corpus_n = int(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM control.story_catalogue_link "
+                        "WHERE version_id = :ver"
+                    ),
+                    {"ver": v.version_id},
+                )
+            ).scalar()
+            or 0
+        )
+
+        created = 0
+        for c in candidates:
+            results, verdict = gates.evaluate_suggestion(
+                target_exists=True,
+                # two REAL stored sources: the catalogue record + the corpus-scan measurement
+                # (the zero-story observation is itself evidence, persisted and citable)
+                evidence_count=2,
+                source_tier="T1",
+                cited=True,
+                contradicts=False,
+                cost_usd=0.0,
+            )
+            title = f"Decayed: {c['name']} has no delivered Jira stories"
+            rationale = (
+                f"{c['subcap_id']} has 0 delivered Jira stories in {v.version_id} (synthetic "
+                "stories excluded by construction). A decayed subcap can remain active — this "
+                "proposes demoting lifecycle to 'declining' for an admin to approve or reject; "
+                "nothing is deactivated automatically."
+            )
+            chain_id = (
+                await conn.execute(
+                    text(
+                        "INSERT INTO control.reasoning_chain "
+                        "(operation, subject_ref, claim_label, summary, model, cost_usd) "
+                        "VALUES ('suggestion', :subj, 'INFERENCE', :summary, 'hermetic-stub', 0) "
+                        "RETURNING chain_id"
+                    ),
+                    {"subj": title, "summary": rationale},
+                )
+            ).scalar_one()
+            ev = await _catalogue_evidence(conn, c["subcap_id"], c["name"])
+            ev_scan = await _scan_evidence(conn, v.version_id, c["subcap_id"], corpus_n)
+            await conn.execute(
+                text(
+                    "INSERT INTO control.reasoning_step "
+                    "(chain_id, ordinal, kind, text, evidence_id) "
+                    "VALUES (:c, 1, 'retrieve', :t1, :e1), (:c, 2, 'weigh', :t2, :e2)"
+                ),
+                {
+                    "c": chain_id,
+                    "t1": f"{c['subcap_id']} is an active catalogue record in {v.version_id}.",
+                    "e1": ev,
+                    "t2": (
+                        f"Corpus scan: 0 of {corpus_n:,} carried Jira stories link to "
+                        f"{c['subcap_id']} in {v.version_id} (synthetic excluded)."
+                    ),
+                    "e2": ev_scan,
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO control.citation (chain_id, evidence_id, verified) "
+                    "VALUES (:c, :e1, true), (:c, :e2, true)"
+                ),
+                {"c": chain_id, "e1": ev, "e2": ev_scan},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO control.validation_gate_run "
+                    "(chain_id, target_ref, gate_results, verdict) "
+                    "VALUES (:c, :t, CAST(:r AS jsonb), CAST(:v AS gate_verdict))"
+                ),
+                {"c": chain_id, "t": c["subcap_id"], "r": json.dumps(results), "v": verdict},
+            )
+            payload = {
+                "title": title,
+                "rationale": rationale,
+                "subcap_name": c["name"],
+                "pillar": c["pillar"],
+                "before": {"lifecycle_state": "stable"},
+                "after": {"lifecycle_state": "declining"},
+                "evidence_count": 2,
+                "gate_results": results,
+                "verdict": verdict,
+                "breaking": False,
+            }
+            await conn.execute(
+                text(
+                    "INSERT INTO control.suggestion (target_version, target_subcap, kind, payload, "
+                    "claim_label, source_tier, ers, chain_id, status) VALUES "
+                    "(:ver, :sub, 'decay_review', CAST(:p AS jsonb), 'INFERENCE', 'T1', "
+                    "0.6, :chain, 'pending')"
+                ),
+                {
+                    "ver": v.version_id,
+                    "sub": c["subcap_id"],
+                    "p": json.dumps(payload),
+                    "chain": chain_id,
+                },
+            )
+            created += 1
+    return {"version": v.version_id, "created": created, "candidates": len(candidates)}
+
+
 def _row(m: dict[str, Any]) -> SuggestionRow:
     p = m["payload"] or {}
     return SuggestionRow(

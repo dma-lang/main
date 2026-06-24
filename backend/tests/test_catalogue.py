@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +40,12 @@ def provisioned() -> Iterator[None]:
         assert engine is not None
         async with engine.begin() as conn:
             await conn.execute(text("DROP SCHEMA IF EXISTS cat_v7 CASCADE"))
+            await conn.execute(
+                text(
+                    "DELETE FROM control.ingest_run WHERE version_id = 'v7' "
+                    "AND source = 'workbook_upload'"
+                )
+            )
             await conn.execute(
                 text("DELETE FROM control.catalogue_version WHERE version_id = 'v7'")
             )
@@ -177,12 +184,60 @@ def test_subcap_connections(client: TestClient) -> None:
 
 
 @needs_db
+def test_value_chain_real_names_and_sv(client: TestClient) -> None:
+    """A3 = the catalogue's REAL VC mapping (v7 sheet 21) as a per-subvertical ORDERED pipeline:
+    actual stage NAMES (the VCC code is only an id), each with a 1..N position in chain order; FC
+    is Farm Credit."""
+    fc = client.get("/api/catalogue/v7/value-chain?sv=FC").json()
+    assert fc["source"] == "catalogue_vc_mapping"
+    assert fc["resolved_sv"] == "FC"
+    assert len(fc["clusters"]) > 10
+    names = [c["name"] for c in fc["clusters"]]
+    assert all(not n.startswith("VCC-") for n in names)  # names are names, never codes
+    assert any("AG " in n or "FARM" in n.upper() or "FCA" in n for n in names)  # Farm Credit
+    # the pipeline is ORDERED: positions ascend 1, 2, 3, …
+    positions = [c["position"] for c in fc["clusters"]]
+    assert positions == sorted(positions) and positions[0] == 1
+    # a different subvertical has a different chain
+    rb = client.get("/api/catalogue/v7/value-chain?sv=RB").json()
+    assert rb["resolved_sv"] == "RB"
+    assert [c["name"] for c in rb["clusters"]] != names
+    # 'All SV' resolves to a real, single subvertical (the chain is per-SV by nature)
+    allv = client.get("/api/catalogue/v7/value-chain").json()
+    assert allv["resolved_sv"] in allv["subverticals"]
+    assert allv["sv_requested"] == "all"
+
+
+@needs_db
+def test_summary_changes_by_subvertical(client: TestClient) -> None:
+    """The SV toggle must genuinely change the mission-control numbers: counts scope to the
+    subcaps participating in that subvertical's value chain."""
+    allv = client.get("/api/catalogue/v7/summary").json()
+    fc = client.get("/api/catalogue/v7/summary?sv=FC").json()
+    assert fc["total_subcaps"] < allv["total_subcaps"]
+    assert sum(p["subcap_count"] for p in fc["pillars"]) == fc["total_subcaps"]
+    # unknown SV scopes to zero rather than silently showing everything
+    none = client.get("/api/catalogue/v7/summary?sv=ZZ").json()
+    assert none["total_subcaps"] == 0
+    # the workbench TREE must scope to the same SV membership, so its count matches the summary
+    tree_all = client.get("/api/catalogue/v7/subcaps").json()
+    tree_fc = client.get("/api/catalogue/v7/subcaps?sv=FC").json()
+    assert len(tree_all) == allv["total_subcaps"]
+    assert len(tree_fc) == fc["total_subcaps"]
+
+
+@needs_db
 def test_summary(client: TestClient) -> None:
     r = client.get("/api/catalogue/v7/summary")
     assert r.status_code == 200
     body = r.json()
     assert body["total_subcaps"] == 851
     assert len(body["pillars"]) == 4
+    # COMPLETENESS = (total subcaps - decayed subcaps) / total subcaps, exactly (user definition).
+    for p in body["pillars"]:
+        if p["subcap_count"]:
+            expected = (p["subcap_count"] - p["decay"]) / p["subcap_count"]
+            assert abs(p["completeness"] - expected) < 1e-6
 
 
 @needs_db
@@ -235,3 +290,143 @@ def test_applied_mapping_registry(client: TestClient) -> None:
     assert ("subcap", "uses_platform", "l3_platform") in rels
     assert ("category", "belongs_to", "pillar") in rels
     assert client.get("/api/admin/mapping/v5").status_code == 404
+
+
+def _mini_book(sheets: dict[str, list[list[Any]]]) -> bytes:
+    import io
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    default = wb.active
+    if default is not None:
+        wb.remove(default)
+    for name, rows in sheets.items():
+        ws = wb.create_sheet(title=name)
+        for row in rows:
+            ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@needs_db
+def test_catalogue_zip_upload(client: TestClient) -> None:
+    """FR-1: a pillar-wise ZIP of real .xlsx workbooks parses into the version's seed — subcaps
+    counted, embedded synthetic stories extracted (labelled, never the analysis corpus), id
+    collisions reconciled against the governing register or surfaced as human conflicts. Targets
+    a scratch version so the committed v7/v5 seeds are never touched. Bad payloads are clean
+    400s, never 500s."""
+    import io
+    import zipfile
+
+    from app.services.provision import _SEED_DIR
+
+    hdr = ["Sub-Cap ID", "Sub-Capability", "Description", "Tier", "Category ID", "Category Name"]
+    story_hdr = ["Story_Key", "Source_Type", "Sub_Cap_ID", "Story_Summary", "Match_Confidence"]
+    books = {
+        "Pillar 1 Test.xlsx": _mini_book(
+            {
+                "Capability Map": [
+                    hdr,
+                    ["P1C9.1", "Test Vision", "", "Core", "P1C9", "Test Strategy"],
+                    ["P1C9.2", "Test Operating Model", "", "Core", "P1C9", "Test Strategy"],
+                ],
+                # an embedded story tab: the jira row must be skipped, the rest are synthetic
+                "3_User_Stories_Catalogue": [
+                    story_hdr,
+                    ["TESTJIRA-1", "jira_completed", "P1C9.1", "real — not re-ingested", "HIGH"],
+                    ["GEN-TEST-1", "gen_stories_v1", "P1C9.1", "made up", "MEDIUM"],
+                    ["PUB-TEST-1", "use_case_derived_public_validated", "P1C9.2", "derived", ""],
+                ],
+            }
+        ),
+        # an id collision the v7 register CAN place: 'AI Claims Estimation' is governed as
+        # P2C3.2.IC2 (the real v5 case) — reconciled, never re-minted
+        "Pillar 2 Test.xlsx": _mini_book(
+            {
+                "Capability Map": [
+                    hdr,
+                    ["P2C9.1", "Test Journeys", "", "Core", "P2C9", "Test Experience"],
+                    ["P2C9.1", "AI Claims Estimation", "", "Core", "P2C9", "Test Experience"],
+                ]
+            }
+        ),
+        # an id collision nothing can place: a human conflict, kept out of the seed
+        "Pillar 3 Test.xlsx": _mini_book(
+            {
+                "Capability Map": [
+                    hdr,
+                    ["P3C9.1", "Test Automation", "", "Core", "P3C9", "Test Ops"],
+                    ["P3C9.1", "Zz Unplaceable Test Subcap", "", "Core", "P3C9", "Test Ops"],
+                ]
+            }
+        ),
+        "Pillar 4 Test.xlsx": _mini_book(
+            {
+                "Capability Map": [
+                    hdr,
+                    ["P4C9.1", "Test Data Foundation", "", "Core", "P4C9", "Test Data"],
+                ]
+            }
+        ),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for n, b in books.items():
+            zf.writestr(f"Version 9/{n}", b)
+        zf.writestr("Version 9/notes.txt", b"ignored")
+
+    scratch = "v9scratch"
+    cat_seed = _SEED_DIR / f"catalogue_{scratch}.json.gz"
+    syn_seed = _SEED_DIR / f"stories_synthetic_{scratch}.json.gz"
+    try:
+        out = client.post(
+            f"/api/admin/catalogue/upload/{scratch}",
+            files={"file": ("Version_9.zip", buf.getvalue(), "application/zip")},
+        ).json()
+        assert out["recorded"] is True and len(out["workbooks"]) == 4
+        assert out["pillars_recognised"] == ["P1", "P2", "P3", "P4"]
+        # 2 (P1) + 2 (P2: collider reconciled, both kept) + 1 (P3: collider conflicted) + 1 (P4)
+        assert out["subcaps_parsed"] == 6
+        assert out["synthetic_stories_found"] == 2  # the jira_completed row is never re-ingested
+        assert out["id_reconciliations"] == [
+            {
+                "source_id": "P2C9.1",
+                "assigned_id": "P2C3.2.IC2",
+                "name": "AI Claims Estimation",
+                "via": "register",
+            }
+        ]
+        assert [c["source_id"] for c in out["id_conflicts"]] == ["P3C9.1"]
+        # the detected schema is in the manifest, so the onboarding review step has real content
+        assert len(out["workbooks_detail"]) == 4
+        p1 = next(d for d in out["workbooks_detail"] if d["file"] == "Pillar 1 Test.xlsx")
+        assert p1["subcaps_parsed"] == 2
+        assert {c["source"]: c["field"] for c in p1["columns"]}["Sub-Cap ID"] == "id"
+        assert cat_seed.exists() and syn_seed.exists()  # the upload IS the version's source
+    finally:
+        cat_seed.unlink(missing_ok=True)
+        syn_seed.unlink(missing_ok=True)
+
+    bad = client.post(
+        f"/api/admin/catalogue/upload/{scratch}",
+        files={"file": ("x.zip", b"not a zip", "application/zip")},
+    )
+    assert bad.status_code == 400
+    # a zip whose pillar workbook is not a real .xlsx is a clean, named 400 — never a 500
+    fake = io.BytesIO()
+    with zipfile.ZipFile(fake, "w") as zf:
+        zf.writestr("Pillar 1 Broken.xlsx", b"x")
+    broken = client.post(
+        f"/api/admin/catalogue/upload/{scratch}",
+        files={"file": ("broken.zip", fake.getvalue(), "application/zip")},
+    )
+    assert broken.status_code == 400
+    assert "not a readable" in broken.json()["error"]["message"]
+    assert not cat_seed.exists()  # a failed parse never writes a seed
+    wrong = client.post(
+        f"/api/admin/catalogue/upload/{scratch}",
+        files={"file": ("x.pdf", b"%PDF", "application/pdf")},
+    )
+    assert wrong.status_code == 400

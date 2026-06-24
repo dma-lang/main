@@ -8,9 +8,10 @@ hidden. PATCH /sources/{key} persists the enable switch the scan jobs enforce.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -164,3 +165,171 @@ async def revoke_admin(
     if result.get("status") == "rejected":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=result.get("reason"))
     return result
+
+
+@router.post("/catalogue/upload/{version}")
+async def upload_catalogue(
+    version: str,
+    file: UploadFile,
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Accept the pillar-wise catalogue upload (FR-1): a ZIP of the four pillar .xlsx workbooks
+    (or a single .xlsx). Validates the archive, lists the workbooks found, and records the upload
+    as an ingest_run so it shows in the source registry — honestly returning which pillar files
+    were recognised. Provisioning then runs against the committed seed until the workbook parser
+    lands (the upload manifest is the contract it will consume)."""
+    if not version or set(version) - set("abcdefghijklmnopqrstuvwxyz0123456789_"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid version id")
+    raw = await file.read()
+    if len(raw) > 100 * 1024 * 1024:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="upload over the 100 MB bound")
+    name = (file.filename or "").lower()
+    workbooks: list[dict[str, Any]] = []
+    if name.endswith(".zip"):
+        import io
+        import zipfile
+
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(raw))
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="not a valid zip") from exc
+        for info in zf.infolist():
+            base = info.filename.rsplit("/", 1)[-1]
+            if base.lower().endswith(".xlsx") and not base.startswith((".", "~")):
+                workbooks.append({"name": base, "bytes": info.file_size})
+    elif name.endswith(".xlsx"):
+        workbooks.append({"name": file.filename, "bytes": len(raw)})
+    else:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="upload a .zip of the pillar workbooks or a single .xlsx",
+        )
+    if not workbooks:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="the zip contains no .xlsx workbooks"
+        )
+    pillars = sorted(
+        {
+            f"P{n}"
+            for w in workbooks
+            for n in "1234"
+            if f"pillar {n}" in str(w["name"]).lower() or f"pillar{n}" in str(w["name"]).lower()
+        }
+    )
+    # Parse the workbooks into the provisioning seed (services/workbooks): the upload is not
+    # just validated, it BECOMES the version's catalogue source. Committed seeds (v5/v7) are
+    # regenerated the same way; a new version's seed lives for the instance's life (re-upload
+    # after a restart — Cloud Run's filesystem is ephemeral).
+    subcaps_parsed = 0
+    synthetic_found = 0
+    parsed: dict[str, Any] = {}
+    if name.endswith(".zip"):
+        import gzip as _gzip
+
+        from app.services import workbooks as wb_service
+        from app.services.provision import _SEED_DIR, load_id_register
+
+        reg_ver, register = load_id_register(exclude_version=version)
+        try:
+            parsed = wb_service.parse_catalogue_zip(raw, version, id_register=register)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        subcaps_parsed = len(parsed["subcaps"])
+        parsed["id_register_version"] = reg_ver
+        with _gzip.open(_SEED_DIR / f"catalogue_{version}.json.gz", "wt", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    k: parsed[k]
+                    for k in (
+                        "pillars",
+                        "catNames",
+                        "subcaps",
+                        "id_reconciliations",
+                        "id_conflicts",
+                        "id_register_version",
+                    )
+                },
+                fh,
+            )
+        # The per-subcap × per-subvertical VALUE-CHAIN mapping (sheet 21) — persisted so the
+        # atlas / SV filters run on the catalogue's REAL stage names for this version too.
+        vc = wb_service.parse_vc_mapping_zip(raw)
+        if vc.get("mapping"):
+            with _gzip.open(
+                _SEED_DIR / f"vc_mapping_{version}.json.gz", "wt", encoding="utf-8"
+            ) as fh:
+                json.dump(vc, fh)
+        # The workbooks may embed a user-story tab: its non-Jira rows are SYNTHETIC stories,
+        # seeded per version and ingested labelled (is_synthetic) at carry — the real corpus
+        # comes only from the Full Story Catalog, so the two never mix.
+        synthetic = wb_service.parse_synthetic_stories_zip(raw)
+        synthetic_found = len(synthetic)
+        if synthetic:
+            syn_path = _SEED_DIR / f"stories_synthetic_{version}.json.gz"
+            with _gzip.open(syn_path, "wt", encoding="utf-8") as fh:
+                json.dump(synthetic, fh)
+    # PERSIST EVERY LOAD (D10): the upload registers the version immediately (status 'uploaded' —
+    # provisioning later flips it to 'provisioned'; never downgraded on re-upload) and records the
+    # full parse as an ingest_run row — detected schema, counts, governance — so each load is
+    # committed to the database and auditable, not just echoed to the browser.
+    engine = db.require_engine()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO control.catalogue_version (version_id, label, schema_name, status) "
+                "VALUES (:v, :label, :schema, 'uploaded') ON CONFLICT (version_id) DO NOTHING"
+            ),
+            {"v": version, "label": f"Catalogue {version} (uploaded)", "schema": f"cat_{version}"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO control.ingest_run (version_id, source, status, finished_at, stats) "
+                "VALUES (:v, 'workbook_upload', 'succeeded', now(), CAST(:s AS jsonb))"
+            ),
+            {
+                "v": version,
+                "s": json.dumps(
+                    {
+                        "workbooks": len(workbooks),
+                        "pillars": pillars,
+                        "files": workbooks[:8],
+                        "subcaps_parsed": subcaps_parsed,
+                        "synthetic_stories_found": synthetic_found,
+                        "skipped_rows": parsed.get("skipped_rows", 0),
+                        "duplicate_rows": parsed.get("duplicate_rows", 0),
+                        "id_reconciliations": parsed.get("id_reconciliations", []),
+                        "id_conflicts": parsed.get("id_conflicts", []),
+                        "workbooks_detail": parsed.get("workbooks_detail", []),
+                        "relations_detected": parsed.get("relations_detected", []),
+                    }
+                ),
+            },
+        )
+    return {
+        "version": version,
+        "workbooks": workbooks,
+        "pillars_recognised": pillars,
+        "subcaps_parsed": subcaps_parsed,
+        "synthetic_stories_found": synthetic_found,
+        "id_reconciliations": parsed.get("id_reconciliations", []),
+        "id_conflicts": parsed.get("id_conflicts", []),
+        # the DETECTED SCHEMA per workbook (sheet, column->field mapping with confidence/
+        # signals/samples, unmapped headers, per-book counts) and the RELATIONSHIPS the backend
+        # schema needs — what the onboarding "Detect schema" step reviews
+        "workbooks_detail": parsed.get("workbooks_detail", []),
+        "relations_detected": parsed.get("relations_detected", []),
+        "skipped_rows": parsed.get("skipped_rows", 0),
+        "duplicate_rows": parsed.get("duplicate_rows", 0),
+        "recorded": True,
+        "note": (
+            f"Parsed {subcaps_parsed} subcaps from the workbooks"
+            + (
+                f" (+{synthetic_found} embedded synthetic stories, labelled, never analysis)"
+                if synthetic_found
+                else ""
+            )
+            + "; run Apply & provision to bring the version online."
+            if subcaps_parsed
+            else "Upload validated and recorded; run Apply & provision to bring the version online."
+        ),
+    }

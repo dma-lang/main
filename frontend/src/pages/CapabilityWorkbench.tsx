@@ -63,8 +63,10 @@ function Row({
 export function CapabilityWorkbench() {
   const version = useUi((s) => s.version);
   const ctxPillar = useUi((s) => s.pillar);
-  const subcaps = useSubcaps(version);
+  const ctxSv = useUi((s) => s.sv); // header subvertical scopes the tree, like mission control
+  const subcaps = useSubcaps(version, ctxSv);
   const all = useMemo(() => subcaps.data ?? [], [subcaps.data]);
+  const svActive = !!ctxSv && ctxSv !== 'all';
 
   const [pillar, setPillar] = useState<string>(ctxPillar === 'all' ? 'P1' : ctxPillar);
   const [cat, setCat] = useState<string | null>(null);
@@ -135,7 +137,7 @@ export function CapabilityWorkbench() {
         <>
           Drill from pillar to a single subcap — each column filters the next — then open its deep
           dive for use cases and user stories. <b>{all.length} subcaps</b> in the {version || '—'}{' '}
-          catalogue.
+          catalogue{svActive ? ` · scoped to the ${ctxSv} value chain` : ''}.
         </>
       }
     >
@@ -314,10 +316,10 @@ export function CapabilityWorkbench() {
             {d?.description ?? (detail.isLoading ? 'Loading detail…' : 'No description in this version.')}
           </div>
           <div className="row gap16" style={{ fontSize: 12 }}>
-            <span className="muted">
-              Completeness{' '}
+            <span className="muted" title="Share of core fields populated on this subcap">
+              Record coverage{' '}
               <b style={{ color: 'var(--text-primary)' }}>
-                {Math.round((d?.completeness ?? 0) * 8)}/8
+                {Math.round((d?.completeness ?? 0) * 100)}%
               </b>
             </span>
             <span className="muted">{d?.n_use_cases ?? 0} use cases</span>

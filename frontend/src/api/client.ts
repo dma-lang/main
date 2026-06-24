@@ -20,9 +20,12 @@ export interface DiffRow {
   id: string;
   name: string;
   pillar: string;
+  l2?: string | null;
+  explanation: string;
 }
 
 export interface DiffModified extends DiffRow {
+  from_id?: string | null; // set when the id was reassigned (a rename carried across versions)
   changes: string[];
 }
 
@@ -230,6 +233,35 @@ export interface SubcapNode {
   is_new: boolean;
 }
 
+export interface ValueChainSubcap {
+  id: string;
+  name: string;
+  pillar: string;
+  stage?: string;
+}
+export interface ValueChainCluster {
+  code: string;
+  name: string; // the REAL stage name (the code is only an id)
+  position?: number; // chain step (1..N) in the real per-SV pipeline
+  pillar: string | null;
+  count: number;
+  subcaps: ValueChainSubcap[];
+  stages?: { name: string; count: number }[]; // present only in the derived fallback
+  merged_from: string[];
+}
+export interface ValueChainResp {
+  version: string;
+  sv: string;
+  resolved_sv?: string; // the subvertical actually rendered (the chain is per-SV)
+  sv_requested?: string;
+  subverticals?: string[]; // subverticals that carry a chain in this version
+  source?: string; // catalogue_vc_mapping (real per-SV stages) | derived_from_clusters
+  clusters: ValueChainCluster[];
+  raw_clusters: number;
+  deduped: number;
+  total_subcaps: number;
+}
+
 export interface SubcapDetail {
   id: string;
   name: string;
@@ -257,6 +289,7 @@ export interface StoryRow {
   story_score: number | null;
   story_sv_code: string | null;
   tier: string | null;
+  is_synthetic?: boolean;
 }
 
 export interface StoryPage {
@@ -264,6 +297,37 @@ export interface StoryPage {
   page: number;
   size: number;
   items: StoryRow[];
+}
+
+// Delivery drilldown under a subcap's story count: clients parsed from Jira project keys +
+// deterministic story clusters listing the related clients with similar story characteristics.
+export interface ClientAgg {
+  project_key: string;
+  stories: number;
+  share: number;
+  avg_composite: number | null;
+  subverticals: string[];
+  top: StoryRow[];
+}
+
+export interface StoryCluster {
+  cluster_id: number;
+  label: string;
+  stories: number;
+  clients: string[];
+  avg_composite: number | null;
+  sample: StoryRow[];
+}
+
+export interface DeliveryDrill {
+  subcap_id: string;
+  name: string;
+  total_stories: number;
+  n_clients: number;
+  clients: ClientAgg[];
+  clusters: StoryCluster[];
+  unclustered: number;
+  clustered_over: number;
 }
 
 export interface Persona {
@@ -304,6 +368,7 @@ export interface SubcapEnrichment {
   use_cases: UseCase[];
   maturity: Maturity[];
   offerings: OfferingRef[];
+  inherited_from?: string | null; // set when facets came from the reference catalogue (v7)
 }
 
 export interface ConnectionSibling {
@@ -853,6 +918,8 @@ export interface StoryLibraryRow {
   ac_score: number | null;
   sd_score: number | null;
   story_score: number | null;
+  is_synthetic: boolean;
+  source_system: string | null; // jira | gen_stories_v1 | gen_synthesized_gap_fill | …
 }
 
 export interface StoryLibraryPage {
@@ -863,6 +930,8 @@ export interface StoryLibraryPage {
   high: number;
   medium: number;
   low: number;
+  jira_total: number; // the real corpus (analysis-grade)
+  synthetic_total: number; // workbook-embedded synthetic rows (labelled, excluded by default)
   buckets: number[];
 }
 
@@ -872,8 +941,64 @@ export interface StoryLibraryQuery {
   sv?: string;
   min_composite?: number;
   q?: string;
+  synthetic?: 'exclude' | 'include' | 'only';
   page?: number;
   size?: number;
+}
+
+// An ID collision in the source workbook reconciled by name against the governing version's
+// register (subcap ids are never reused, recycled, or invented).
+export interface IdReconciliation {
+  source_id: string;
+  assigned_id: string;
+  name: string;
+  via: string;
+}
+
+export interface IdConflict {
+  source_id: string;
+  name: string;
+  file: string;
+}
+
+export interface DetectedColumn {
+  source: string;
+  field: string;
+  confidence?: number; // 0..1 — alias match + fill rate + format validity
+  samples?: string[]; // first 3 values, for the human review
+  signals?: { header_match: number; fill_rate: number; format_valid: number; rows_scanned: number };
+}
+
+export interface WorkbookDetail {
+  file: string;
+  sheet: string;
+  columns: DetectedColumn[];
+  unmapped_headers: string[];
+  subcaps_parsed: number;
+  other_sheets?: string[];
+}
+
+export interface DetectedRelation {
+  from: string;
+  verb: string;
+  to: string;
+  via: string;
+}
+
+export interface UploadManifest {
+  version: string;
+  workbooks: { name: string; bytes: number }[];
+  pillars_recognised: string[];
+  subcaps_parsed: number;
+  synthetic_stories_found: number;
+  id_reconciliations: IdReconciliation[];
+  id_conflicts: IdConflict[];
+  workbooks_detail: WorkbookDetail[];
+  relations_detected: DetectedRelation[];
+  skipped_rows: number;
+  duplicate_rows: number;
+  recorded: boolean;
+  note: string;
 }
 
 import { getToken, isLiveAuth } from '../lib/auth';
@@ -881,8 +1006,11 @@ import { getToken, isLiveAuth } from '../lib/auth';
 const BASE: string = import.meta.env.VITE_API_BASE ?? '';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  // Live auth attaches a fresh Firebase ID token; dev mode sends none. A 401 means no/expired
-  // session — route to the login page (the backend fails closed; this is just the UX).
+  // Live auth attaches a fresh Google ID token; dev mode sends none. A 401 from a request that
+  // CARRIED the current token means the session is no/expired — route to the login page (the
+  // backend fails closed; this is just the UX). A 401 from a token-less request while a token
+  // exists NOW is stale noise (e.g. a refetch that raced the sign-in popup) — never let it yank
+  // a freshly signed-in user back to the login page.
   const token = await getToken().catch(() => null);
   const res = await fetch(BASE + path, {
     credentials: 'include',
@@ -895,7 +1023,8 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     if (res.status === 401 && isLiveAuth() && !location.hash.startsWith('#/login')) {
-      location.hash = '#/login';
+      const now = await getToken().catch(() => null);
+      if (token !== null || now === null) location.hash = '#/login';
     }
     let message = res.statusText;
     try {
@@ -928,18 +1057,30 @@ export const api = {
     http<MappingResp>(`/api/admin/mapping/${version}`),
   clientJourney: (key: string, version: string): Promise<ClientJourney> =>
     http<ClientJourney>(`/api/clients/${encodeURIComponent(key)}/journey?version=${version}`),
-  summary: (v: string): Promise<CatalogueSummary> =>
-    http<CatalogueSummary>(`/api/catalogue/${v}/summary`),
+  summary: (v: string, sv = 'all'): Promise<CatalogueSummary> =>
+    http<CatalogueSummary>(`/api/catalogue/${v}/summary?sv=${sv}`),
   heatmap: (v: string, lens: string, pillar: string, sv: string): Promise<HeatmapResp> => {
     const qs = new URLSearchParams({ lens, pillar, sv });
     return http<HeatmapResp>(`/api/catalogue/${v}/heatmap?${qs.toString()}`);
   },
-  subcaps: (v: string): Promise<SubcapNode[]> =>
-    http<SubcapNode[]>(`/api/catalogue/${v}/subcaps`),
+  subcaps: (v: string, sv = 'all'): Promise<SubcapNode[]> =>
+    http<SubcapNode[]>(`/api/catalogue/${v}/subcaps?sv=${sv}`),
+  valueChain: (v: string, pillar = '', sv = ''): Promise<ValueChainResp> => {
+    const qs = new URLSearchParams();
+    if (pillar && pillar !== 'all') qs.set('pillar', pillar);
+    if (sv && sv !== 'all') qs.set('sv', sv);
+    return http<ValueChainResp>(`/api/catalogue/${v}/value-chain?${qs.toString()}`);
+  },
   subcap: (v: string, id: string): Promise<SubcapDetail> =>
     http<SubcapDetail>(`/api/catalogue/${v}/subcaps/${id}`),
-  subcapStories: (v: string, id: string, page = 1, size = 8): Promise<StoryPage> =>
-    http<StoryPage>(`/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}`),
+  subcapStories: (v: string, id: string, page = 1, size = 8, synthetic = false): Promise<StoryPage> =>
+    http<StoryPage>(
+      `/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}&include_synthetic=${synthetic}`,
+    ),
+  subcapDelivery: (v: string, id: string, synthetic = false): Promise<DeliveryDrill> =>
+    http<DeliveryDrill>(
+      `/api/catalogue/${v}/subcaps/${id}/delivery?include_synthetic=${synthetic}`,
+    ),
   timeline: (v: string, id: string): Promise<TimelineResp> =>
     http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
   kg: (v: string, subcap: string): Promise<KgResp> =>
@@ -982,6 +1123,7 @@ export const api = {
     if (p.sv) qs.set('sv', p.sv);
     if (p.min_composite) qs.set('min_composite', String(p.min_composite));
     if (p.q) qs.set('q', p.q);
+    if (p.synthetic) qs.set('synthetic', p.synthetic);
     qs.set('page', String(p.page ?? 1));
     qs.set('size', String(p.size ?? 10));
     return http<StoryLibraryPage>(`/api/stories?${qs.toString()}`);
@@ -1052,6 +1194,25 @@ export const api = {
     http('/api/exports/digest', { method: 'POST', body: JSON.stringify({ quarter: quarter ?? null }) }),
   provisionVersion: (version: string): Promise<Record<string, number | string>> =>
     http(`/api/admin/provision/${version}`, { method: 'POST' }),
+  uploadCatalogue: async (version: string, file: File): Promise<UploadManifest> => {
+    // multipart: let the browser set the boundary — our default JSON header must not apply
+    const token = await getToken().catch(() => null);
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`/api/admin/catalogue/upload/${version}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: form,
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+      throw new Error(`${res.status}: ${body?.error?.message ?? res.statusText}`);
+    }
+    return res.json();
+  },
+  activateVersion: (version: string): Promise<{ ok: boolean; active: string }> =>
+    http(`/api/admin/versions/${version}/activate`, { method: 'POST' }),
   carryForward: (version: string): Promise<Record<string, number | string>> =>
     http(`/api/admin/carry-forward/${version}`, { method: 'POST' }),
   admins: (): Promise<AdminRow[]> => http<AdminRow[]>('/api/admin/admins'),

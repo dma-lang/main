@@ -28,9 +28,16 @@ SCRATCH = "vdiff"
 
 @pytest.fixture(scope="module")
 def two_versions() -> Iterator[None]:
+    import shutil
+
     from app import migrate
+    from app.services.provision import _SEED_DIR
 
     migrate.run()
+    # seeds are strictly per-version (no silent fallback), so the scratch version gets an
+    # explicit copy of the v7 seed — identical catalogues -> an empty diff, by construction
+    scratch_seed = _SEED_DIR / f"catalogue_{SCRATCH}.json.gz"
+    shutil.copyfile(_SEED_DIR / "catalogue_v7.json.gz", scratch_seed)
 
     async def _setup() -> None:
         db.init_engine()
@@ -62,6 +69,9 @@ def two_versions() -> Iterator[None]:
                 text(f"DELETE FROM cat_{SCRATCH}.offering_subcap WHERE subcap_id = 'P1C1.1.2'")
             )
             await conn.execute(
+                text(f"DELETE FROM cat_{SCRATCH}.subcap_vcc WHERE subcap_id = 'P1C1.1.2'")
+            )
+            await conn.execute(
                 text(f"DELETE FROM cat_{SCRATCH}.subcap WHERE subcap_id = 'P1C1.1.2'")
             )
         await db.dispose_engine()
@@ -79,9 +89,12 @@ def two_versions() -> Iterator[None]:
                 )
         await db.dispose_engine()
 
-    asyncio.run(_setup())
-    yield
-    asyncio.run(_teardown())
+    try:
+        asyncio.run(_setup())
+        yield
+    finally:
+        scratch_seed.unlink(missing_ok=True)
+        asyncio.run(_teardown())
 
 
 @pytest.fixture
@@ -105,7 +118,13 @@ def test_diff_reports_exact_changes(client: TestClient) -> None:
     assert [r["id"] for r in d["added"]] == ["P1C1.1.2"]
     assert d["removed"] == []
     assert [m["id"] for m in d["modified"]] == ["P1C1.1.1"]
-    assert d["modified"][0]["changes"] == ["name"]
+    mod = d["modified"][0]
+    # the change is now spelled out in detail (field + old → new), not a bare field name
+    assert len(mod["changes"]) == 1 and mod["changes"][0].startswith("name ")
+    assert "Renamed For Diff" in mod["changes"][0]
+    assert mod["from_id"] is None and mod["explanation"]  # same id kept, explained
+    # the genuinely-added subcap explains WHY (no id/L2 match in the older version)
+    assert d["added"][0]["explanation"]
     assert d["unchanged"] == 849
 
     # and the reverse direction flips added/removed

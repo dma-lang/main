@@ -19,6 +19,7 @@ import {
   type WhatIfResp,
   type ChangeFlagsResp,
   type ChatResponse,
+  type DeliveryDrill,
   type GatesLog,
   type LifecycleSummary,
   type QaMetrics,
@@ -46,7 +47,18 @@ import {
   type VersionInfo,
 } from './client';
 
-export const useMe = () => useQuery<Me>({ queryKey: ['me'], queryFn: api.me, retry: false });
+// Identity changes only through explicit sign-in/sign-out — never refetch it on window focus or
+// reconnect. (The focus refetch raced the Google sign-in popup: it fired token-less the moment
+// the popup closed, and its stale 401 could land AFTER the fresh identity, bouncing the gate
+// straight back to the Login page.)
+export const useMe = () =>
+  useQuery<Me>({
+    queryKey: ['me'],
+    queryFn: api.me,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
 
 export const useVersions = () =>
   useQuery<VersionInfo[]>({ queryKey: ['versions'], queryFn: api.versions });
@@ -59,10 +71,10 @@ export function usePatchPreferences() {
   });
 }
 
-export const useSummary = (version: string) =>
+export const useSummary = (version: string, sv = 'all') =>
   useQuery<CatalogueSummary>({
-    queryKey: ['summary', version],
-    queryFn: () => api.summary(version),
+    queryKey: ['summary', version, sv],
+    queryFn: () => api.summary(version, sv),
     enabled: !!version,
   });
 
@@ -150,11 +162,19 @@ export const useDiff = (a: string, b: string) =>
     retry: false, // an unprovisioned version is a designed 404 state, not a retryable fault
   });
 
-export const useSubcaps = (version: string) =>
+export const useSubcaps = (version: string, sv = 'all') =>
   useQuery<SubcapNode[]>({
-    queryKey: ['subcaps', version],
-    queryFn: () => api.subcaps(version),
+    queryKey: ['subcaps', version, sv],
+    queryFn: () => api.subcaps(version, sv),
     enabled: !!version,
+  });
+
+export const useValueChain = (version: string, pillar: string, sv: string) =>
+  useQuery({
+    queryKey: ['value-chain', version, pillar, sv],
+    queryFn: () => api.valueChain(version, pillar, sv),
+    enabled: !!version,
+    placeholderData: (prev) => prev,
   });
 
 export const useSubcap = (version: string, id: string | null) =>
@@ -164,10 +184,17 @@ export const useSubcap = (version: string, id: string | null) =>
     enabled: !!version && !!id,
   });
 
-export const useSubcapStories = (version: string, id: string | null) =>
+export const useSubcapStories = (version: string, id: string | null, synthetic = false) =>
   useQuery<StoryPage>({
-    queryKey: ['subcap-stories', version, id],
-    queryFn: () => api.subcapStories(version, id ?? ''),
+    queryKey: ['subcap-stories', version, id, synthetic],
+    queryFn: () => api.subcapStories(version, id ?? '', 1, 8, synthetic),
+    enabled: !!version && !!id,
+  });
+
+export const useSubcapDelivery = (version: string, id: string | null, synthetic = false) =>
+  useQuery<DeliveryDrill>({
+    queryKey: ['subcap-delivery', version, id, synthetic],
+    queryFn: () => api.subcapDelivery(version, id ?? '', synthetic),
     enabled: !!version && !!id,
   });
 
@@ -316,7 +343,8 @@ export function useProvisionActions() {
   };
   const provision = useMutation({ mutationFn: (v: string) => api.provisionVersion(v), onSuccess: invalidate });
   const carry = useMutation({ mutationFn: (v: string) => api.carryForward(v), onSuccess: invalidate });
-  return { provision, carry };
+  const activate = useMutation({ mutationFn: (v: string) => api.activateVersion(v), onSuccess: invalidate });
+  return { provision, carry, activate };
 }
 
 export const useAdmins = (enabled: boolean) =>

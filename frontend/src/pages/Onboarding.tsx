@@ -1,62 +1,77 @@
-// First-run setup (J1) — the prototype's 4-step onboarding, wired to the REAL admin pipeline.
-// Upload (mock dropzone, since a real workbook upload UI is a later increment) → Provision the
-// version (POST /api/admin/provision/{v}, bring_version_online) → Carry forward the canonical
-// story corpus (POST /api/admin/carry-forward/{v}). Admin-only, always skippable. The first
-// successful provision persists for every user (no re-upload), exactly as the copy promises.
-import { useState } from 'react';
+// First-run setup (J1) — the REAL automap pipeline, all four steps honoured:
+//   1 Upload workbooks   -> POST /api/admin/catalogue/upload/{v} parses FAST and PERSISTS the load
+//                           (catalogue_version row 'uploaded' + a full ingest_run audit record)
+//   2 Detect schema      -> review what the automap detected: per-workbook sheet, column->field
+//                           mapping, unmapped headers, per-book counts, ID-governance results
+//   3 Confirm mapping    -> the human gate: nothing is provisioned until YOU apply
+//   4 Carry forward      -> map the canonical 14,406-row Jira corpus onto the new version
+// Nothing auto-advances past a review step; every state is honest (parse errors, conflicts).
+import { useRef, useState } from 'react';
 
+import type { UploadManifest } from '../api/client';
 import { api } from '../api/client';
 import { useMe, useVersions } from '../api/queries';
 import { go, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
-const PILLARS: [string, string, string][] = [
-  ['P1', 'Strategy, governance & culture', '205'],
-  ['P2', 'Customer experience & engagement', '292'],
-  ['P3', 'Process automation & operations', '164'],
-  ['P4', 'Data & AI enablement', '190'],
-];
 const STEPS = ['Upload workbooks', 'Detect schema', 'Confirm mapping', 'Carry forward stories'];
 
 export function Onboarding() {
   const me = useMe();
   const ui = useUi();
   const versions = useVersions();
-  const [step, setStep] = useState(0);
-  const [target] = useState('v7');
-  const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState(0); // 0..3 = STEPS; 4 = done
+  const [target, setTarget] = useState('v7');
+  const [busy, setBusy] = useState<string | null>(null); // the in-flight action label
+  const [manifest, setManifest] = useState<UploadManifest | null>(null);
   const [report, setReport] = useState<Record<string, number | string> | null>(null);
   const [carry, setCarry] = useState<Record<string, number | string> | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const isAdmin = me.data?.is_admin ?? false;
 
+  const onUpload = async (f: File | null) => {
+    if (!f) return;
+    setBusy('Parsing workbooks…');
+    try {
+      const out = await api.uploadCatalogue(target, f);
+      setManifest(out);
+      setStep(1); // -> Detect schema review (never auto-provisions)
+      toast(`Parsed ${out.subcaps_parsed} subcaps from ${out.workbooks.length} workbook(s)`);
+    } catch (e) {
+      toast('Upload failed: ' + String((e as Error)?.message ?? e).slice(0, 90));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const provision = async () => {
-    setBusy(true);
+    setBusy('Provisioning cat_' + target + ' — creating schema + seeding subcaps…');
     try {
       const r = await api.provisionVersion(target);
       setReport(r);
-      setStep(2);
+      setStep(3);
       toast(`Provisioned ${target} · ${r.subcaps ?? ''} subcaps`);
       await versions.refetch();
       ui.setVersion(target);
     } catch (e) {
       toast('Provision failed: ' + String((e as Error)?.message ?? e).slice(0, 80));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   const carryForward = async () => {
-    setBusy(true);
+    setBusy('Carrying the 14,406-row corpus onto ' + target + '…');
     try {
       const r = await api.carryForward(target);
       setCarry(r);
       setStep(4);
-      toast('Carry-forward complete');
+      toast('Carry-forward complete — stories committed to the database');
     } catch (e) {
       toast('Carry-forward failed: ' + String((e as Error)?.message ?? e).slice(0, 80));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -125,20 +140,27 @@ export function Onboarding() {
             mission control.
           </div>
         )}
+        {busy && (
+          <div className="banner info" style={{ marginBottom: 16 }}>
+            <Icon n="refresh" s={14} cls="spin" /> {busy}
+          </div>
+        )}
 
-        {step <= 1 && (
+        {/* ------------------------------------------------ 1 · Upload */}
+        {step === 0 && (
           <>
             <div className="h1" style={{ marginBottom: 8 }}>
-              Upload the four pillar workbooks
+              Upload the pillar workbooks
             </div>
-            <div className="muted" style={{ fontSize: 13, marginBottom: 20, maxWidth: 620, lineHeight: 1.5 }}>
-              The v7 pillar workbooks ship with the catalogue seed. Provisioning brings the version
-              online from that seed and writes its own <span className="mono">cat_{target}</span>{' '}
-              schema. The first successful ingest persists for every user — no re-upload.
+            <div className="muted" style={{ fontSize: 13, marginBottom: 20, maxWidth: 640, lineHeight: 1.5 }}>
+              A .zip of the four pillar .xlsx files (or a single .xlsx). The parse is committed to
+              the database immediately — the version is registered as <i>uploaded</i> and the full
+              detection result is recorded as an ingest run — then you review the detected schema
+              before anything is provisioned.
             </div>
             <div
               className="card"
-              style={{ border: '1.5px dashed var(--border-medium)', padding: 40, textAlign: 'center', marginBottom: 18 }}
+              style={{ border: '1.5px dashed var(--border-medium)', padding: 36, textAlign: 'center', marginBottom: 18 }}
             >
               <div
                 style={{
@@ -155,85 +177,259 @@ export function Onboarding() {
               >
                 <Icon n="upload" s={26} />
               </div>
-              <div className="h3" style={{ marginBottom: 4 }}>
-                Provision {target} from the catalogue seed
+              <div className="row gap8" style={{ justifyContent: 'center', marginBottom: 14 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Target version
+                </span>
+                <input
+                  className="mono"
+                  value={target}
+                  disabled={!isAdmin || !!busy}
+                  onChange={(e) => setTarget(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                  style={{
+                    width: 72,
+                    padding: '4px 8px',
+                    fontSize: 12,
+                    background: 'var(--surface-raised)',
+                    border: '1px solid var(--border-medium)',
+                    borderRadius: 6,
+                    color: 'var(--text-primary)',
+                  }}
+                  aria-label="Target catalogue version"
+                />
+                <span className="muted" style={{ fontSize: 11 }}>
+                  e.g. v5, v7, v8 — newest becomes the default
+                </span>
               </div>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 16 }}>
-                P1 Strategy · P2 Experience · P3 Operations · P4 Data &amp; AI · .xlsx
-              </div>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".zip,.xlsx"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  e.target.value = ''; // reset so the NEXT upload (even the same file) fires again
+                  void onUpload(f);
+                }}
+              />
               <button
                 className="btn primary"
-                disabled={!isAdmin || busy}
-                onClick={() => void provision()}
+                disabled={!isAdmin || !!busy}
+                onClick={() => fileRef.current?.click()}
               >
+                <Icon n="upload" s={16} /> {busy ?? 'Choose workbooks (.zip / .xlsx)'}
+              </button>
+              <div className="muted" style={{ fontSize: 11, marginTop: 12 }}>
+                Already shipped as committed seeds: v5 · v7 —{' '}
+                <button className="linkbtn" disabled={!isAdmin || !!busy} onClick={() => setStep(2)}>
+                  provision from a committed seed instead
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ------------------------------------------------ 2 · Detect schema (review) */}
+        {step === 1 && manifest && (
+          <>
+            <div className="h1" style={{ marginBottom: 8 }}>
+              Detected schema — review before anything is applied
+            </div>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 16, maxWidth: 640, lineHeight: 1.5 }}>
+              {manifest.workbooks.length} workbook(s) · pillars {manifest.pillars_recognised.join(', ') || '—'} ·{' '}
+              <b>{manifest.subcaps_parsed} subcaps parsed</b>
+              {manifest.synthetic_stories_found > 0 && (
+                <> · {manifest.synthetic_stories_found} embedded synthetic stories (labelled, never analysis)</>
+              )}
+              {manifest.skipped_rows > 0 && <> · {manifest.skipped_rows} unparseable rows skipped</>}
+              {manifest.duplicate_rows > 0 && <> · {manifest.duplicate_rows} exact duplicates dropped</>}
+            </div>
+
+            <div style={{ display: 'grid', gap: 10, marginBottom: 14 }}>
+              {manifest.workbooks_detail.map((d) => (
+                <div key={d.file} className="card pad">
+                  <div className="between" style={{ marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
+                    <div className="row gap8">
+                      <Icon n="file" s={14} style={{ color: 'var(--interactive)' }} />
+                      <b style={{ fontSize: 13 }}>{d.file}</b>
+                    </div>
+                    <span className="muted" style={{ fontSize: 11 }}>
+                      sheet <span className="mono">{d.sheet}</span> · {d.subcaps_parsed} subcaps
+                    </span>
+                  </div>
+                  <div className="row wrap gap6">
+                    {d.columns.map((c) => (
+                      <span
+                        key={c.source}
+                        className="chip soft"
+                        style={{ fontSize: 10.5 }}
+                        title={
+                          c.signals
+                            ? `signals — header match ${Math.round(c.signals.header_match * 100)}% · ` +
+                              `fill ${Math.round(c.signals.fill_rate * 100)}% · ` +
+                              `format ${Math.round(c.signals.format_valid * 100)}% over ` +
+                              `${c.signals.rows_scanned} rows` +
+                              (c.samples?.length ? ` · samples: ${c.samples.join(' | ')}` : '')
+                            : undefined
+                        }
+                      >
+                        <span className="mono">{c.source}</span>
+                        <Icon n="arrowR" s={10} />
+                        <b>{c.field}</b>
+                        {typeof c.confidence === 'number' && (
+                          <span
+                            className="num"
+                            style={{
+                              color:
+                                c.confidence >= 0.9
+                                  ? 'var(--interactive)'
+                                  : c.confidence >= 0.7
+                                    ? 'var(--z-blue)'
+                                    : 'var(--z-orange)',
+                            }}
+                          >
+                            {Math.round(c.confidence * 100)}%
+                          </span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                  {d.unmapped_headers.length > 0 && (
+                    <div className="muted" style={{ fontSize: 10.5, marginTop: 8 }}>
+                      <Icon n="alert" s={11} /> not mapped (kept out, never guessed):{' '}
+                      {d.unmapped_headers.join(' · ')}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {manifest.relations_detected.length > 0 && (
+              <div className="card pad" style={{ marginBottom: 14 }}>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>
+                  Detected relationships — become real FKs / link tables at provision
+                </div>
+                <div className="row wrap gap6">
+                  {manifest.relations_detected.map((r) => (
+                    <span
+                      key={r.from + r.verb + r.to}
+                      className="chip soft"
+                      style={{ fontSize: 10.5 }}
+                      title={'detected via: ' + r.via}
+                    >
+                      <span className="mono">{r.from}</span>
+                      <b style={{ color: 'var(--interactive)' }}>{r.verb}</b>
+                      <span className="mono">{r.to}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {manifest.id_reconciliations.length > 0 && (
+              <div className="banner info" style={{ marginBottom: 10 }}>
+                <Icon n="branch" s={14} />
+                ID governance: {manifest.id_reconciliations.length} colliding id(s) reconciled
+                against the governing register (ids are never reused or recycled) —{' '}
+                {manifest.id_reconciliations
+                  .slice(0, 3)
+                  .map((r) => `${r.source_id} → ${r.assigned_id} (“${r.name}”)`)
+                  .join('; ')}
+                {manifest.id_reconciliations.length > 3 ? ' …' : ''}
+              </div>
+            )}
+            {manifest.id_conflicts.length > 0 && (
+              <div className="banner warn" style={{ marginBottom: 10 }}>
+                <Icon n="alert" s={14} />
+                {manifest.id_conflicts.length} id conflict(s) need a human decision (kept out of
+                the seed):{' '}
+                {manifest.id_conflicts
+                  .slice(0, 3)
+                  .map((c) => `${c.source_id} “${c.name}” in ${c.file}`)
+                  .join('; ')}
+                {manifest.id_conflicts.length > 3 ? ' …' : ''}
+              </div>
+            )}
+
+            <div className="row gap8" style={{ marginTop: 8 }}>
+              <button className="btn ghost" disabled={!!busy} onClick={() => setStep(0)}>
+                <Icon n="chevL" s={14} /> Back
+              </button>
+              <button className="btn primary" disabled={!!busy} onClick={() => setStep(2)}>
+                Looks right — confirm mapping <Icon n="arrowR" s={14} />
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ------------------------------------------------ 3 · Confirm mapping (human gate) */}
+        {step === 2 && (
+          <>
+            <div className="h1" style={{ marginBottom: 8 }}>
+              Confirm &amp; provision {target}
+            </div>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 16, maxWidth: 640, lineHeight: 1.5 }}>
+              {manifest ? (
+                <>
+                  Applying commits <b>{manifest.subcaps_parsed} subcaps</b> into a new versioned
+                  schema <span className="mono">cat_{target}</span> — transactionally (a half-apply
+                  is impossible), registered in the version timeline, persisted for every user.
+                </>
+              ) : (
+                <>
+                  Provision <span className="mono">{target}</span> from its committed seed into a
+                  new versioned schema <span className="mono">cat_{target}</span> — transactional,
+                  persisted for every user. (Upload workbooks instead to review a fresh parse.)
+                </>
+              )}
+            </div>
+            {report ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 16 }}>
+                {Object.entries(report)
+                  .filter(([, v]) => typeof v === 'number')
+                  .slice(0, 6)
+                  .map(([k, v]) => (
+                    <div key={k} className="card pad" style={{ textAlign: 'center' }}>
+                      <div className="num" style={{ fontSize: 22, fontWeight: 700, color: 'var(--interactive)' }}>
+                        {v}
+                      </div>
+                      <div className="muted" style={{ fontSize: 10.5 }}>
+                        {k.replace(/_/g, ' ')}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            ) : null}
+            <div className="row gap8">
+              <button className="btn ghost" disabled={!!busy} onClick={() => setStep(manifest ? 1 : 0)}>
+                <Icon n="chevL" s={14} /> Back
+              </button>
+              <button className="btn primary" disabled={!isAdmin || !!busy} onClick={() => void provision()}>
                 {busy ? (
                   <>
                     <Icon n="refresh" s={16} cls="spin" /> Provisioning…
                   </>
                 ) : (
-                  <>
-                    <Icon n="upload" s={16} /> Provision {target} workbooks
-                  </>
+                  <>Apply &amp; provision {target}</>
                 )}
               </button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
-              {PILLARS.map(([p, name, n]) => (
-                <div key={p} className="card pad" style={{ padding: '12px 14px' }}>
-                  <div className="mono" style={{ fontSize: 11, color: 'var(--z-slate)', fontWeight: 700 }}>
-                    {p}
-                  </div>
-                  <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.3 }}>{name}</div>
-                  <div className="muted" style={{ fontSize: 10.5, marginTop: 6 }}>
-                    {n} subcaps
-                  </div>
-                </div>
-              ))}
-            </div>
           </>
         )}
 
-        {step === 2 && report && (
-          <>
-            <div className="h1" style={{ marginBottom: 8 }}>
-              Schema mapped · {target} is online
-            </div>
-            <div className="muted" style={{ fontSize: 13, marginBottom: 20 }}>
-              The version provisioned transactionally and its catalogue schema is live. Review the
-              counts, then carry the canonical story corpus onto it.
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 20 }}>
-              {Object.entries(report)
-                .filter(([, v]) => typeof v === 'number')
-                .slice(0, 6)
-                .map(([k, v]) => (
-                  <div key={k} className="card pad" style={{ textAlign: 'center' }}>
-                    <div className="num" style={{ fontSize: 22, fontWeight: 700, color: 'var(--interactive)' }}>
-                      {v}
-                    </div>
-                    <div className="muted" style={{ fontSize: 10.5 }}>
-                      {k.replace(/_/g, ' ')}
-                    </div>
-                  </div>
-                ))}
-            </div>
-            <button className="btn primary" disabled={busy} onClick={() => setStep(3)}>
-              Continue to carry-forward <Icon n="arrowR" s={14} />
-            </button>
-          </>
-        )}
-
+        {/* ------------------------------------------------ 4 · Carry forward */}
         {step === 3 && (
           <>
             <div className="h1" style={{ marginBottom: 8 }}>
               Carry forward the story corpus
             </div>
-            <div className="muted" style={{ fontSize: 13, marginBottom: 20, maxWidth: 620, lineHeight: 1.5 }}>
-              The canonical 14,406-row delivery corpus is mapped onto {target}: native links where
-              the subcap id is unchanged, the version crosswalk next, and an embedding
-              nearest-neighbour fallback — each gated to confirmed / review / unmapped.
+            <div className="muted" style={{ fontSize: 13, marginBottom: 20, maxWidth: 640, lineHeight: 1.5 }}>
+              The canonical 14,406-row Jira corpus is committed into the database and mapped onto{' '}
+              {target}: native links where the subcap id is unchanged, the version crosswalk next,
+              then a banded nearest-neighbour fallback — each gated to confirmed / review /
+              unmapped, never dropped. Synthetic workbook stories ingest alongside, labelled.
             </div>
-            <button className="btn primary" disabled={!isAdmin || busy} onClick={() => void carryForward()}>
+            <button className="btn primary" disabled={!isAdmin || !!busy} onClick={() => void carryForward()}>
               {busy ? (
                 <>
                   <Icon n="refresh" s={16} cls="spin" /> Carrying forward…
@@ -247,6 +443,7 @@ export function Onboarding() {
           </>
         )}
 
+        {/* ------------------------------------------------ done */}
         {step === 4 && (
           <div style={{ textAlign: 'center', padding: '40px 0', maxWidth: 480, margin: '0 auto' }}>
             <div

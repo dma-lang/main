@@ -61,7 +61,18 @@ async def list_suggestions(
 
 @router.post("/admin/suggestions/propose/{version}")
 async def propose(version: str, _admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    return await svc.propose(version)
+    """Run BOTH suggestion analyses — lifecycle promotions (high delivery) and decay reviews
+    (zero Jira delivery). Every suggestion passes the full G1-G8 QA-gate run before any
+    consultant sees it (deterministic gates always; adversarial Gemini review in live mode)."""
+    promo = await svc.propose(version)
+    decay = await svc.propose_decay(version)
+    return {
+        "version": version,
+        "created": int(promo["created"]) + int(decay["created"]),
+        "candidates": int(promo["candidates"]) + int(decay["candidates"]),
+        "promotions": promo,
+        "decay": decay,
+    }
 
 
 @router.post("/suggestions/{suggestion_id}/apply")

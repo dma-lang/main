@@ -49,6 +49,12 @@ def provisioned() -> Iterator[None]:
                 text("DELETE FROM control.audit_log WHERE action LIKE 'suggestion%'")
             )
             await conn.execute(text("DELETE FROM control.evidence_item WHERE kind = 'catalogue'"))
+            await conn.execute(
+                text(
+                    "DELETE FROM control.evidence_item "
+                    "WHERE kind = 'benchmark' AND body_ref LIKE 'corpus-scan:%'"
+                )
+            )
             await conn.execute(text("DELETE FROM control.story_subcap_carry"))
             await conn.execute(text("DELETE FROM control.story"))
             await conn.execute(text("DROP SCHEMA IF EXISTS cat_v7 CASCADE"))
@@ -73,8 +79,17 @@ def test_gated_mutation_lifecycle(client: TestClient) -> None:
     created = client.post("/api/admin/suggestions/propose/v7").json()
     assert created["created"] > 0
 
-    pending = client.get("/api/suggestions?status=pending").json()
+    all_pending = client.get("/api/suggestions?status=pending").json()
+    # propose now runs BOTH analyses: lifecycle promotions AND decay reviews. This test exercises
+    # the promotion path, so filter to that kind (decay_review rows coexist in the queue).
+    pending = [s for s in all_pending if s["kind"] == "lifecycle_promotion"]
     assert len(pending) >= 2
+    # decay reviews must ALSO clear the full G1-G8 QA-gate run before a consultant sees them —
+    # grounded in two verified citations (catalogue record + the corpus-scan measurement).
+    decay = [s for s in all_pending if s["kind"] == "decay_review"]
+    assert decay, "zero-Jira-story stable subcaps should yield decay_review suggestions"
+    assert all(s["verdict"] == "pass" for s in decay)
+    assert all(s["claim_label"] == "INFERENCE" and s["chain_id"] for s in decay)
     sug = pending[0]
     assert sug["verdict"] == "pass"  # all G1-G8 passed
     assert sug["claim_label"] == "INFERENCE"

@@ -56,7 +56,9 @@ def test_provision_seeds_v7_catalogue() -> None:
             assert int(subcaps or 0) == 851
             assert int(use_cases or 0) > 0
             assert int(links or 0) > 0
-            assert version == "provisioned"
+            # 'provisioned' normally; 'active' when this was the bootstrap (first-ever) provision,
+            # which auto-activates so the workspace is never without an approved catalogue.
+            assert version in ("provisioned", "active")
         finally:
             engine = db.get_engine()
             if engine is not None:
@@ -64,6 +66,137 @@ def test_provision_seeds_v7_catalogue() -> None:
                     await conn.execute(text("DROP SCHEMA IF EXISTS cat_v7 CASCADE"))
                     await conn.execute(
                         text("DELETE FROM control.catalogue_version WHERE version_id = 'v7'")
+                    )
+            await db.dispose_engine()
+
+    asyncio.run(_run())
+
+
+@needs_db
+def test_v5_inherits_v7_enrichment() -> None:
+    """Cross-version enrichment (user ask): v5 ships base-only, so when v7 is already provisioned
+    v5 INHERITS its platforms / use cases / maturity / personas / offerings per subcap — the deep
+    dive is never empty. Provisions v7 then v5 (the order that makes v7 the enrichment source)."""
+    from app import migrate
+
+    migrate.run()
+
+    async def _run() -> None:
+        db.init_engine()
+        try:
+            await provision.bring_version_online("v7")
+            rep = await provision.bring_version_online("v5", label="Catalogue v5.0")
+            assert rep["enrichment_inherited_from"] == "v7"
+            assert rep["enrichment_inherited_subcaps"] > 700  # almost every v5 subcap maps to v7
+            assert rep["platforms"] > 0 and rep["use_cases"] > 0
+            assert rep["maturity"] > 0 and rep["personas"] > 0
+            engine = db.get_engine()
+            assert engine is not None
+            async with engine.connect() as conn:
+                plat = (
+                    await conn.execute(
+                        text("SELECT count(DISTINCT subcap_id) FROM cat_v5.subcap_platform")
+                    )
+                ).scalar()
+                mat = (
+                    await conn.execute(
+                        text("SELECT count(DISTINCT subcap_id) FROM cat_v5.maturity_descriptor")
+                    )
+                ).scalar()
+            assert int(plat or 0) > 0  # base-only v5 would be 0 here
+            assert int(mat or 0) > 700  # maturity covers (almost) every mapped subcap
+        finally:
+            engine = db.get_engine()
+            if engine is not None:
+                async with engine.begin() as conn:
+                    await conn.execute(text("DROP SCHEMA IF EXISTS cat_v5 CASCADE"))
+                    await conn.execute(text("DROP SCHEMA IF EXISTS cat_v7 CASCADE"))
+                    await conn.execute(
+                        text(
+                            "DELETE FROM control.version_crosswalk "
+                            "WHERE from_version IN ('v5','v7') OR to_version IN ('v5','v7')"
+                        )
+                    )
+                    await conn.execute(
+                        text(
+                            "DELETE FROM control.catalogue_version "
+                            "WHERE version_id IN ('v5', 'v7')"
+                        )
+                    )
+            await db.dispose_engine()
+
+    asyncio.run(_run())
+
+
+@needs_db
+def test_provision_seeds_v5_catalogue_with_id_governance() -> None:
+    """The legacy v5 pillar-wise maps provision from their committed seed (837 subcaps), and the
+    one real ID collision (P2C3.2.IC1 held both 'Policy Self-Service' and 'AI Claims Estimation')
+    is reconciled against the v7 register — ids never reused. The crosswalk record DEFERS while
+    v7 is not provisioned (fresh instance, legacy-first order must not fail the transaction) and
+    lands, self-healing, the moment v7 comes online."""
+    from app import migrate
+
+    migrate.run()
+
+    async def _run() -> None:
+        db.init_engine()
+        try:
+            report = await provision.bring_version_online("v5")
+            assert report["subcaps"] == 837
+            assert report["pillars"] == 4
+            assert report["categories"] == 17
+            # v7 (the governing register) is not provisioned yet -> the link defers, not fails
+            assert report["id_links_recorded"] == 0
+            assert report["id_links_deferred"] == 1
+            engine = db.get_engine()
+            assert engine is not None
+            async with engine.connect() as conn:
+                # both colliding subcaps exist, each under its governed id
+                rows = (
+                    await conn.execute(
+                        text(
+                            "SELECT subcap_id, name FROM cat_v5.subcap "
+                            "WHERE subcap_id IN ('P2C3.2.IC1', 'P2C3.2.IC2')"
+                        )
+                    )
+                ).all()
+                names: dict[str, str] = {str(r[0]): str(r[1]) for r in rows}
+                assert names["P2C3.2.IC1"] == "Policy Self-Service"
+                assert names["P2C3.2.IC2"] == "AI Claims Estimation"
+            # provisioning the governing version sweeps the deferred link in
+            report7 = await provision.bring_version_online("v7")
+            assert report7["id_links_recorded"] == 1
+            assert report7["id_links_deferred"] == 0
+            async with engine.connect() as conn:
+                note = (
+                    await conn.execute(
+                        text(
+                            "SELECT note FROM control.version_crosswalk "
+                            "WHERE from_version = 'v5' AND from_subcap = 'P2C3.2.IC2' "
+                            "AND to_version = 'v7'"
+                        )
+                    )
+                ).scalar()
+                assert note is not None and note.startswith("id-governance:")
+                assert "P2C3.2.IC1" in note  # names the source-workbook id it collided under
+        finally:
+            engine = db.get_engine()
+            if engine is not None:
+                async with engine.begin() as conn:
+                    await conn.execute(text("DROP SCHEMA IF EXISTS cat_v5 CASCADE"))
+                    await conn.execute(text("DROP SCHEMA IF EXISTS cat_v7 CASCADE"))
+                    await conn.execute(
+                        text(
+                            "DELETE FROM control.version_crosswalk "
+                            "WHERE from_version = 'v5' OR to_version = 'v5'"
+                        )
+                    )
+                    await conn.execute(
+                        text(
+                            "DELETE FROM control.catalogue_version "
+                            "WHERE version_id IN ('v5', 'v7')"
+                        )
                     )
             await db.dispose_engine()
 

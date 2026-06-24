@@ -3,7 +3,7 @@
 // counts). Re-ingesting a newer version creates a new versioned schema rather than overwriting
 // history (PRD D10). Revert is admin-gated; Diff opens the diff viewer.
 import type { VersionInfo } from '../api/client';
-import { useSummary, useVersions } from '../api/queries';
+import { useProvisionActions, useSummary, useVersions } from '../api/queries';
 import { Page, PillarDot } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
@@ -18,16 +18,20 @@ function fmtWhen(s: string | null): string {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
+function VersionCard({ v }: { v: VersionInfo }) {
   const isAdmin = useUi((s) => s.adminView);
-  const summary = useSummary(v.version_id);
+  const setVersion = useUi((s) => s.setVersion);
+  const uploaded = v.status === 'uploaded'; // parsed + committed, awaiting Apply & provision
+  const active = v.status === 'active'; // the ONE approved version (server-enforced)
+  const summary = useSummary(uploaded ? '' : v.version_id); // no cat_<v> schema to read yet
+  const { provision, activate } = useProvisionActions();
   const total = summary.data?.total_subcaps ?? 0;
   const pillars = summary.data?.pillars ?? [];
 
   return (
     <div
       className="card pad"
-      style={{ borderColor: current ? 'var(--border-medium)' : 'var(--border-subtle)' }}
+      style={{ borderColor: active ? 'var(--border-medium)' : 'var(--border-subtle)' }}
     >
       <div className="between" style={{ marginBottom: 8 }}>
         <div className="row gap8">
@@ -36,8 +40,8 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
               width: 30,
               height: 30,
               borderRadius: 8,
-              background: current ? 'var(--surface-overlay)' : 'var(--surface-raised)',
-              color: current ? 'var(--interactive)' : 'var(--text-tertiary)',
+              background: active ? 'var(--surface-overlay)' : 'var(--surface-raised)',
+              color: active ? 'var(--interactive)' : 'var(--text-tertiary)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -48,7 +52,8 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
           <div>
             <div className="row gap8">
               <b style={{ fontSize: 14 }}>{v.label}</b>
-              {current && <span className="chip teal">current</span>}
+              {active && <span className="chip teal">active</span>}
+              {uploaded && <span className="chip orange">awaiting approval</span>}
             </div>
             <div className="muted" style={{ fontSize: 11 }}>
               {fmtWhen(v.created_at)} · {v.status}
@@ -56,25 +61,80 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
           </div>
         </div>
         <div className="row gap8">
-          <button className="btn ghost xs" onClick={() => go('diff')}>
-            Diff
-          </button>
-          {!current && (
+          {uploaded ? (
             <button
-              className="btn ghost xs"
-              disabled={!isAdmin}
-              title={isAdmin ? '' : 'Admin only'}
-              onClick={() => toast('Reverting to ' + v.version_id + ' — cascade preview…')}
+              className="btn primary xs"
+              disabled={!isAdmin || provision.isPending}
+              title={isAdmin ? 'Parse is committed — provision brings it online' : 'Admin only'}
+              onClick={() =>
+                provision.mutate(v.version_id, {
+                  onSuccess: () => toast(`${v.version_id} provisioned and live`),
+                  onError: (e) => toast('Provision failed: ' + String(e).slice(0, 80)),
+                })
+              }
             >
-              {!isAdmin && <Icon n="lock" s={11} />}
-              Revert
+              {provision.isPending ? (
+                <Icon n="refresh" s={11} cls="spin" />
+              ) : (
+                <Icon n="upload" s={11} />
+              )}
+              Apply &amp; provision
             </button>
+          ) : (
+            <>
+              <button
+                className={'btn xs ' + (active ? 'primary' : 'ghost')}
+                disabled={!isAdmin || active || activate.isPending}
+                title={
+                  active
+                    ? 'This is the active catalogue'
+                    : isAdmin
+                      ? 'Make this the single ACTIVE catalogue (demotes the current one)'
+                      : 'Admin only'
+                }
+                onClick={() =>
+                  activate.mutate(v.version_id, {
+                    onSuccess: () => {
+                      setVersion(v.version_id);
+                      toast(v.version_id + ' is now the active catalogue');
+                    },
+                    onError: (e) => toast('Activate failed: ' + String(e).slice(0, 80)),
+                  })
+                }
+              >
+                <Icon n={active ? 'check' : 'zap'} s={11} />
+                {active ? 'Active' : 'Set active'}
+              </button>
+              <button className="btn ghost xs" onClick={() => go('diff')}>
+                Diff
+              </button>
+              {!active && (
+                <button
+                  className="btn ghost xs"
+                  disabled={!isAdmin}
+                  title={isAdmin ? '' : 'Admin only'}
+                  onClick={() => toast('Reverting to ' + v.version_id + ' — cascade preview…')}
+                >
+                  {!isAdmin && <Icon n="lock" s={11} />}
+                  Revert
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
       <div className="muted" style={{ fontSize: 12.5, marginBottom: 12, lineHeight: 1.5 }}>
-        {total} subcaps across {pillars.length || 4} pillars · schema{' '}
-        <span className="mono">{v.schema_name}</span>.
+        {uploaded ? (
+          <>
+            Workbooks parsed and committed (ingest run recorded) — awaiting{' '}
+            <b>Apply &amp; provision</b> to build schema <span className="mono">{v.schema_name}</span>.
+          </>
+        ) : (
+          <>
+            {total} subcaps across {pillars.length || 4} pillars · schema{' '}
+            <span className="mono">{v.schema_name}</span>.
+          </>
+        )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
         {pillars.map((p) => (
@@ -97,7 +157,7 @@ function VersionCard({ v, current }: { v: VersionInfo; current: boolean }) {
 
 export function VersionTimeline() {
   const versions = useVersions();
-  const active = useUi((s) => s.version);
+  const isAdmin = useUi((s) => s.adminView);
   const rows = versions.data ?? [];
 
   return (
@@ -106,26 +166,35 @@ export function VersionTimeline() {
       title="Version timeline"
       width="narrow"
       intro="Every catalogue snapshot, inspectable and reversible. Re-ingesting a newer version creates a new versioned database rather than overwriting history."
+      actions={
+        <button
+          className="btn primary sm"
+          disabled={!isAdmin}
+          title={isAdmin ? 'Upload & provision a new catalogue version' : 'Admin only'}
+          onClick={() => go('onboarding')}
+        >
+          {!isAdmin && <Icon n="lock" s={12} />}
+          <Icon n="upload" s={14} /> Upload new version
+        </button>
+      }
     >
       {rows.length === 0 ? (
         <div className="card pad">
-          <div className="muted" style={{ fontSize: 12.5 }}>
-            No catalogue version is provisioned yet. An admin brings one online from onboarding or the
-            schema mapping studio; it then persists for every user.
+          <div className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>
+            No catalogue version is provisioned yet. Upload the pillar-wise workbooks (a .zip of the
+            four pillar .xlsx files, or a single .xlsx) — the app parses them, provisions a new{' '}
+            <span className="mono">cat_&lt;version&gt;</span> schema, carries the story corpus
+            forward, and commits it to the dashboard for every user.
           </div>
+          <button className="btn primary" disabled={!isAdmin} onClick={() => go('onboarding')}>
+            <Icon n="upload" s={15} /> Upload & provision a catalogue
+          </button>
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
-          {rows.map((v) => {
-            const fallback = rows[rows.length - 1]?.version_id;
-            return (
-              <VersionCard
-                key={v.version_id}
-                v={v}
-                current={v.version_id === (active || fallback)}
-              />
-            );
-          })}
+          {rows.map((v) => (
+            <VersionCard key={v.version_id} v={v} />
+          ))}
         </div>
       )}
     </Page>

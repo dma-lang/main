@@ -24,15 +24,16 @@ const LENSES = [
   { v: 'lifecycle', l: 'Lens: Lifecycle' },
 ];
 
-// 9 canonical subverticals (PRD D3).
+// 9 canonical subverticals — codes match the DATA (corpus story_sv_code / tier suffixes and the
+// catalogue's VC-mapping sheet), so the SV filter actually selects rows. FC is Farm Credit.
 const SUBVERTICALS = [
-  { code: 'BK', name: 'Retail banking' },
+  { code: 'RB', name: 'Retail banking' },
+  { code: 'CU', name: 'Credit unions' },
   { code: 'CL', name: 'Commercial lending' },
   { code: 'CIB', name: 'Corporate & investment banking' },
-  { code: 'FC', name: 'Consumer finance' },
-  { code: 'CU', name: 'Credit unions' },
-  { code: 'WM', name: 'Wealth & asset management' },
-  { code: 'RIA', name: 'Registered investment advisors' },
+  { code: 'FC', name: 'Farm credit / ag lending' },
+  { code: 'AM', name: 'Asset & wealth management' },
+  { code: 'RIA', name: 'RIA / broker-dealer' },
   { code: 'IC', name: 'Insurance carriers' },
   { code: 'IB', name: 'Insurance brokerages' },
 ];
@@ -66,9 +67,19 @@ export function Header() {
     { v: 'all', l: 'All SV' },
     ...SUBVERTICALS.map((s) => ({ v: s.code, l: `${s.code} · ${s.name}` })),
   ];
-  const versions = versionsQ.data ?? [];
-  const versionOpts = versions.length
-    ? versions.map((v) => ({ v: v.version_id, l: `${v.version_id} · ${v.status}` }))
+  const versions = (versionsQ.data ?? []).filter(
+    (v) => v.status === 'provisioned' || v.status === 'active', // 'uploaded' has no schema yet
+  );
+  const sortedVersions = [...versions].sort(
+    (a, b) =>
+      (parseInt(b.version_id.replace(/\D/g, ''), 10) || 0) -
+      (parseInt(a.version_id.replace(/\D/g, ''), 10) || 0),
+  );
+  const versionOpts = sortedVersions.length
+    ? sortedVersions.map((v) => ({
+        v: v.version_id,
+        l: `${v.version_id} · ${v.status === 'active' ? 'active' : 'legacy'}`,
+      }))
     : [{ v: '', l: 'no catalogue yet' }];
 
   return (
@@ -90,30 +101,6 @@ export function Header() {
           ui.setLens(l);
           persist({ lens: l });
         }}
-      />
-      <Dropdown
-        label="Claims"
-        value={ui.claim}
-        options={[
-          { v: 'all', l: 'All claims' },
-          { v: 'FACT', l: 'FACT' },
-          { v: 'INFERENCE', l: 'INFERENCE' },
-          { v: 'HYPOTHESIS', l: 'HYPOTHESIS' },
-          { v: 'CEILING_ESTIMATE', l: 'CEILING EST.' },
-        ]}
-        onChange={ui.setClaim}
-      />
-      <Dropdown
-        label="Tier"
-        value={ui.tier}
-        options={[
-          { v: 'all', l: 'All tiers' },
-          { v: 'T1', l: '≥ T1 regulator' },
-          { v: 'T2', l: '≥ T2 analyst' },
-          { v: 'T3', l: '≥ T3 press' },
-          { v: 'T4', l: '≥ T4 community' },
-        ]}
-        onChange={ui.setTier}
       />
       <span className="spring" />
       <Dropdown

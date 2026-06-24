@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app import db
 from app.deps import get_current_user
@@ -90,6 +90,20 @@ class StoryRow(BaseModel):
     story_score: float | None = None
     story_sv_code: str | None = None
     tier: str | None = None
+    is_synthetic: bool = False
+
+
+# The carried-delivery source for a subcap. The analysis-grade default is JIRA-ONLY (matches the
+# story_catalogue_link view + n_stories); `include_synthetic` adds the labelled synthetic stories
+# the deep-dive toggle reveals. Same status floor as the view (confirmed | review).
+def _carry_where(include_synthetic: bool) -> str:
+    syn = "" if include_synthetic else "AND NOT st.is_synthetic "
+    return (
+        "FROM control.story_subcap_carry c "
+        "JOIN control.story st ON st.story_key = c.story_key "
+        "WHERE c.target_version = :ver AND c.carried_to_subcap = :sid "
+        "AND c.status IN ('confirmed', 'review') AND c.carried_to_subcap IS NOT NULL " + syn
+    )
 
 
 class StoryPage(BaseModel):
@@ -137,6 +151,9 @@ class SubcapEnrichment(BaseModel):
     use_cases: list[UseCase]
     maturity: list[Maturity]
     offerings: list[OfferingRef]
+    # set when any list was filled from the reference catalogue (v7) because this version had none
+    # of its own — surfaced honestly in the UI as "enriched from <version>".
+    inherited_from: str | None = None
 
 
 class ConnectionSibling(BaseModel):
@@ -248,20 +265,44 @@ _JOINS = (
     "JOIN {s}.category cat ON cat.category_id = cap.category_id"
 )
 
+# Record completeness = filled CORE FIELDS / 5, computed LIVE from the subcap's own columns at read
+# time. (It was read from a stored column that an older provision left at 0 — so mission control
+# showed a permanent 0% until a re-provision. Computing it live makes it correct for every version
+# immediately, and it never depends on stale data. A subcap always has a name, so it is never 0%.)
+_FILL_SCORE = (
+    "(((s.name IS NOT NULL AND s.name <> '')::int "
+    "+ (s.description IS NOT NULL AND s.description <> '')::int "
+    "+ (s.tier IS NOT NULL AND s.tier <> '')::int "
+    "+ (s.solution_type IS NOT NULL AND s.solution_type <> '')::int "
+    "+ (s.zennify_status IS NOT NULL AND s.zennify_status <> '')::int)::float / 5)"
+)
+
 
 @router.get("/{version}/subcaps")
 async def list_subcaps(
-    version: str, _user: dict[str, Any] = Depends(get_current_user)
+    version: str,
+    sv: str = Query("all"),
+    _user: dict[str, Any] = Depends(get_current_user),
 ) -> list[SubcapNode]:
+    """The capability tree. ``sv`` scopes it to the subcaps that participate in that subvertical's
+    value chain (cat_<v>.subcap_vcc) — so the workbench tree count matches mission control instead
+    of always showing all 851."""
     s = _schema(await resolve_version(version))
+    sv_filter = (
+        f" AND EXISTS (SELECT 1 FROM {s}.subcap_vcc vc "
+        "WHERE vc.subcap_id = s.subcap_id AND vc.subvertical = :sv)"
+        if sv and sv != "all"
+        else ""
+    )
     sql = text(
         "SELECT s.subcap_id AS id, s.name, cat.pillar_id AS pillar, cat.category_id AS cat_id, "
         "cat.name AS cat_name, cap.name AS cluster, s.lifecycle_state AS life, false AS is_new "
         + _JOINS.format(s=s)
+        + (" WHERE 1=1" + sv_filter if sv_filter else "")
         + " ORDER BY s.subcap_id"
     )
     async with _engine().connect() as conn:
-        rows = (await conn.execute(sql)).mappings().all()
+        rows = (await conn.execute(sql, {"sv": sv} if sv_filter else {})).mappings().all()
     return [SubcapNode.model_validate(dict(r)) for r in rows]
 
 
@@ -274,7 +315,8 @@ async def get_subcap(
     sql = text(
         "SELECT s.subcap_id AS id, s.name, cat.pillar_id AS pillar, cat.name AS category, "
         "cap.name AS cluster, s.description, s.solution_type, s.tier, s.lifecycle_state, "
-        "s.completeness, "
+        + _FILL_SCORE
+        + " AS completeness, "
         f"(SELECT count(*) FROM {s}.use_case uc WHERE uc.subcap_id = s.subcap_id) AS n_use_cases, "
         f"(SELECT count(*) FROM {s}.subcap_platform sp WHERE sp.subcap_id = s.subcap_id) "
         "AS n_platforms, "
@@ -285,9 +327,19 @@ async def get_subcap(
     )
     async with _engine().connect() as conn:
         row = (await conn.execute(sql, {"sid": subcap_id, "ver": v.version_id})).mappings().first()
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"subcap '{subcap_id}' not found")
-    return SubcapDetail.model_validate(dict(row))
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"subcap '{subcap_id}' not found")
+        d = dict(row)
+        # Stat tiles must agree with the deep-dive tabs: when this version has no enrichment of
+        # its own, the counts reflect the reference (v7) fallback the enrichment endpoint uses.
+        if not d["n_use_cases"] or not d["n_platforms"]:
+            from app.services import enrichment_seed
+
+            ref_id = await _map_to_reference(conn, s, v.version_id, subcap_id)
+            c = enrichment_seed.counts_for(ref_id)
+            d["n_use_cases"] = d["n_use_cases"] or c["use_cases"]
+            d["n_platforms"] = d["n_platforms"] or c["platforms"]
+    return SubcapDetail.model_validate(d)
 
 
 @router.get("/{version}/subcaps/{subcap_id}/stories")
@@ -296,21 +348,20 @@ async def subcap_stories(
     subcap_id: str,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    include_synthetic: bool = Query(False),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> StoryPage:
-    """Confirmed delivery stories carried onto this subcap (F5), highest composite first."""
+    """Delivery stories carried onto this subcap (F5), highest composite first. Jira-only by
+    default (analysis grade); ``include_synthetic`` adds the labelled synthetic stories."""
     v = await resolve_version(version)
-    where = (
-        "FROM control.story_catalogue_link scl "
-        "JOIN control.story st ON st.story_key = scl.story_key "
-        "WHERE scl.version_id = :ver AND scl.subcap_id = :sid"
-    )
+    where = _carry_where(include_synthetic)
     rows_sql = text(
         "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
         "st.composite_score::float AS composite_score, st.ac_score::float AS ac_score, "
         "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
-        "st.story_sv_code, st.tier " + where + " ORDER BY st.composite_score DESC NULLS LAST, "
-        "st.story_key LIMIT :size OFFSET :off"
+        "st.story_sv_code, st.tier, st.is_synthetic "
+        + where
+        + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
     )
     params = {"ver": v.version_id, "sid": subcap_id}
     async with _engine().connect() as conn:
@@ -322,6 +373,142 @@ async def subcap_stories(
         )
     items = [StoryRow.model_validate(dict(r)) for r in rows]
     return StoryPage(total=int(total), page=page, size=size, items=items)
+
+
+class ClientAgg(BaseModel):
+    """One Jira project (the corpus' client/engagement proxy) that delivered this subcap."""
+
+    project_key: str
+    stories: int
+    share: float  # of this subcap's carried stories
+    avg_composite: float | None = None
+    subverticals: list[str]
+    top: list[StoryRow]  # its strongest stories, for in-place drilldown
+
+
+class StoryCluster(BaseModel):
+    """Stories with similar characteristics, grouped deterministically (token overlap ≥ 0.5);
+    `clients` = the related engagements that delivered into the same theme."""
+
+    cluster_id: int
+    label: str
+    stories: int
+    clients: list[str]
+    avg_composite: float | None = None
+    sample: list[StoryRow]
+
+
+class DeliveryDrill(BaseModel):
+    subcap_id: str
+    name: str
+    total_stories: int
+    n_clients: int
+    clients: list[ClientAgg]
+    clusters: list[StoryCluster]
+    unclustered: int
+    clustered_over: int  # how many stories the clustering pass actually scanned (cap applies)
+
+
+# Clustering scans at most this many stories per subcap (highest composite first) — bounded
+# everything (§15); the cap is reported in the response so the analysis is honest about scope.
+_CLUSTER_SCAN_CAP = 600
+
+
+@router.get("/{version}/subcaps/{subcap_id}/delivery")
+async def subcap_delivery(
+    version: str,
+    subcap_id: str,
+    include_synthetic: bool = Query(False),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> DeliveryDrill:
+    """Drilldown UNDER the story count: which clients (Jira projects) delivered this subcap, and
+    which story themes cluster together across them. Jira-only by default (so the figures reconcile
+    exactly with the heatmap and n_stories); ``include_synthetic`` folds in the labelled synthetic
+    stories the deep-dive toggle reveals (those carry no real client → '(no project)')."""
+    from app.services.story_insights import cluster_stories
+
+    v = await resolve_version(version)
+    s = _schema(v)
+    link = _carry_where(include_synthetic)
+    name_sql = text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid")
+    clients_sql = text(
+        "SELECT coalesce(st.project_key, '(no project)') AS project_key, "
+        "count(*) AS stories, avg(st.composite_score)::float AS avg_composite, "
+        "array_remove(array_agg(DISTINCT st.story_sv_code), NULL) AS subverticals "
+        + link
+        + " GROUP BY coalesce(st.project_key, '(no project)') ORDER BY stories DESC, project_key"
+    )
+    top_sql = text(
+        "SELECT story_key, project_key, summary, confidence_level, composite_score, ac_score, "
+        "sd_score, story_score, story_sv_code, tier, is_synthetic FROM ("
+        "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
+        "st.composite_score::float, st.ac_score::float, st.sd_score::float, "
+        "st.story_score::float, st.story_sv_code, st.tier, st.is_synthetic, "
+        "row_number() OVER (PARTITION BY coalesce(st.project_key, '(no project)') "
+        "ORDER BY st.composite_score DESC NULLS LAST, st.story_key) AS rn " + link + ") t "
+        "WHERE rn <= 3"
+    )
+    scan_sql = text(
+        "SELECT st.story_key, st.project_key, st.summary, st.composite_score::float "
+        + link
+        + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :cap"
+    )
+    params = {"ver": v.version_id, "sid": subcap_id}
+    async with _engine().connect() as conn:
+        name_row = (await conn.execute(name_sql, {"sid": subcap_id})).first()
+        if name_row is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail="subcap not found in this version"
+            )
+        total = (await conn.execute(text("SELECT count(*) " + link), params)).scalar() or 0
+        crows = (await conn.execute(clients_sql, params)).mappings().all()
+        trows = (await conn.execute(top_sql, params)).mappings().all()
+        scan = (await conn.execute(scan_sql, {**params, "cap": _CLUSTER_SCAN_CAP})).mappings().all()
+    top_by_client: dict[str, list[StoryRow]] = {}
+    for r in trows:
+        key = str(r["project_key"] or "(no project)")
+        top_by_client.setdefault(key, []).append(StoryRow.model_validate(dict(r)))
+    clients = [
+        ClientAgg(
+            project_key=str(r["project_key"]),
+            stories=int(r["stories"]),
+            share=round(int(r["stories"]) / int(total), 3) if total else 0.0,
+            avg_composite=round(r["avg_composite"], 2) if r["avg_composite"] is not None else None,
+            subverticals=sorted(str(x) for x in (r["subverticals"] or [])),
+            top=top_by_client.get(str(r["project_key"]), []),
+        )
+        for r in crows[:12]
+    ]
+    clustered = cluster_stories([dict(r) for r in scan])
+    clusters = [
+        StoryCluster(
+            cluster_id=c["cluster_id"],
+            label=c["label"],
+            stories=c["stories"],
+            clients=c["clients"],
+            avg_composite=c["avg_composite"],
+            sample=[
+                StoryRow(
+                    story_key=str(m["story_key"]),
+                    project_key=m.get("project_key"),
+                    summary=m.get("summary"),
+                    composite_score=m.get("composite_score"),
+                )
+                for m in c["sample"]
+            ],
+        )
+        for c in clustered["clusters"]
+    ]
+    return DeliveryDrill(
+        subcap_id=subcap_id,
+        name=str(name_row[0]),
+        total_stories=int(total),
+        n_clients=len(crows),
+        clients=clients,
+        clusters=clusters,
+        unclustered=int(clustered["unclustered"]),
+        clustered_over=len(scan),
+    )
 
 
 class TimelineEvent(BaseModel):
@@ -447,12 +634,60 @@ async def subcap_timeline(
     )
 
 
+async def _map_to_reference(
+    conn: AsyncConnection, schema: str, version_id: str, subcap_id: str
+) -> str:
+    """Map a subcap to its counterpart in the reference catalogue (v7) for enrichment fallback,
+    through the ONE canonical rule every enrichment path shares (services/subcap_xref): exact id ->
+    crosswalk -> L2-capability name + near description -> L2-capability name. Returns the reference
+    subcap id (the same id when the version already uses v7 ids), so the read-time fallback matches
+    what provisioning bakes — stat tiles and tabs never disagree."""
+    from app.services import enrichment_seed
+    from app.services.subcap_xref import resolve
+
+    ref_ver, ref_index = enrichment_seed.reference_subcap_index()
+    if not ref_ver or version_id == ref_ver or subcap_id in ref_index.ids:
+        return subcap_id  # this IS the reference, or already a reference id
+    meta = (
+        await conn.execute(
+            text(
+                f"SELECT cap.name AS l2, s.description AS descr FROM {schema}.subcap s "
+                f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id "
+                "WHERE s.subcap_id = :sid"
+            ),
+            {"sid": subcap_id},
+        )
+    ).first()
+    cw = (
+        await conn.execute(
+            text(
+                "SELECT to_subcap FROM control.version_crosswalk "
+                "WHERE from_version = :v AND to_version = :r AND from_subcap = :sid "
+                "AND to_subcap IS NOT NULL LIMIT 1"
+            ),
+            {"v": version_id, "r": ref_ver, "sid": subcap_id},
+        )
+    ).first()
+    crosswalk = {subcap_id: str(cw[0])} if cw else {}
+    l2 = meta[0] if meta else None
+    descr = meta[1] if meta else None
+    return resolve(subcap_id, l2, descr, ref_index, crosswalk) or subcap_id
+
+
 @router.get("/{version}/subcaps/{subcap_id}/enrichment")
 async def subcap_enrichment(
     version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> SubcapEnrichment:
-    """Personas, L3 platforms, use cases and M1-M5 maturity for a subcap (Overview/Use/Maturity)."""
-    s = _schema(await resolve_version(version))
+    """Personas, L3 platforms, use cases and M1-M5 maturity for a subcap (Overview/Use/Maturity).
+
+    If this version carries none of its OWN enrichment for the subcap (e.g. a base-only uploaded
+    catalogue), each empty facet is filled from the reference catalogue (v7) mapped BY SUBCAP ID
+    (then the diff/crosswalk) and tagged ``inherited_from`` — so the deep dive is never empty and
+    the source is honest. The version's own enrichment always wins where it exists."""
+    from app.services import enrichment_seed
+
+    v = await resolve_version(version)
+    s = _schema(v)
     q_personas = text(
         f"SELECT p.persona_id, p.canonical_name, p.role_description FROM {s}.subcap_persona sp "
         f"JOIN {s}.persona p ON p.persona_id = sp.persona_id WHERE sp.subcap_id = :sid "
@@ -479,17 +714,34 @@ async def subcap_enrichment(
     )
     p = {"sid": subcap_id}
     async with _engine().connect() as conn:
-        personas = (await conn.execute(q_personas, p)).mappings().all()
-        platforms = (await conn.execute(q_platforms, p)).mappings().all()
-        use_cases = (await conn.execute(q_uc, p)).mappings().all()
-        maturity = (await conn.execute(q_mat, p)).mappings().all()
-        offerings = (await conn.execute(q_off, p)).mappings().all()
+        personas = [dict(r) for r in (await conn.execute(q_personas, p)).mappings().all()]
+        platforms = [dict(r) for r in (await conn.execute(q_platforms, p)).mappings().all()]
+        use_cases = [dict(r) for r in (await conn.execute(q_uc, p)).mappings().all()]
+        maturity = [dict(r) for r in (await conn.execute(q_mat, p)).mappings().all()]
+        offerings = [dict(r) for r in (await conn.execute(q_off, p)).mappings().all()]
+        # fall back to the reference catalogue ONLY for the facets this version lacks
+        inherited_from: str | None = None
+        if not (personas and platforms and use_cases and maturity and offerings):
+            ref_id = await _map_to_reference(conn, s, v.version_id, subcap_id)
+            seed = enrichment_seed.enrichment_for(ref_id)
+            ref_ver = enrichment_seed.reference_version()
+            if not personas and seed["personas"]:
+                personas, inherited_from = seed["personas"], ref_ver
+            if not platforms and seed["platforms"]:
+                platforms, inherited_from = seed["platforms"], ref_ver
+            if not use_cases and seed["use_cases"]:
+                use_cases, inherited_from = seed["use_cases"], ref_ver
+            if not maturity and seed["maturity"]:
+                maturity, inherited_from = seed["maturity"], ref_ver
+            if not offerings and seed["offerings"]:
+                offerings, inherited_from = seed["offerings"], ref_ver
     return SubcapEnrichment(
-        personas=[Persona.model_validate(dict(r)) for r in personas],
-        platforms=[Platform.model_validate(dict(r)) for r in platforms],
-        use_cases=[UseCase.model_validate(dict(r)) for r in use_cases],
-        maturity=[Maturity.model_validate(dict(r)) for r in maturity],
-        offerings=[OfferingRef.model_validate(dict(r)) for r in offerings],
+        personas=[Persona.model_validate(r) for r in personas],
+        platforms=[Platform.model_validate(r) for r in platforms],
+        use_cases=[UseCase.model_validate(r) for r in use_cases],
+        maturity=[Maturity.model_validate(r) for r in maturity],
+        offerings=[OfferingRef.model_validate(r) for r in offerings],
+        inherited_from=inherited_from,
     )
 
 
@@ -806,26 +1058,169 @@ async def whatif(
     )
 
 
+@router.get("/{version}/value-chain")
+async def value_chain(
+    version: str,
+    pillar: str = "",
+    sv: str = "",
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """The value-chain atlas (A3) on the catalogue's REAL per-subvertical stage mapping
+    (cat_<v>.value_chain_cluster + subcap_vcc, from the v7 workbooks' VC-mapping sheet; cascaded
+    v7 -> v5 at provision). Segments carry the actual stage NAMES — the VCC code is only an id.
+    ``sv`` picks one subvertical's chain (stage order preserved); 'all' aggregates the distinct
+    stages across subverticals. ``pillar`` filters membership. Falls back to the live derivation
+    from capability clusters only when a version has no mapping at all."""
+    from app.services.value_chain import derive_value_chain
+
+    s = _schema(await resolve_version(version))
+    p_active = bool(pillar and pillar != "all")
+    sv_active = bool(sv and sv != "all")
+    async with _engine().connect() as conn:
+        has_vcc = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap_vcc"))).scalar() or 0
+        if has_vcc:
+            # The value chain is PER-SUBVERTICAL by nature — render exactly one subvertical's
+            # ordered stage pipeline. Use the requested sv; if 'all'/empty, resolve to the
+            # most-covered subvertical deterministically and tell the UI which one (resolved_sv).
+            subverticals = [
+                str(r[0])
+                for r in await conn.execute(
+                    text(
+                        f"SELECT subvertical FROM {s}.subcap_vcc "
+                        "GROUP BY subvertical ORDER BY count(DISTINCT subcap_id) DESC, subvertical"
+                    )
+                )
+            ]
+            resolved_sv = sv if sv_active else (subverticals[0] if subverticals else "")
+            where = ["vc.subvertical = :sv"]
+            params: dict[str, Any] = {"sv": resolved_sv}
+            if p_active:
+                where.append("left(vc.subcap_id, 2) = :p")
+                params["p"] = pillar
+            sql = text(
+                "SELECT v.vcc_id AS code, v.name, vc.stage_ord AS ord, vc.subcap_id, "
+                "sc.name AS subcap_name, left(vc.subcap_id, 2) AS pillar "
+                f"FROM {s}.subcap_vcc vc "
+                f"JOIN {s}.value_chain_cluster v ON v.vcc_id = vc.vcc_id "
+                f"JOIN {s}.subcap sc ON sc.subcap_id = vc.subcap_id "
+                f"WHERE {' AND '.join(where)}"
+            )
+            rows = (await conn.execute(sql, params)).mappings().all()
+            segs: dict[str, dict[str, Any]] = {}
+            for r in rows:
+                g = segs.setdefault(
+                    str(r["code"]),
+                    {
+                        "code": str(r["code"]),
+                        "name": str(r["name"]),  # the REAL ordered stage name, never just the code
+                        "ord": r["ord"] if r["ord"] is not None else 9999,
+                        "subcaps": [],
+                        "pillars": set(),
+                    },
+                )
+                g["subcaps"].append(
+                    {
+                        "id": str(r["subcap_id"]),
+                        "name": str(r["subcap_name"]),
+                        "pillar": r["pillar"],
+                    }
+                )
+                g["pillars"].add(str(r["pillar"]))
+            clusters = []
+            # ordered pipeline: stage_ord then name (deterministic); position is the chain step
+            for pos, g in enumerate(sorted(segs.values(), key=lambda x: (x["ord"], x["name"])), 1):
+                seen_ids: set[str] = set()
+                subs = [
+                    x
+                    for x in sorted(g["subcaps"], key=lambda y: y["id"])
+                    if not (x["id"] in seen_ids or seen_ids.add(x["id"]))  # type: ignore[func-returns-value]
+                ]
+                clusters.append(
+                    {
+                        "code": g["code"],
+                        "name": g["name"],
+                        "position": pos,
+                        "pillar": min(g["pillars"]) if len(g["pillars"]) == 1 else None,
+                        "count": len(subs),
+                        "subcaps": subs,
+                        "merged_from": [],
+                    }
+                )
+            return {
+                "version": version,
+                "sv": resolved_sv or "all",
+                "resolved_sv": resolved_sv,
+                "sv_requested": sv or "all",
+                "subverticals": subverticals,
+                "source": "catalogue_vc_mapping",
+                "clusters": clusters,
+                "raw_clusters": len(clusters),
+                "deduped": 0,
+                "total_subcaps": len({x["id"] for c in clusters for x in c["subcaps"]}),
+            }
+        # FALLBACK: no mapping shipped with this version — derive from capability clusters.
+        where_sql = " WHERE cat.pillar_id = :p" if p_active else ""
+        sql = text(
+            "SELECT s.subcap_id, s.name, cat.pillar_id AS pillar, cat.name AS cluster, "
+            "cap.name AS category " + _JOINS.format(s=s) + where_sql + " ORDER BY s.subcap_id"
+        )
+        rows = (await conn.execute(sql, {"p": pillar})).mappings().all()
+    out = derive_value_chain([dict(r) for r in rows])
+    out["version"] = version
+    out["sv"] = sv or "all"
+    out["source"] = "derived_from_clusters"
+    return out
+
+
 @router.get("/{version}/summary")
 async def summary(
-    version: str, _user: dict[str, Any] = Depends(get_current_user)
+    version: str,
+    sv: str = Query("all"),
+    _user: dict[str, Any] = Depends(get_current_user),
 ) -> CatalogueSummary:
     v = await resolve_version(version)
     s = _schema(v)
+    # COMPLETENESS (user definition) = (total subcaps - decayed subcaps) / total subcaps, i.e. the
+    # share of subcaps backed by real Jira delivery. decay = subcaps with NO delivered Jira story
+    # (story_catalogue_link is Jira-only by construction — synthetic stories never count). A decayed
+    # subcap can stay active; it is flagged HIGH for an admin to mark inactive or keep, never
+    # auto-deactivated. A description rewrite is neither decay nor incompleteness.
+    # `sv` scopes EVERYTHING to the subcaps that participate in that subvertical's value chain
+    # (cat_<v>.subcap_vcc, from the catalogue's own per-SV mapping) — so the mission-control tiles
+    # genuinely change when the subvertical toggle changes.
+    sv_filter = (
+        f" AND EXISTS (SELECT 1 FROM {s}.subcap_vcc vc "
+        "WHERE vc.subcap_id = s.subcap_id AND vc.subvertical = :sv)"
+        if sv != "all"
+        else ""
+    )
     sql = text(
         "SELECT p.pillar_id, p.name, count(s.subcap_id) AS subcap_count, "
-        "coalesce(avg(s.completeness), 0)::float AS completeness, "
-        "count(s.subcap_id) FILTER "
-        "(WHERE s.lifecycle_state IN ('declining', 'fading', 'dead')) AS decay "
+        "coalesce(count(s.subcap_id) FILTER (WHERE EXISTS ("
+        "  SELECT 1 FROM control.story_catalogue_link l "
+        "  WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id))::float "
+        "/ nullif(count(s.subcap_id), 0), 0) AS completeness, "
+        "count(s.subcap_id) FILTER (WHERE NOT EXISTS ("
+        "  SELECT 1 FROM control.story_catalogue_link l "
+        "  WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id)) AS decay "
         f"FROM {s}.pillar p "
         f"LEFT JOIN {s}.category cat ON cat.pillar_id = p.pillar_id "
         f"LEFT JOIN {s}.capability cap ON cap.category_id = cat.category_id "
-        f"LEFT JOIN {s}.subcap s ON s.capability_id = cap.capability_id "
+        f"LEFT JOIN {s}.subcap s ON s.capability_id = cap.capability_id{sv_filter} "
         "GROUP BY p.pillar_id, p.name ORDER BY p.pillar_id"
     )
+    params: dict[str, Any] = {"vid": v.version_id}
+    if sv != "all":
+        params["sv"] = sv
     async with _engine().connect() as conn:
-        rows = (await conn.execute(sql)).mappings().all()
-        total = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap"))).scalar()
+        rows = (await conn.execute(sql, params)).mappings().all()
+        if sv != "all":
+            total_sql = text(
+                f"SELECT count(DISTINCT subcap_id) FROM {s}.subcap_vcc WHERE subvertical = :sv"
+            )
+            total = (await conn.execute(total_sql, {"sv": sv})).scalar()
+        else:
+            total = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap"))).scalar()
     pillars = [PillarSummary.model_validate(dict(r)) for r in rows]
     return CatalogueSummary(version_id=v.version_id, total_subcaps=int(total or 0), pillars=pillars)
 
@@ -869,9 +1264,11 @@ _LENS_GROUP: dict[str, tuple[str, str, str]] = {
         " JOIN {s}.vendor ven ON ven.vendor_id = l3.vendor_id",
     ),
     "value-chain": (
-        "vcc.vcc_id",
-        "vcc.vcc_id",
-        " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id",
+        # the REAL stage names (same labels as the atlas) — the VCC code is only an id
+        "vcl.name",
+        "vcl.name",
+        " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id"
+        " JOIN {s}.value_chain_cluster vcl ON vcl.vcc_id = vcc.vcc_id",
     ),
 }
 _BAND_AXIS = ["1.0–1.7", "1.7–2.3", "2.3–3.0", "3.0–3.7", "3.7–4.3", "4.3–5.0"]

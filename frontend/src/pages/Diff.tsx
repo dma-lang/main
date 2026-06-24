@@ -26,40 +26,72 @@ export function Diff() {
   const diff = useDiff(av, bv);
   const d = diff.data;
 
+  // Each change is a full-width CARD stacked VERTICALLY (not squeezed into a 3-column grid), so the
+  // detailed explanation — exactly WHY a subcap is added / removed / renamed / modified — is legible.
   const section = (
     title: string,
     color: string,
-    rows: { id: string; name: string; pillar: string; changes?: string[] }[],
+    rows: { id: string; name: string; pillar: string; l2?: string | null; from_id?: string | null; changes?: string[]; explanation: string }[],
+    note: string,
   ) => (
-    <div className="card pad">
-      <div className="between" style={{ marginBottom: 8 }}>
-        <div className="h3">{title}</div>
+    <div className="card pad" style={{ marginBottom: 14 }}>
+      <div className="between" style={{ marginBottom: 4 }}>
+        <div className="row gap8">
+          <span className="pilldot" style={{ background: color, width: 9, height: 9 }} />
+          <div className="h3">{title}</div>
+        </div>
         <span className="chip soft">{rows.length}</span>
+      </div>
+      <div className="muted" style={{ fontSize: 11.5, marginBottom: 10 }}>
+        {note}
       </div>
       {rows.length === 0 ? (
         <div className="muted" style={{ fontSize: 12 }}>
           None.
         </div>
       ) : (
-        <div style={{ display: 'grid', gap: 6, maxHeight: 420, overflowY: 'auto' }}>
-          {rows.slice(0, 80).map((r) => (
-            <div key={r.id} className="row gap8" style={{ fontSize: 12, alignItems: 'baseline' }}>
-              <span className="pilldot" style={{ background: color, width: 7, height: 7, flex: 'none' }} />
-              <PillarDot p={r.pillar} s={7} />
-              <SC id={r.id} />
-              <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {r.name}
-              </span>
-              {r.changes && (
-                <span className="chip soft" style={{ marginLeft: 'auto', flex: 'none' }}>
-                  {r.changes.join(' · ')}
-                </span>
-              )}
+        <div style={{ display: 'grid', gap: 8, maxHeight: 560, overflowY: 'auto' }}>
+          {rows.slice(0, 120).map((r) => (
+            <div
+              key={r.id + (r.from_id ?? '')}
+              className="card"
+              style={{ padding: '10px 12px', borderLeft: `3px solid ${color}` }}
+            >
+              <div className="row gap8" style={{ alignItems: 'baseline', flexWrap: 'wrap' }}>
+                <PillarDot p={r.pillar} s={7} />
+                {r.from_id && (
+                  <>
+                    <span className="mono muted" style={{ fontSize: 11 }}>
+                      {r.from_id}
+                    </span>
+                    <Icon n="arrowR" s={11} style={{ color: 'var(--text-tertiary)' }} />
+                  </>
+                )}
+                <SC id={r.id} />
+                <b style={{ fontSize: 12.5 }}>{r.name}</b>
+                {r.l2 && (
+                  <span className="chip soft" style={{ fontSize: 10 }} title="L2 capability">
+                    {r.l2}
+                  </span>
+                )}
+                {r.changes && r.changes.length > 0 && (
+                  <span className="row wrap gap6" style={{ marginLeft: 'auto' }}>
+                    {r.changes.map((c, i) => (
+                      <span key={i} className="chip blue" style={{ fontSize: 10 }}>
+                        {c}
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </div>
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.5 }}>
+                {r.explanation}
+              </div>
             </div>
           ))}
-          {rows.length > 80 && (
+          {rows.length > 120 && (
             <div className="muted" style={{ fontSize: 11 }}>
-              +{rows.length - 80} more
+              +{rows.length - 120} more (showing the first 120)
             </div>
           )}
         </div>
@@ -87,12 +119,13 @@ export function Diff() {
         </div>
       }
     >
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 18 }}>
         {(
           [
-            [d ? d.added.length : '—', 'Subcaps added', 'var(--interactive)'],
-            [d ? d.removed.length : '—', 'Subcaps removed', 'var(--z-orange)'],
-            [d ? d.modified.length : '—', 'Subcaps modified', 'var(--z-blue)'],
+            [d ? d.added.length : '—', 'Genuinely added', 'var(--interactive)'],
+            [d ? d.removed.length : '—', 'Genuinely removed', 'var(--z-orange)'],
+            [d ? d.modified.filter((m) => m.from_id).length : '—', 'Renamed / reassigned', 'var(--p4)'],
+            [d ? d.modified.filter((m) => !m.from_id).length : '—', 'Modified (same id)', 'var(--z-blue)'],
             [d ? d.unchanged : '—', 'Unchanged', 'var(--text-primary)'],
           ] as [string | number, string, string][]
         ).map(([v, l, c], i) => (
@@ -135,10 +168,31 @@ export function Diff() {
         </div>
       )}
       {d && d.added.length + d.removed.length + d.modified.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
-          {section(`Added in ${d.b}`, 'var(--interactive)', d.added)}
-          {section(`Removed from ${d.a}`, 'var(--z-orange)', d.removed)}
-          {section('Modified', 'var(--z-blue)', d.modified)}
+        <div>
+          {section(
+            `Renamed / reassigned (${d.a} → ${d.b})`,
+            'var(--p4)',
+            d.modified.filter((m) => m.from_id),
+            'Same subcap, new id — matched by subcap name, or by L2 capability name with a near description. Id governance never recycles ids, so a fresh id was minted; this is NOT a removal.',
+          )}
+          {section(
+            `Removed from ${d.a}`,
+            'var(--z-orange)',
+            d.removed,
+            'Genuinely gone — neither the subcap id NOR its L2 capability name survives in the newer version with a near description (deduped or dropped at source).',
+          )}
+          {section(
+            `Added in ${d.b}`,
+            'var(--interactive)',
+            d.added,
+            'Genuinely new — no id or L2-capability+description match in the older version.',
+          )}
+          {section(
+            'Modified (same id, kept)',
+            'var(--z-blue)',
+            d.modified.filter((m) => !m.from_id),
+            'The subcap kept its id; these are the fields that actually changed. A reworded description that keeps its meaning does not count — only a near-total rewrite does.',
+          )}
         </div>
       )}
 

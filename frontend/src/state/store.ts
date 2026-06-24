@@ -97,8 +97,12 @@ export const useUi = create<UiState>((set) => ({
  * Defaults are omitted so a clean view keeps a clean URL. */
 export function syncFiltersToUrl(s: UiState): void {
   try {
-    const [path] = window.location.hash.split('?');
+    const [path, rest] = window.location.hash.split('?');
     const q = new URLSearchParams();
+    // Route-local keys (deep-dive tab preselect) are NOT filters but must survive the rebuild —
+    // go() owns their lifecycle (it clears `tab` on the next navigation).
+    const tab = new URLSearchParams(rest ?? '').get('tab');
+    if (tab) q.set('tab', tab);
     if (s.pillar !== 'all') q.set('p', s.pillar);
     if (s.sv !== 'all') q.set('sv', s.sv);
     if (s.lens !== 'pillar') q.set('lens', s.lens);

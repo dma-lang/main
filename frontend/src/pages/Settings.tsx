@@ -3,12 +3,14 @@
 // pipelines pull from, with the ACTIVE origin (database fixture vs online, per LLM_MODE), tier,
 // cadence, last poll and health — a stale or erroring source is warned, never hidden — plus the
 // persisted enable switch the scan jobs enforce. Upload entry routes into onboarding (F4).
+import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
 import { type SourceRow } from '../api/client';
 import {
   useAdminActions,
   useAdmins,
+  useMe,
   usePatchPreferences,
   useProvisionActions,
   useSourceActions,
@@ -16,6 +18,7 @@ import {
   useVersions,
 } from '../api/queries';
 import { Dropdown, Page, Switch, Tier } from '../components/primitives';
+import { signOutUser } from '../lib/auth';
 import { toast } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
@@ -295,8 +298,18 @@ export function Settings() {
   const isAdmin = useUi((s) => s.adminView);
   const patch = usePatchPreferences();
   const sources = useSources(isAdmin);
+  const me = useMe();
+  const qc = useQueryClient();
   const persist = (extra: Record<string, unknown>) =>
     patch.mutate({ theme: ui.theme, lens: ui.lens, persona: ui.persona, ...extra });
+  // Sign out = drop the Google ID token AND every cached query (identity included) — the gate
+  // sees the empty ['me'] cache, its refetch 401s (fails closed), and the Login page renders.
+  // In dev mode the dev identity simply signs back in; the button still proves the transition.
+  const signOut = () => {
+    signOutUser();
+    qc.clear();
+    location.hash = '#/login';
+  };
 
   return (
     <Page
@@ -341,6 +354,21 @@ export function Settings() {
               persist({ persona: p });
             }}
           />
+        </div>
+      </div>
+
+      <div className="card pad" style={{ marginBottom: 18 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>
+          Session
+        </div>
+        <div className="row gap8" style={{ alignItems: 'center' }}>
+          <span className="muted" style={{ fontSize: 12, flex: 1 }}>
+            {me.data?.email ?? 'signed in'} · sessions are 1-hour Google ID tokens; signing out
+            clears this device and all cached data.
+          </span>
+          <button className="btn ghost sm" onClick={signOut}>
+            <Icon n="lock" s={14} /> Sign out
+          </button>
         </div>
       </div>
 

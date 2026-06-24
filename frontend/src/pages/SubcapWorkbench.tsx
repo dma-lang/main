@@ -4,7 +4,7 @@
 // /subcaps/{id} (detail), /subcaps/{id}/stories (Delivery), /subcaps/{id}/enrichment (Maturity /
 // Use cases) and /subcaps/{id}/connections (siblings + gated news signals).
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 
 import type { SubcapDetail, SubcapEnrichment, SubcapNode } from '../api/client';
 import {
@@ -14,6 +14,7 @@ import {
   useSubcaps,
   useSubcapStories,
 } from '../api/queries';
+import { DeliveryDrillPanel } from '../components/DeliveryDrillPanel';
 import { Bar, Claim, Empty, LifeChip, Mag, PillarDot, Tier } from '../components/primitives';
 import { go, openReasoning, toast } from '../lib/events';
 import { clamp, LIFE_COLORS, PILLAR_COLORS, PILLAR_SHORT } from '../lib/helpers';
@@ -111,6 +112,13 @@ function OverviewTab({
   const platforms = enr?.platforms ?? [];
   return (
     <div className="fade-in">
+      {enr?.inherited_from && (
+        <div className="banner info" style={{ fontSize: 11.5, marginBottom: 12 }}>
+          <Icon n="branch" s={13} />
+          This version carries no enrichment of its own — platforms, use cases and maturity are
+          shown from the <b>{enr.inherited_from}</b> reference catalogue, mapped by subcap ID.
+        </div>
+      )}
       <p style={{ margin: '0 0 16px', fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
         {d?.description ?? 'No description recorded in this version.'}
       </p>
@@ -352,37 +360,73 @@ function scoreColor(v: number): string {
 // prototype's hashed quarter bars are intentionally omitted rather than faked.
 function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
   const [open, setOpen] = useState<string | null>(null);
-  const stories = useSubcapStories(version, node.id);
+  // ONE toggle for the whole Delivery tab: Jira-only (analysis grade) vs include synthetic. It
+  // drives the story list AND the clients/clusters drilldown below, so they stay consistent.
+  const [synthetic, setSynthetic] = useState(false);
+  const stories = useSubcapStories(version, node.id, synthetic);
   const data = stories.data;
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
+  const toggle = (
+    <div className="row gap8" style={{ marginBottom: 14 }}>
+      <span className="muted" style={{ fontSize: 11 }}>
+        Stories:
+      </span>
+      <button
+        className={'btn xs ' + (!synthetic ? 'primary' : 'ghost')}
+        onClick={() => setSynthetic(false)}
+        title="Real Jira delivery only (analysis grade)"
+      >
+        Jira only
+      </button>
+      <button
+        className={'btn xs ' + (synthetic ? 'primary' : 'ghost')}
+        onClick={() => setSynthetic(true)}
+        title="Also show the labelled synthetic stories"
+      >
+        + synthetic
+      </button>
+    </div>
+  );
+
   if (stories.isLoading) {
     return (
-      <div className="muted fade-in" style={{ fontSize: 12 }}>
-        Loading delivery…
+      <div className="fade-in">
+        {toggle}
+        <div className="muted" style={{ fontSize: 12 }}>
+          Loading delivery…
+        </div>
       </div>
     );
   }
   if (total === 0) {
     return (
-      <EmptyTab
-        icon="book"
-        title="No mapped stories"
-        desc="No real-client stories carry forward to this subcap in the active version."
-      />
+      <div className="fade-in">
+        {toggle}
+        <EmptyTab
+          icon="book"
+          title={synthetic ? 'No mapped stories' : 'No real-client stories'}
+          desc={
+            synthetic
+              ? 'No Jira or synthetic story carries forward to this subcap in this version.'
+              : 'No real-client (Jira) stories carry forward here. Toggle “+ synthetic” to include synthetic stories.'
+          }
+        />
+      </div>
     );
   }
 
   return (
     <div className="fade-in">
+      {toggle}
       <div className="row gap16" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
         <div style={{ textAlign: 'center' }}>
           <div className="num" style={{ fontSize: 20, fontWeight: 700 }}>
             {total}
           </div>
           <div className="muted" style={{ fontSize: 10 }}>
-            total stories
+            {synthetic ? 'stories (incl. synthetic)' : 'Jira stories'}
           </div>
         </div>
         <div style={{ textAlign: 'center' }}>
@@ -414,6 +458,16 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
                   <span className="mono" style={{ fontSize: 11, color: 'var(--text-primary)', flex: 'none' }}>
                     {st.story_key}
                   </span>
+                  {st.is_synthetic && (
+                    <span className="chip orange" style={{ fontSize: 8.5, flex: 'none' }} title="synthetic story (not real Jira delivery)">
+                      synthetic
+                    </span>
+                  )}
+                  {st.project_key && (
+                    <span className="chip soft" style={{ fontSize: 9, flex: 'none' }} title="Jira project (client proxy)">
+                      {st.project_key}
+                    </span>
+                  )}
                   <span
                     className="muted"
                     style={{ fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -469,6 +523,11 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
           All {total} stories in the Story library <Icon n="arrowR" s={13} />
         </button>
       )}
+      <div className="divider" />
+      <div className="eyebrow" style={{ marginBottom: 8 }}>
+        Who delivered this, and what clusters together
+      </div>
+      <DeliveryDrillPanel version={version} id={node.id} synthetic={synthetic} />
     </div>
   );
 }
@@ -556,9 +615,14 @@ function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
 export function SubcapWorkbench() {
   const params = useParams<{ id?: string }>();
   const routeId = params.id ?? null;
+  const loc = useLocation();
+  // ?tab=delivery (etc.) preselects a deep-dive tab — this is how peek stats / mission control
+  // drill STRAIGHT to the related user stories instead of always landing on Overview.
+  const tabParam = new URLSearchParams(loc.search).get('tab');
   const version = useUi((s) => s.version);
   const ctxPillar = useUi((s) => s.pillar);
-  const subcaps = useSubcaps(version);
+  const ctxSv = useUi((s) => s.sv); // header subvertical — scopes the tree like mission control
+  const subcaps = useSubcaps(version, ctxSv);
   const all = useMemo(() => subcaps.data ?? [], [subcaps.data]);
 
   const [pillar, setPillar] = useState<string>(
@@ -569,14 +633,20 @@ export function SubcapWorkbench() {
   const [tab, setTab] = useState('overview');
   const [openCat, setOpenCat] = useState<string | null>(null);
 
-  // Deep-link / back-forward: when the route id changes, focus it.
+  // Keep the tree's pillar in step with the header pillar toggle (arriving from mission control
+  // with P2 selected lands on P2; the local pills still switch within the page).
+  useEffect(() => {
+    if (!routeId && ctxPillar !== 'all') setPillar(ctxPillar);
+  }, [ctxPillar, routeId]);
+
+  // Deep-link / back-forward: when the route id (or requested tab) changes, focus it.
   useEffect(() => {
     if (routeId) {
       setSel(routeId);
       setPillar(routeId.slice(0, 2));
-      setTab('overview');
+      setTab(TABS.some(([t]) => t === tabParam) ? (tabParam as string) : 'overview');
     }
-  }, [routeId]);
+  }, [routeId, tabParam]);
 
   const node = useMemo(() => all.find((x) => x.id === sel) ?? null, [all, sel]);
   const detail = useSubcap(version, sel);
@@ -626,7 +696,9 @@ export function SubcapWorkbench() {
     setTab('overview');
   };
 
-  const comp = Math.round((d?.completeness ?? 0) * 8);
+  // record completeness = filled core fields / 5 (name, description, tier, solution type,
+  // status) — computed at provision; shown as a percentage, never a magic '/8'.
+  const comp = Math.round((d?.completeness ?? 0) * 100);
   const stats: [number, string, string][] = [
     [d?.n_use_cases ?? 0, 'use cases', 'usecases'],
     [d?.n_stories ?? 0, 'stories', 'delivery'],
@@ -757,6 +829,12 @@ export function SubcapWorkbench() {
                 );
               })
             )}
+            {!searching && tree.length === 0 && (
+              <div className="muted" style={{ padding: 14, fontSize: 12 }}>
+                No {pillar} subcaps{ctxSv && ctxSv !== 'all' ? ` in the ${ctxSv} value chain` : ''}.
+                {ctxSv && ctxSv !== 'all' ? ' Switch the subvertical in the header to widen.' : ''}
+              </div>
+            )}
           </div>
         </div>
 
@@ -793,10 +871,10 @@ export function SubcapWorkbench() {
                     </span>
                   </div>
                 </div>
-                <div style={{ textAlign: 'center' }}>
-                  <Ring v={comp} />
+                <div style={{ textAlign: 'center' }} title="Record coverage — share of core fields populated on this subcap (name, description, tier, solution type, status). Distinct from mission-control delivery completeness.">
+                  <Ring v={comp} max={100} />
                   <div className="muted" style={{ fontSize: 9.5, marginTop: 2 }}>
-                    complete
+                    record coverage
                   </div>
                 </div>
               </div>
@@ -823,6 +901,15 @@ export function SubcapWorkbench() {
                     </span>
                   </button>
                 ))}
+                {enr?.inherited_from && (
+                  <span
+                    className="chip soft"
+                    style={{ fontSize: 9.5, alignSelf: 'center' }}
+                    title={`Use-case / platform / maturity counts are shown from the ${enr.inherited_from} reference catalogue (this version carries none of its own), mapped by subcap id.`}
+                  >
+                    <Icon n="branch" s={10} /> enriched from {enr.inherited_from}
+                  </span>
+                )}
               </div>
             </div>
 

@@ -137,6 +137,42 @@ def test_change_flag_lifecycle(client: TestClient) -> None:
 
 
 @needs_db
+def test_decay_no_delivery_flags_let_admin_mark_inactive(client: TestClient) -> None:
+    """Decay (user definition): a subcap with no real Jira story is flagged for the admin, who can
+    APPROVE to mark it inactive (lifecycle -> 'dead'), gated + audited. v7's corpus covers ~87 of
+    851 subcaps, so the scan raises hundreds of these candidates."""
+    client.post("/api/admin/change-flags/scan/v7")
+    flags = client.get("/api/change-flags?status=open").json()["flags"]
+    decay = [f for f in flags if f["kind"] == "decay_no_delivery"]
+    assert len(decay) > 100  # almost all of v7 is decayed — flags reflect that
+    f = next(x for x in decay if x["before"] in ("emerging", "rising", "stable"))
+    target = f["target"]
+    assert f["after"] == "dead"  # proposed correction: mark inactive
+    assert f["sev"] == "HIGH"  # a believed-live subcap with zero delivery is a HIGH admin alert
+
+    detail = client.get(f"/api/catalogue/v7/subcaps/{target}").json()
+    assert detail["n_stories"] == 0  # genuinely zero real Jira delivery
+    before = detail["lifecycle_state"]
+
+    approved = client.post(f"/api/change-flags/{f['id']}/approve").json()
+    assert approved["resolved"] is True and approved["after"] == "dead"
+    after = client.get(f"/api/catalogue/v7/subcaps/{target}").json()["lifecycle_state"]
+    assert after == "dead" and after != before  # marked INACTIVE, gated server-side
+
+    sync_eng = create_engine(os.environ["DATABASE_URL"].replace("+asyncpg", "+psycopg"))
+    with sync_eng.connect() as conn:
+        n = conn.execute(
+            text(
+                "SELECT count(*) FROM control.audit_log "
+                "WHERE action = 'change_flag.approve' AND target_ref = :t"
+            ),
+            {"t": target},
+        ).scalar()
+    sync_eng.dispose()
+    assert int(n or 0) >= 1  # the inactivation is audited (before/after for revert)
+
+
+@needs_db
 def test_approve_unknown_404(client: TestClient) -> None:
     r = client.post("/api/change-flags/00000000-0000-0000-0000-000000000000/approve")
     assert r.status_code == 404

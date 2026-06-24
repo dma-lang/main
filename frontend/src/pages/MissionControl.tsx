@@ -1,7 +1,13 @@
 // Mission control (A1) — ported from the prototype, wired to /api/catalogue/{v}/summary.
 // Pillar tiles render real counts/completeness/decay; the concentration heatmap + flag/suggestion
 // KPIs light up once their data lands (F5 stories / F7 evidence).
-import { useChangeFlags, useHeatmap, useSuggestions, useSummary } from '../api/queries';
+import {
+  useChangeFlags,
+  useHeatmap,
+  useSuggestions,
+  useSummary,
+  useVersions,
+} from '../api/queries';
 import { Bar, Empty, Page, PillarDot, SC } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { heatBg, PILLAR_COLORS } from '../lib/helpers';
@@ -30,10 +36,14 @@ export function MissionControl() {
   const sv = useUi((s) => s.sv);
   const lens = useUi((s) => s.lens);
   const setPillar = useUi((s) => s.setPillar);
-  const summary = useSummary(version);
+  const summary = useSummary(version, sv);
   const heat = useHeatmap(version, lens, pillar, sv);
   const flagsQ = useChangeFlags('open');
   const pendingQ = useSuggestions('pending');
+  const versionsQ = useVersions();
+  const liveVersions = (versionsQ.data ?? []).filter(
+    (v) => v.status === 'provisioned' || v.status === 'active',
+  );
   const pillars = summary.data?.pillars ?? [];
   const total = summary.data?.total_subcaps ?? 0;
   const fc = flagsQ.data?.counts;
@@ -142,40 +152,70 @@ export function MissionControl() {
                 </tr>
               </thead>
               <tbody>
-                {heat.data.rows.map((r) => (
-                  <tr key={r.key}>
-                    <td>
-                      <div className="row gap8">
-                        {r.pillar && <PillarDot p={r.pillar} s={7} />}
-                        <div style={{ minWidth: 0 }}>
-                          {lens === 'pillar' ? (
-                            <SC id={r.key}>{r.label}</SC>
-                          ) : (
-                            <div
-                              className="sclink"
-                              style={{ fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                              onClick={() => go('explorer')}
+                {heat.data.rows.map((r) => {
+                  // Pillar-lens rows are SUBCAPS — every part of the row drills to the trace
+                  // specifics (clients, story details, clusters); the label still peeks.
+                  const drill = lens === 'pillar' ? () => go('trace/' + r.key) : undefined;
+                  return (
+                    <tr key={r.key}>
+                      <td>
+                        <div className="row gap8">
+                          {r.pillar && <PillarDot p={r.pillar} s={7} />}
+                          <div style={{ minWidth: 0 }}>
+                            {lens === 'pillar' ? (
+                              <SC id={r.key}>{r.label}</SC>
+                            ) : (
+                              <div
+                                className="sclink"
+                                style={{ fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                onClick={() => go('explorer')}
+                              >
+                                {r.label}
+                              </div>
+                            )}
+                          </div>
+                          {drill && (
+                            <button
+                              className="linkbtn"
+                              style={{ flex: 'none', padding: 0 }}
+                              title={'Trace ' + r.key + ' — clients, stories, clusters'}
+                              onClick={drill}
                             >
-                              {r.label}
-                            </div>
+                              <Icon n="branch" s={12} />
+                            </button>
                           )}
                         </div>
-                      </div>
-                    </td>
-                    {r.cells.map((c, i) => (
-                      <td key={i} style={{ padding: '6px 3px' }}>
-                        <div
-                          className="heatcell"
-                          title={`${c} stories · ${heat.data!.axis[i]}`}
-                          style={{ height: 26, background: heatBg(c / (heat.data!.max || 1)) }}
-                        />
                       </td>
-                    ))}
-                    <td className="num" style={{ textAlign: 'right', fontSize: 12, fontWeight: 600 }}>
-                      {r.total.toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
+                      {r.cells.map((c, i) => (
+                        <td key={i} style={{ padding: '6px 3px' }}>
+                          <div
+                            className="heatcell"
+                            title={`${c} stories · ${heat.data!.axis[i]} composite${drill ? ' — click to trace' : ''}`}
+                            style={{
+                              height: 26,
+                              background: heatBg(c / (heat.data!.max || 1)),
+                              cursor: drill ? 'pointer' : 'default',
+                            }}
+                            onClick={drill}
+                          />
+                        </td>
+                      ))}
+                      <td
+                        className="num"
+                        title={drill ? 'Open the delivery drilldown for ' + r.key : undefined}
+                        style={{
+                          textAlign: 'right',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: drill ? 'pointer' : 'default',
+                        }}
+                        onClick={drill}
+                      >
+                        {r.total.toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -194,7 +234,9 @@ export function MissionControl() {
               <div className="kl">Suggestions pending</div>
             </div>
             <div className="kpi" style={{ padding: '14px 15px' }}>
-              <div className="kv" style={{ fontSize: 24 }}>{version ? '1/1' : '—'}</div>
+              <div className="kv" style={{ fontSize: 24 }}>
+                {versionsQ.data ? liveVersions.length : '—'}
+              </div>
               <div className="kl">Versions provisioned</div>
             </div>
             <div className="kpi" style={{ padding: '14px 15px' }}>

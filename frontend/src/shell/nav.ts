@@ -46,7 +46,7 @@ export const NAV: NavGroup[] = [
       { r: 'news', t: 'News watch', i: 'news', phase: 2 },
       { r: 'trends', t: 'Trends monitor', i: 'trend', phase: 2 },
       { r: 'suggestions', t: 'AI suggestions', i: 'sparkles', phase: 2 },
-      { r: 'benchmarks', t: 'Benchmarks studio', i: 'bars', phase: 2 },
+      { r: 'benchmarks', t: 'Benchmarks studio', i: 'bars', phase: 2, admin: true },
     ],
   },
   {
@@ -64,22 +64,22 @@ export const NAV: NavGroup[] = [
   {
     g: 'G · Versioning & QA',
     items: [
-      { r: 'versions', t: 'Version timeline', i: 'clock' },
-      { r: 'diff', t: 'Diff viewer', i: 'compare' },
-      { r: 'change-flags', t: 'Change flags inbox', i: 'flag', phase: 2 },
-      { r: 'gates', t: 'Validation gates log', i: 'shield', phase: 2 },
-      { r: 'qa', t: 'QA & audit dashboard', i: 'check', phase: 2 },
+      { r: 'versions', t: 'Version timeline', i: 'clock', admin: true },
+      { r: 'diff', t: 'Diff viewer', i: 'compare', admin: true },
+      { r: 'change-flags', t: 'Change flags inbox', i: 'flag', phase: 2, admin: true },
+      { r: 'gates', t: 'Validation gates log', i: 'shield', phase: 2, admin: true },
+      { r: 'qa', t: 'QA & audit dashboard', i: 'check', phase: 2, admin: true },
     ],
   },
   {
     g: 'H · Reasoning & RAG',
     items: [
-      { r: 'reasoning', t: 'Reasoning chain viewer', i: 'sparkles', phase: 2 },
+      { r: 'reasoning', t: 'Reasoning chain viewer', i: 'sparkles', phase: 2, admin: true },
       { r: 'chat', t: 'AI chat', i: 'chat', phase: 2 },
     ],
   },
   {
     g: 'I · Sandbox',
-    items: [{ r: 'what-if', t: 'What-if simulator', i: 'beaker', phase: 3 }],
+    items: [{ r: 'what-if', t: 'What-if simulator', i: 'beaker', phase: 3, admin: true }],
   },
 ];
