@@ -1079,7 +1079,7 @@ async def value_chain(
     ``sv`` picks one subvertical's chain (stage order preserved); 'all' aggregates the distinct
     stages across subverticals. ``pillar`` filters membership. Falls back to the live derivation
     from capability clusters only when a version has no mapping at all."""
-    from app.services.value_chain import derive_value_chain
+    from app.services.value_chain import clean_stage_name, derive_value_chain
 
     v = await resolve_version(version)
     s = _schema(v)
@@ -1088,10 +1088,11 @@ async def value_chain(
     async with _engine().connect() as conn:
         has_vcc = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap_vcc"))).scalar() or 0
         if has_vcc:
-            # The value chain is PER-SUBVERTICAL by nature — render exactly one subvertical's
-            # ordered stage pipeline. Use the requested sv; if 'all'/empty, resolve to the
-            # MOST-DELIVERED subvertical (real Jira concentration, NOT a 2-subcap margin) and tell
-            # the UI which one (resolved_sv). The list is delivery-ranked so the picker matches.
+            # The value chain is PER-SUBVERTICAL by nature. When a subvertical is selected we render
+            # exactly its ordered stage pipeline; when 'All SV' is selected we render EVERY
+            # subvertical's chain (delivery-ranked), never locking the page to a single one. The
+            # subvertical list is delivery-ranked (real Jira concentration) so the picker order and
+            # the 'all' rendering order match.
             subverticals = [
                 str(r[0])
                 for r in await conn.execute(
@@ -1107,33 +1108,42 @@ async def value_chain(
                     {"vid": v.version_id},
                 )
             ]
-            resolved_sv = sv if sv_active else (subverticals[0] if subverticals else "")
-            where = ["vc.subvertical = :sv"]
-            params: dict[str, Any] = {"sv": resolved_sv}
+            targets = [sv] if sv_active else subverticals
+            where = ["vc.subvertical = ANY(:svs)"]
+            params: dict[str, Any] = {"svs": targets}
             if p_active:
                 where.append("left(vc.subcap_id, 2) = :p")
                 params["p"] = pillar
             sql = text(
-                "SELECT v.vcc_id AS code, v.name, vc.stage_ord AS ord, vc.subcap_id, "
-                "sc.name AS subcap_name, left(vc.subcap_id, 2) AS pillar "
+                "SELECT vc.subvertical AS sv, v.vcc_id AS code, v.name, vc.stage_ord AS ord, "
+                "vc.subcap_id, sc.name AS subcap_name, left(vc.subcap_id, 2) AS pillar "
                 f"FROM {s}.subcap_vcc vc "
                 f"JOIN {s}.value_chain_cluster v ON v.vcc_id = vc.vcc_id "
                 f"JOIN {s}.subcap sc ON sc.subcap_id = vc.subcap_id "
                 f"WHERE {' AND '.join(where)}"
             )
             rows = (await conn.execute(sql, params)).mappings().all()
-            segs: dict[str, dict[str, Any]] = {}
+            # group: subvertical -> CLEAN stage name -> segment. clean_stage_name strips
+            # "(SV-Specific: …)"/"(Ag)"-style noise (defensively, for data provisioned before the
+            # provision-time clean) and MERGES variants that share a stage name into one card.
+            by_sv: dict[str, dict[str, dict[str, Any]]] = {}
             for r in rows:
+                nm = clean_stage_name(str(r["name"]))
+                segs = by_sv.setdefault(str(r["sv"]), {})
                 g = segs.setdefault(
-                    str(r["code"]),
+                    nm,
                     {
                         "code": str(r["code"]),
-                        "name": str(r["name"]),  # the REAL ordered stage name, never just the code
+                        "name": nm,  # the REAL, clean, ordered stage name (the code is only an id)
                         "ord": r["ord"] if r["ord"] is not None else 9999,
                         "subcaps": [],
                         "pillars": set(),
                     },
                 )
+                if str(r["code"]) < g["code"]:
+                    g["code"] = str(r["code"])  # stable representative id across merged variants
+                if r["ord"] is not None and r["ord"] < g["ord"]:
+                    g["ord"] = r["ord"]
                 g["subcaps"].append(
                     {
                         "id": str(r["subcap_id"]),
@@ -1142,37 +1152,65 @@ async def value_chain(
                     }
                 )
                 g["pillars"].add(str(r["pillar"]))
-            clusters = []
-            # ordered pipeline: stage_ord then name (deterministic); position is the chain step
-            for pos, g in enumerate(sorted(segs.values(), key=lambda x: (x["ord"], x["name"])), 1):
-                seen_ids: set[str] = set()
-                subs = [
-                    x
-                    for x in sorted(g["subcaps"], key=lambda y: y["id"])
-                    if not (x["id"] in seen_ids or seen_ids.add(x["id"]))  # type: ignore[func-returns-value]
-                ]
-                clusters.append(
+
+            def _ordered(segs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+                # ordered pipeline: stage_ord then name (deterministic); position is the chain step
+                out_c: list[dict[str, Any]] = []
+                in_order = sorted(segs.values(), key=lambda x: (x["ord"], x["name"]))
+                for pos, g in enumerate(in_order, 1):
+                    seen_ids: set[str] = set()
+                    subs = [
+                        x
+                        for x in sorted(g["subcaps"], key=lambda y: y["id"])
+                        if not (x["id"] in seen_ids or seen_ids.add(x["id"]))  # type: ignore[func-returns-value]
+                    ]
+                    out_c.append(
+                        {
+                            "code": g["code"],
+                            "name": g["name"],
+                            "position": pos,
+                            "pillar": min(g["pillars"]) if len(g["pillars"]) == 1 else None,
+                            "count": len(subs),
+                            "subcaps": subs,
+                            "merged_from": [],
+                        }
+                    )
+                return out_c
+
+            order = targets if sv_active else subverticals
+            chains: list[dict[str, Any]] = []
+            for svc in order:
+                sv_segs = by_sv.get(svc)
+                if not sv_segs:
+                    continue
+                cl = _ordered(sv_segs)
+                chains.append(
                     {
-                        "code": g["code"],
-                        "name": g["name"],
-                        "position": pos,
-                        "pillar": min(g["pillars"]) if len(g["pillars"]) == 1 else None,
-                        "count": len(subs),
-                        "subcaps": subs,
-                        "merged_from": [],
+                        "sv": svc,
+                        "clusters": cl,
+                        "total_subcaps": len({x["id"] for c in cl for x in c["subcaps"]}),
                     }
                 )
+            # backward-compat flat `clusters`: the single chain when one sv, else every stage
+            flat = (
+                chains[0]["clusters"]
+                if len(chains) == 1
+                else [c for ch in chains for c in ch["clusters"]]
+            )
             return {
                 "version": version,
-                "sv": resolved_sv or "all",
-                "resolved_sv": resolved_sv,
+                "sv": sv if sv_active else "all",
+                "resolved_sv": sv if sv_active else "",  # only set when ONE chain is pinned
                 "sv_requested": sv or "all",
                 "subverticals": subverticals,
                 "source": "catalogue_vc_mapping",
-                "clusters": clusters,
-                "raw_clusters": len(clusters),
+                "chains": chains,
+                "clusters": flat,
+                "raw_clusters": len(flat),
                 "deduped": 0,
-                "total_subcaps": len({x["id"] for c in clusters for x in c["subcaps"]}),
+                "total_subcaps": len(
+                    {x["id"] for ch in chains for c in ch["clusters"] for x in c["subcaps"]}
+                ),
             }
         # FALLBACK: no mapping shipped with this version — derive from capability clusters.
         where_sql = " WHERE cat.pillar_id = :p" if p_active else ""
@@ -1264,6 +1302,10 @@ class HeatmapResp(BaseModel):
 # strip bucketing each group's stories across 6 composite-score bands (1.0–5.0). The catalogue lost
 # real Jira dates on ingest (created_at = ingest time), so the truthful ordinal axis is delivery
 # quality, not quarters — same heatmap shape, honest data.
+# read-time strip of a trailing "(SV-Specific: …)"/"(Ag)"-style explanation from a stored stage
+# label, so the value-chain lens merges variants and shows clean names (the canonical writer is
+# services/value_chain.clean_stage_name, applied at provision).
+_VC_CLEAN = r"regexp_replace(vcl.name, '\s*\([^()]*\)\s*$', '')"
 _LENS_GROUP: dict[str, tuple[str, str, str]] = {
     # lens -> (group-key expr, label expr, extra FROM/JOIN)
     "pillar": ("sc.subcap_id", "sc.name", ""),  # rows = most-delivered subcaps
@@ -1283,9 +1325,11 @@ _LENS_GROUP: dict[str, tuple[str, str, str]] = {
     "value-chain": (
         # REAL stage names (same labels as the atlas) — the VCC code is only an id. The chain is
         # PER-SUBVERTICAL, so scope to the active one (or, when 'all', the most-covered) rather than
-        # fanning Jira delivery across every subvertical's chain at once.
-        "vcl.name",
-        "vcl.name",
+        # fanning Jira delivery across every subvertical's chain at once. Strip the trailing
+        # "(SV-Specific: …)"-style explanation at read time so the lens shows the clean, merged
+        # stage name even on catalogues provisioned before the provision-time clean.
+        _VC_CLEAN,
+        _VC_CLEAN,
         " JOIN {s}.subcap_vcc vcc ON vcc.subcap_id = sc.subcap_id"
         " AND vcc.subvertical = coalesce(nullif(:vc_sv, 'all'),"
         " (SELECT st.story_sv_code FROM control.story_catalogue_link l2"

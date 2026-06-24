@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app import db
 from app.services import subcap_xref
+from app.services.value_chain import clean_stage_name
 
 _BACKEND = Path(__file__).resolve().parents[2]  # backend/ (app/services/provision.py -> backend)
 _SEED_DIR = _BACKEND / "seed"
@@ -432,7 +433,10 @@ async def _seed_value_chain(
         ]
     if not rows:
         return {"vc_stages": 0, "vc_links": 0, "vc_cascaded_from": vc.get("cascaded_from")}
-    names = sorted({s for m in rows for s in m["stages"]})
+    # Stage labels carry trailing "(SV-Specific: …)"/"(Ag)"-style explanations the atlas must not
+    # show; strip them to the bare stage name and MERGE variants that share one (so e.g. three
+    # "AUTOMATION COE (SV-Specific: …)" rows collapse to a single ordered "AUTOMATION COE" stage).
+    names = sorted({clean_stage_name(s) for m in rows for s in m["stages"]})
     vcc_by_name = {n: f"VCC-{i + 1:02d}" for i, n in enumerate(names)}
     await conn.execute(
         text(f"INSERT INTO {schema}.value_chain_cluster (vcc_id, name) VALUES (:v, :n)"),
@@ -441,22 +445,26 @@ async def _seed_value_chain(
     ord_by_sv: dict[tuple[str, str], int] = {}
     for sv, order in (vc.get("stage_order") or {}).items():
         for i, st in enumerate(order):
-            ord_by_sv[(sv, st)] = i
+            okey = (sv, clean_stage_name(st))
+            if okey not in ord_by_sv or i < ord_by_sv[okey]:
+                ord_by_sv[okey] = i  # earliest position among the merged variants
     links: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for m in rows:
         for st in m["stages"]:
-            key = (m["subcap_id"], vcc_by_name[st], m["sv"])
+            cst = clean_stage_name(st)
+            vcc = vcc_by_name[cst]
+            key = (m["subcap_id"], vcc, m["sv"])
             if key in seen:
                 continue
             seen.add(key)
             links.append(
                 {
                     "sub": m["subcap_id"],
-                    "vcc": vcc_by_name[st],
+                    "vcc": vcc,
                     "sv": m["sv"],
-                    "stage": st,
-                    "ord": ord_by_sv.get((m["sv"], st)),
+                    "stage": cst,
+                    "ord": ord_by_sv.get((m["sv"], cst)),
                 }
             )
     await conn.execute(

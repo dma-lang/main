@@ -193,10 +193,13 @@ def test_value_chain_real_names_and_sv(client: TestClient) -> None:
     fc = client.get("/api/catalogue/v7/value-chain?sv=FC").json()
     assert fc["source"] == "catalogue_vc_mapping"
     assert fc["resolved_sv"] == "FC"
-    assert len(fc["clusters"]) > 10
+    assert len(fc["chains"]) == 1 and fc["chains"][0]["sv"] == "FC"  # one pinned chain
+    assert len(fc["clusters"]) > 10  # backward-compat flat list = that chain's stages
     names = [c["name"] for c in fc["clusters"]]
     assert all(not n.startswith("VCC-") for n in names)  # names are names, never codes
     assert any("AG " in n or "FARM" in n.upper() or "FCA" in n for n in names)  # Farm Credit
+    # stage labels are cleaned of "(SV-Specific: …)"-style noise (and merged on the clean name)
+    assert all("SV-Specific" not in n and not n.endswith(")") for n in names)
     # the pipeline is ORDERED: positions ascend 1, 2, 3, …
     positions = [c["position"] for c in fc["clusters"]]
     assert positions == sorted(positions) and positions[0] == 1
@@ -204,10 +207,16 @@ def test_value_chain_real_names_and_sv(client: TestClient) -> None:
     rb = client.get("/api/catalogue/v7/value-chain?sv=RB").json()
     assert rb["resolved_sv"] == "RB"
     assert [c["name"] for c in rb["clusters"]] != names
-    # 'All SV' resolves to a real, single subvertical (the chain is per-SV by nature)
+    # 'All SV' lists EVERY subvertical's chain (per-SV by nature), pinning none
     allv = client.get("/api/catalogue/v7/value-chain").json()
-    assert allv["resolved_sv"] in allv["subverticals"]
+    assert allv["sv"] == "all" and allv["resolved_sv"] == ""
     assert allv["sv_requested"] == "all"
+    assert {ch["sv"] for ch in allv["chains"]} == set(allv["subverticals"])
+    assert len(allv["chains"]) == len(allv["subverticals"]) > 1
+    # the order of rendered chains follows the delivery-ranked subvertical list
+    assert [ch["sv"] for ch in allv["chains"]] == allv["subverticals"]
+    all_names = [c["name"] for ch in allv["chains"] for c in ch["clusters"]]
+    assert all("SV-Specific" not in n and not n.endswith(")") for n in all_names)
 
 
 @needs_db

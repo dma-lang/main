@@ -249,14 +249,20 @@ export interface ValueChainCluster {
   stages?: { name: string; count: number }[]; // present only in the derived fallback
   merged_from: string[];
 }
+export interface ValueChainGroup {
+  sv: string; // the subvertical this ordered chain belongs to
+  clusters: ValueChainCluster[];
+  total_subcaps: number;
+}
 export interface ValueChainResp {
   version: string;
   sv: string;
-  resolved_sv?: string; // the subvertical actually rendered (the chain is per-SV)
+  resolved_sv?: string; // set only when ONE subvertical is pinned (empty for 'All SV')
   sv_requested?: string;
-  subverticals?: string[]; // subverticals that carry a chain in this version
+  subverticals?: string[]; // subverticals that carry a chain in this version (delivery-ranked)
   source?: string; // catalogue_vc_mapping (real per-SV stages) | derived_from_clusters
-  clusters: ValueChainCluster[];
+  chains?: ValueChainGroup[]; // one ordered pipeline per subvertical (all of them for 'All SV')
+  clusters: ValueChainCluster[]; // backward-compat flat list (the derived fallback uses only this)
   raw_clusters: number;
   deduped: number;
   total_subcaps: number;

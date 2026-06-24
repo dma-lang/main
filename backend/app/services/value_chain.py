@@ -26,6 +26,25 @@ from typing import Any
 _STOP = {"and", "the", "of", "for", "to", "a", "an", "&", "in", "on", "management", "mgmt"}
 _MERGE_JACCARD = 0.6  # >= this token overlap => the same value-chain segment
 
+# trailing parenthetical "explanation" on a VC stage label, e.g. "(SV-Specific: P3C1.8.IB1)",
+# "(applicable via …)", "(Indirect: …)", "(Ag)" — noise the atlas/lens must not show.
+_TRAIL_PAREN = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def clean_stage_name(name: str) -> str:
+    """Strip trailing parenthetical explanations from a value-chain stage label, leaving the bare
+    stage name (e.g. "AUTOMATION COE (SV-Specific: P3C1.3.RB1)" -> "AUTOMATION COE"). Repeats so
+    multiple trailing groups are removed; idempotent; never returns empty (keeps the original if
+    stripping would empty it). Used at provision (canonical) and read (defensive) so the atlas page
+    and the mission-control value-chain lens both show clean, mergeable stage names."""
+    out = (name or "").strip()
+    while True:
+        nxt = _TRAIL_PAREN.sub("", out).strip()
+        if nxt == out or not nxt:
+            break
+        out = nxt
+    return out or (name or "").strip()
+
 
 def _tokens(name: str) -> frozenset[str]:
     """Normalised, meaning-bearing token set for a cluster name."""

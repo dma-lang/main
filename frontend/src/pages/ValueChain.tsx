@@ -1,13 +1,13 @@
 // Value chain atlas (A3) — the catalogue's REAL value chain, rendered as the prototype's
 // left-to-right ORDERED PIPELINE. Stages come from the v7 VC-mapping sheet (cat_<v>.subcap_vcc),
-// per subvertical, in chain order (stage_ord) — cascaded v7 -> v5 at provision. The chain is
-// per-subvertical by nature, so the page renders ONE subvertical's pipeline, driven by the header
-// subvertical toggle (if 'All SV', the backend resolves the most-covered one and tells us which).
-// The stage NAME is the headline; the VCC code is only an internal id. Pillar pills are the header
+// per subvertical, in chain order (stage_ord) — cascaded v7 -> v5 at provision. Stage labels are
+// cleaned of "(SV-Specific: …)"-style noise and merged. When a subvertical is picked the page shows
+// that one chain; when 'All SV' is picked it lists EVERY subvertical's chain (delivery-ranked). The
+// stage NAME is the headline; the VCC code is only an internal id. Pillar pills are the header
 // pillar. Click a stage to list its subcaps (peek / deep-dive).
 import { useEffect, useState } from 'react';
 
-import type { ValueChainCluster } from '../api/client';
+import type { ValueChainCluster, ValueChainGroup } from '../api/client';
 import { useValueChain } from '../api/queries';
 import { Dropdown, Empty, Page, PillarDot } from '../components/primitives';
 import { go, openPeek } from '../lib/events';
@@ -76,90 +76,40 @@ function RadialWheel({ segs }: { segs: ValueChainCluster[] }) {
   );
 }
 
-export function ValueChain() {
-  const ui = useUi();
-  const version = ui.version;
-  const pillar = ui.pillar; // header-linked
-  const setPillar = ui.setPillar;
-  const [radial, setRadial] = useState(false);
-  const [open, setOpen] = useState<string | null>(null);
-
-  const res = useValueChain(version, pillar, ui.sv);
-  const data = res.data;
-  const clusters = data?.clusters ?? [];
-  const real = data?.source === 'catalogue_vc_mapping';
-  const resolvedSv = data?.resolved_sv ?? '';
-  const svAuto = real && (!ui.sv || ui.sv === 'all'); // header SV is 'All' -> backend auto-picked
-
-  // focus the first stage when the version / pillar / resolved subvertical changes
-  useEffect(() => setOpen(clusters[0]?.code ?? null), [version, pillar, resolvedSv]); // eslint-disable-line react-hooks/exhaustive-deps
+// One subvertical's ordered pipeline + its inline stage drilldown. Self-contained so the 'All SV'
+// view can stack one section per subvertical, each with its own open stage.
+function ChainSection({
+  chain,
+  radial,
+  showHeader,
+}: {
+  chain: ValueChainGroup;
+  radial: boolean;
+  showHeader: boolean;
+}) {
+  const clusters = chain.clusters;
+  const [open, setOpen] = useState<string | null>(clusters[0]?.code ?? null);
+  // re-focus the first stage when the underlying chain changes (version / pillar / sv switch)
+  useEffect(() => setOpen(clusters[0]?.code ?? null), [chain.sv, clusters.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const current = clusters.find((c) => c.code === open) ?? clusters[0] ?? null;
 
   return (
-    <Page
-      eyebrow="A · Explore"
-      title="Value chain atlas"
-      intro={
-        real
-          ? "The catalogue's own value chain — the real, named stages for a subvertical, in order, from the v7 VC-mapping sheet (cascaded to versions without their own, e.g. v5). Switch the subvertical in the header to see that industry's chain."
-          : "Value-chain stages derived live from this version's own capability structure — used only when a version ships no VC mapping of its own."
-      }
-      actions={
-        <button className={'btn sm ' + (radial ? 'primary' : 'ghost')} onClick={() => setRadial((r) => !r)}>
-          <Icon n="route" s={13} /> {radial ? 'Pipeline' : 'Radial'}
-        </button>
-      }
-    >
-      <div className="row wrap gap8" style={{ marginBottom: 14, alignItems: 'center' }}>
-        <div className="pillseg">
-          {PILLARS.map((p) => (
-            <button key={p} className={pillar === p ? 'on' : ''} onClick={() => setPillar(p)}>
-              {p === 'all' ? 'All pillars' : p}
-            </button>
-          ))}
+    <div style={{ marginBottom: showHeader ? 22 : 0 }}>
+      {showHeader && (
+        <div className="row gap8" style={{ marginBottom: 8, alignItems: 'baseline' }}>
+          <Icon n="route" s={13} cls="" style={{ color: 'var(--interactive)' }} />
+          <b style={{ fontSize: 14 }}>{SV_NAME[chain.sv] ?? chain.sv} value chain</b>
+          <span className="muted" style={{ fontSize: 11.5 }}>
+            {clusters.length} stages · {chain.total_subcaps} subcaps
+          </span>
         </div>
-        {/* pick the value chain directly from the subverticals in the VC mapping (the page no
-            longer auto-locks to one — choose 'All SV' to let it resolve the most-covered) */}
-        {real && (data?.subverticals?.length ?? 0) > 0 && (
-          <Dropdown
-            label="All SV"
-            value={ui.sv}
-            options={[
-              { v: 'all', l: 'All SV — most-covered' },
-              ...(data?.subverticals ?? []).map((c) => ({ v: c, l: SV_NAME[c] ?? c })),
-            ]}
-            onChange={ui.setSv}
-          />
-        )}
-        {real && resolvedSv && (
-          <span className="chip teal" style={{ fontSize: 11 }}>
-            <Icon n="route" s={11} /> {SV_NAME[resolvedSv] ?? resolvedSv} value chain
-          </span>
-        )}
-        {svAuto && (
-          <span className="muted" style={{ fontSize: 11 }}>
-            auto-picked the most-covered chain — choose a subvertical above to pin it
-          </span>
-        )}
-        {data && (
-          <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>
-            {clusters.length} stages · {data.total_subcaps} subcaps
-          </span>
-        )}
-      </div>
-
-      {clusters.length === 0 ? (
-        <Empty
-          icon="route"
-          title="No value chain yet"
-          desc="Provision a catalogue version (upload its workbooks) and its value-chain stages appear here, in order, per subvertical."
-        />
-      ) : radial ? (
+      )}
+      {radial ? (
         <RadialWheel segs={clusters} />
       ) : (
         <>
           {/* the ORDERED pipeline — left-to-right, stage NAME headline, ordinal not code */}
-          <div className="card pad" style={{ marginBottom: 14, overflowX: 'auto' }}>
+          <div className="card pad" style={{ marginBottom: 12, overflowX: 'auto' }}>
             <div className="row" style={{ gap: 0, alignItems: 'stretch', minWidth: 'min-content' }}>
               {clusters.map((c, i) => {
                 const on = c.code === open;
@@ -212,7 +162,7 @@ export function ValueChain() {
                   <b style={{ fontSize: 15 }}>{current.name}</b>
                   {current.pillar && <span className="chip soft">{current.pillar}</span>}
                   <span className="muted" style={{ fontSize: 12 }}>
-                    {current.count} subcaps{real && resolvedSv ? ` · ${SV_NAME[resolvedSv] ?? resolvedSv}` : ''}
+                    {current.count} subcaps · {SV_NAME[chain.sv] ?? chain.sv}
                   </span>
                 </div>
               </div>
@@ -237,6 +187,83 @@ export function ValueChain() {
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+export function ValueChain() {
+  const ui = useUi();
+  const version = ui.version;
+  const pillar = ui.pillar; // header-linked
+  const setPillar = ui.setPillar;
+  const [radial, setRadial] = useState(false);
+
+  const res = useValueChain(version, pillar, ui.sv);
+  const data = res.data;
+  const real = data?.source === 'catalogue_vc_mapping';
+  // prefer the per-subvertical chains; fall back to wrapping the flat clusters (derived path)
+  const chains: ValueChainGroup[] =
+    data?.chains && data.chains.length > 0
+      ? data.chains
+      : data && data.clusters.length > 0
+        ? [{ sv: data.resolved_sv || ui.sv || 'all', clusters: data.clusters, total_subcaps: data.total_subcaps }]
+        : [];
+  const multi = chains.length > 1;
+
+  return (
+    <Page
+      eyebrow="A · Explore"
+      title="Value chain atlas"
+      intro={
+        real
+          ? "The catalogue's own value chain — the real, named stages for each subvertical, in order, from the v7 VC-mapping sheet (cascaded to versions without their own, e.g. v5). Pick a subvertical in the header to focus one chain, or 'All SV' to see every industry's chain."
+          : "Value-chain stages derived live from this version's own capability structure — used only when a version ships no VC mapping of its own."
+      }
+      actions={
+        <button className={'btn sm ' + (radial ? 'primary' : 'ghost')} onClick={() => setRadial((r) => !r)}>
+          <Icon n="route" s={13} /> {radial ? 'Pipeline' : 'Radial'}
+        </button>
+      }
+    >
+      <div className="row wrap gap8" style={{ marginBottom: 14, alignItems: 'center' }}>
+        <div className="pillseg">
+          {PILLARS.map((p) => (
+            <button key={p} className={pillar === p ? 'on' : ''} onClick={() => setPillar(p)}>
+              {p === 'all' ? 'All pillars' : p}
+            </button>
+          ))}
+        </div>
+        {/* pick the value chain directly from the subverticals in the VC mapping; 'All SV' lists
+            every subvertical's chain rather than locking to one */}
+        {real && (data?.subverticals?.length ?? 0) > 0 && (
+          <Dropdown
+            label="All SV"
+            value={ui.sv}
+            options={[
+              { v: 'all', l: 'All SV — every chain' },
+              ...(data?.subverticals ?? []).map((c) => ({ v: c, l: SV_NAME[c] ?? c })),
+            ]}
+            onChange={ui.setSv}
+          />
+        )}
+        {data && chains.length > 0 && (
+          <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>
+            {multi
+              ? `${chains.length} subverticals · ${data.total_subcaps} subcaps`
+              : `${chains[0].clusters.length} stages · ${data.total_subcaps} subcaps`}
+          </span>
+        )}
+      </div>
+
+      {chains.length === 0 ? (
+        <Empty
+          icon="route"
+          title="No value chain yet"
+          desc="Provision a catalogue version (upload its workbooks) and its value-chain stages appear here, in order, per subvertical."
+        />
+      ) : (
+        chains.map((ch) => <ChainSection key={ch.sv} chain={ch} radial={radial} showHeader={multi} />)
       )}
     </Page>
   );
