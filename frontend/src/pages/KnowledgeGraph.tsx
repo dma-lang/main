@@ -1,9 +1,9 @@
 // Knowledge graph (B3 · admin) — the structural relationships the flat catalogue hides, wired to
 // GET /api/catalogue/{v}/kg?subcap=. Layer A (solid) is a DETERMINISTIC projection of the link
 // tables (platforms used, offerings mapped, sibling subcaps sharing a platform) — every edge traces
-// to a real row. Layer B (dashed) are AI-proposed pending_edges, never rendered as fact and gated
-// in Change flags. Admin-only. Ported from the prototype KnowledgeGraph.
-import { useMemo, useState } from 'react';
+// to a real row. Layer B (dashed) are AI-proposed pending_edges carrying a confidence score, never
+// rendered as fact and gated in Change flags. Click a node to label its edges; double-click to open.
+import { useEffect, useMemo, useState } from 'react';
 
 import type { KgNode } from '../api/client';
 import { useKg, useSubcaps } from '../api/queries';
@@ -25,6 +25,7 @@ export function KnowledgeGraph() {
   const subs = useSubcaps(ui.version);
   const [layer, setLayer] = useState('full');
   const [center, setCenter] = useState('');
+  const [sel, setSel] = useState<string | null>(null);
 
   const options = (subs.data ?? []).slice(0, 40).map((x) => ({
     v: x.id,
@@ -32,17 +33,14 @@ export function KnowledgeGraph() {
   }));
   const cur = center || options[0]?.v || '';
   const kg = useKg(ui.version, isAdmin ? cur : null);
+  useEffect(() => setSel(null), [cur, layer]);
 
   const showB = layer !== 'A';
   const edges = kg.data?.edges ?? [];
   const pending = showB ? kg.data?.pending ?? [] : [];
   const centerId = kg.data?.center ?? '';
-  // Only draw nodes reachable by a currently-visible edge (or the centre), so toggling to
-  // Deterministic doesn't leave a Layer-B-only neighbour floating with no edge.
   const visibleNodes = useMemo(() => {
-    const vis = showB
-      ? [...(kg.data?.edges ?? []), ...(kg.data?.pending ?? [])]
-      : kg.data?.edges ?? [];
+    const vis = showB ? [...(kg.data?.edges ?? []), ...(kg.data?.pending ?? [])] : kg.data?.edges ?? [];
     const connected = new Set<string>([kg.data?.center ?? '']);
     vis.forEach((e) => {
       connected.add(e.source);
@@ -51,7 +49,6 @@ export function KnowledgeGraph() {
     return (kg.data?.nodes ?? []).filter((n) => connected.has(n.id));
   }, [kg.data, showB]);
 
-  // Radial layout over the visible nodes: centre in the middle, neighbours evenly spaced on a ring.
   const layout = useMemo(() => {
     const W = 620;
     const H = 460;
@@ -68,8 +65,8 @@ export function KnowledgeGraph() {
     return { W, H, pos };
   }, [visibleNodes, centerId]);
 
-  const nodeById = new Map(visibleNodes.map((n) => [n.id, n]));
-  const onNode = (n: KgNode) => {
+  const onNode = (n: KgNode) => setSel((s) => (s === n.id ? null : n.id));
+  const navNode = (n: KgNode) => {
     if (n.kind === 'subcap') openPeek(n.id);
     else if (n.kind === 'platform') go('platforms');
   };
@@ -78,7 +75,7 @@ export function KnowledgeGraph() {
     <Page
       eyebrow="B · Catalogue tools · admin"
       title="Knowledge graph"
-      intro="Reveal the structural relationships the flat catalogue hides. Solid edges are deterministic (Layer A); dashed orange edges are AI-proposed (semantic-similarity / shared-feature), gated in the Change flags inbox before commit."
+      intro="Reveal the structural relationships the flat catalogue hides. Solid edges are deterministic (Layer A); dashed orange edges are AI-proposed (semantic-similarity / shared-feature) with a confidence score, gated in the Change flags inbox before commit."
       actions={
         <div className="row gap8">
           <Dropdown value={cur} icon="branch" options={options} onChange={(v) => setCenter(v)} />
@@ -119,17 +116,33 @@ export function KnowledgeGraph() {
                     const b = layout.pos.get(e.target);
                     if (!a || !b) return null;
                     const isB = e.layer === 'B_proposed';
+                    const inc = sel != null && (e.source === sel || e.target === sel);
+                    const dim = sel != null && !inc;
                     return (
-                      <line
-                        key={i}
-                        x1={a.x}
-                        y1={a.y}
-                        x2={b.x}
-                        y2={b.y}
-                        stroke={isB ? 'var(--z-orange)' : 'var(--border-medium)'}
-                        strokeWidth={isB ? 1.5 : 1.5}
-                        strokeDasharray={isB ? '5 4' : undefined}
-                      />
+                      <g key={i} opacity={dim ? 0.18 : 1}>
+                        <line
+                          x1={a.x}
+                          y1={a.y}
+                          x2={b.x}
+                          y2={b.y}
+                          stroke={isB ? 'var(--z-orange)' : 'var(--border-medium)'}
+                          strokeWidth={inc ? 2.5 : 1.5}
+                          strokeDasharray={isB ? '5 4' : undefined}
+                        />
+                        {inc && (
+                          <text
+                            x={(a.x + b.x) / 2}
+                            y={(a.y + b.y) / 2 - 3}
+                            fontSize="8.5"
+                            fontWeight="700"
+                            fill={isB ? 'var(--state-warn-text)' : 'var(--text-tertiary)'}
+                            textAnchor="middle"
+                          >
+                            {e.kind.replace(/_/g, ' ')}
+                            {e.score != null ? ` · ${e.score.toFixed(2)}` : ''}
+                          </text>
+                        )}
+                      </g>
                     );
                   })}
                   {visibleNodes.map((n) => {
@@ -138,7 +151,15 @@ export function KnowledgeGraph() {
                     const isCenter = n.id === kg.data!.center;
                     const r = isCenter ? 26 : n.kind === 'subcap' ? 18 : 14;
                     return (
-                      <g key={n.id} style={{ cursor: 'pointer' }} onClick={() => onNode(n)}>
+                      <g
+                        key={n.id}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => onNode(n)}
+                        onDoubleClick={() => navNode(n)}
+                      >
+                        {n.id === sel && (
+                          <circle cx={p.x} cy={p.y} r={r + 4} fill="none" stroke="var(--interactive)" strokeWidth="2" />
+                        )}
                         <circle
                           cx={p.x}
                           cy={p.y}
@@ -148,13 +169,7 @@ export function KnowledgeGraph() {
                           strokeWidth="2"
                           opacity={isCenter ? 1 : 0.88}
                         />
-                        <text
-                          x={p.x}
-                          y={p.y + r + 11}
-                          fontSize="9"
-                          fill="var(--text-secondary)"
-                          textAnchor="middle"
-                        >
+                        <text x={p.x} y={p.y + r + 11} fontSize="9" fill="var(--text-secondary)" textAnchor="middle">
                           {n.label.length > 18 ? n.label.slice(0, 17) + '…' : n.label}
                         </text>
                       </g>
@@ -178,6 +193,7 @@ export function KnowledgeGraph() {
                 <span style={{ width: 16, height: 0, borderTop: '2px dashed var(--z-orange)' }} />
                 AI-proposed
               </span>
+              <span className="muted">· click a node to label its edges</span>
             </div>
           </div>
           <div style={{ display: 'grid', gap: 14 }}>
@@ -211,16 +227,11 @@ export function KnowledgeGraph() {
                 {visibleNodes
                   .filter((n) => n.kind === 'subcap' && n.id !== centerId)
                   .map((n) => (
-                    <div
-                      key={n.id}
-                      className="sclink mono"
-                      style={{ fontSize: 11.5 }}
-                      onClick={() => openPeek(n.id)}
-                    >
+                    <div key={n.id} className="sclink mono" style={{ fontSize: 11.5 }} onClick={() => openPeek(n.id)}>
                       {n.id} · {n.label.slice(0, 22)}
                     </div>
                   ))}
-                {nodeById && (kg.data?.stats.siblings ?? 0) === 0 && (
+                {(kg.data?.stats.siblings ?? 0) === 0 && (
                   <div className="muted" style={{ fontSize: 12 }}>
                     No subcap shares a platform with this one yet.
                   </div>
@@ -231,13 +242,36 @@ export function KnowledgeGraph() {
               <div className="h3" style={{ marginBottom: 8 }}>
                 Pending edges ({kg.data?.stats.pending ?? 0})
               </div>
-              <div className="muted" style={{ fontSize: 12 }}>
-                AI-proposed Layer-B edges queue here for review before commit. Resolve them in the
-                Change flags inbox — nothing is written as fact ungated.
-              </div>
+              {pending.length > 0 ? (
+                <div style={{ display: 'grid', gap: 7, marginBottom: 10 }}>
+                  {pending.map((e, i) => (
+                    <div key={i} className="card" style={{ padding: '8px 10px' }}>
+                      <div className="between" style={{ marginBottom: 4 }}>
+                        <span className="claim hypothesis">AI proposed</span>
+                        {e.score != null && (
+                          <span className="num" style={{ fontSize: 11, fontWeight: 700, color: 'var(--state-warn-text)' }}>
+                            {e.score.toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mono" style={{ fontSize: 10.5 }}>
+                        {e.source} → {e.target}
+                      </div>
+                      <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>
+                        {e.kind.replace(/_/g, ' ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="muted" style={{ fontSize: 12 }}>
+                  AI-proposed Layer-B edges queue here for review before commit. Resolve them in the
+                  Change flags inbox — nothing is written as fact ungated.
+                </div>
+              )}
               <button
                 className="btn primary sm"
-                style={{ width: '100%', justifyContent: 'center', marginTop: 10 }}
+                style={{ width: '100%', justifyContent: 'center' }}
                 onClick={() => go('change-flags')}
               >
                 Review in change flags <Icon n="arrowR" s={14} />

@@ -207,12 +207,20 @@ class PlatformSubcap(BaseModel):
     name: str
 
 
+class PlatformUseCase(BaseModel):
+    """A use-case archetype delivered on a platform's subcaps, with its delivered-story count."""
+
+    archetype: str
+    stories: int
+
+
 class PlatformDetail(BaseModel):
     l3_id: str
     name: str
     vendor: str | None = None
     category: str | None = None
     subcaps: list[PlatformSubcap]
+    use_cases: list[PlatformUseCase] = []
 
 
 class VendorRow(BaseModel):
@@ -223,6 +231,16 @@ class VendorRow(BaseModel):
     p2: int
     p3: int
     p4: int
+    stories: int = 0  # distinct delivered Jira stories across the vendor's subcaps (this version)
+
+
+class VendorCellSubcap(BaseModel):
+    """A subcap on a vendor's platforms in one pillar — the heatmap-cell drilldown facet."""
+
+    id: str
+    name: str
+    pillar: str
+    stories: int
 
 
 class UseCaseRow(BaseModel):
@@ -233,11 +251,15 @@ class UseCaseRow(BaseModel):
     subcap_name: str
     pillar: str
     category: str
+    cluster: str | None = None  # the L1 capability the use case's subcap belongs to
+    maturity: str | None = None  # the owning subcap's tier (M-level proxy)
+    n_stories: int = 0  # delivered Jira stories on the owning subcap (this version)
 
 
 class ArchetypeFacet(BaseModel):
     archetype: str
     count: int
+    n_stories: int = 0  # delivery footprint = summed stories of the archetype's use cases
 
 
 class UseCasePage(BaseModel):
@@ -862,8 +884,9 @@ class KgNode(BaseModel):
 class KgEdge(BaseModel):
     source: str
     target: str
-    kind: str  # uses_platform | maps_to_offering | shares_platform
+    kind: str  # uses_platform | maps_to_offering | shares_platform | semantically_similar
     layer: str  # A_deterministic | B_proposed
+    score: float | None = None  # Layer-B proposal confidence (pending_edge.weight); None for A
 
 
 class KgResp(BaseModel):
@@ -952,7 +975,8 @@ async def knowledge_graph(
                 await conn.execute(
                     text(
                         "SELECT fn.ref_id AS source, fn.label AS source_label, "
-                        "tn.ref_id AS target, tn.label AS target_label, pe.kind::text AS kind "
+                        "tn.ref_id AS target, tn.label AS target_label, pe.kind::text AS kind, "
+                        "pe.weight AS score "
                         "FROM control.pending_edge pe "
                         "JOIN control.kg_node fn ON fn.node_id = pe.from_node "
                         "JOIN control.kg_node tn ON tn.node_id = pe.to_node "
@@ -987,7 +1011,13 @@ async def knowledge_graph(
     existing_ids = {n.id for n in nodes}
     for p in pend:
         pending.append(
-            KgEdge(source=p["source"], target=p["target"], kind=p["kind"], layer="B_proposed")
+            KgEdge(
+                source=p["source"],
+                target=p["target"],
+                kind=p["kind"],
+                layer="B_proposed",
+                score=float(p["score"]) if p["score"] is not None else None,
+            )
         )
         # add the proposed neighbour subcap node(s) so the dashed edge connects to a drawn node
         for ref, label in ((p["source"], p["source_label"]), (p["target"], p["target_label"])):
@@ -1798,9 +1828,11 @@ async def list_platforms(
 async def platform_detail(
     version: str, l3_id: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> PlatformDetail:
-    s = _schema(await resolve_version(version))
+    v = await resolve_version(version)
+    s = _schema(v)
     async with _engine().connect() as conn:
         ench_s = await _enrichment_schema(conn, s, "l3_platform")  # inherit reference when empty
+        uc_s = await _enrichment_schema(conn, s, "use_case")
         meta_sql = text(
             f"SELECT l.l3_id, l.name, v.name AS vendor, l.category FROM {ench_s}.l3_platform l "
             f"LEFT JOIN {ench_s}.vendor v ON v.vendor_id = l.vendor_id WHERE l.l3_id = :lid"
@@ -1811,12 +1843,25 @@ async def platform_detail(
             f"JOIN {ench_s}.subcap s ON s.subcap_id = sp.subcap_id "
             "WHERE sp.l3_id = :lid ORDER BY sp.subcap_id"
         )
+        # top use-case archetypes on this platform's subcaps, ranked by this version's delivery
+        uc_sql = text(
+            "SELECT uc.archetype, count(DISTINCT scl.story_key)::int AS stories "
+            f"FROM {ench_s}.subcap_platform sp "
+            f"JOIN {uc_s}.use_case uc ON uc.subcap_id = sp.subcap_id "
+            "LEFT JOIN control.story_catalogue_link scl "
+            "  ON scl.subcap_id = sp.subcap_id AND scl.version_id = :ver "
+            "WHERE sp.l3_id = :lid AND uc.archetype IS NOT NULL "
+            "GROUP BY uc.archetype ORDER BY stories DESC, uc.archetype LIMIT 5"
+        )
         meta = (await conn.execute(meta_sql, {"lid": l3_id})).mappings().first()
         if meta is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"platform '{l3_id}' not found")
         subs = (await conn.execute(subs_sql, {"lid": l3_id})).mappings().all()
+        ucs = (await conn.execute(uc_sql, {"lid": l3_id, "ver": v.version_id})).mappings().all()
     return PlatformDetail(
-        **dict(meta), subcaps=[PlatformSubcap.model_validate(dict(r)) for r in subs]
+        **dict(meta),
+        subcaps=[PlatformSubcap.model_validate(dict(r)) for r in subs],
+        use_cases=[PlatformUseCase.model_validate(dict(r)) for r in ucs],
     )
 
 
@@ -1826,22 +1871,71 @@ async def list_vendors(
 ) -> list[VendorRow]:
     """Per-vendor deduped subcap coverage by pillar (the Platform catalog heatmap). Inherits the
     reference's platform enrichment when this version has none of its own."""
-    s = _schema(await resolve_version(version))
+    v = await resolve_version(version)
+    s = _schema(v)
     async with _engine().connect() as conn:
         ench_s = await _enrichment_schema(conn, s, "l3_platform")
         sql = text(
+            # dvs = distinct (vendor, subcap) pairs (dedupe a subcap across a vendor's platforms);
+            # vstory then sums this version's per-subcap delivery over that deduped set.
+            "WITH dvs AS ("
+            "  SELECT DISTINCT coalesce(v.name, 'Unattributed') AS vendor, sp.subcap_id "
+            f"  FROM {ench_s}.l3_platform l "
+            f"  LEFT JOIN {ench_s}.vendor v ON v.vendor_id = l.vendor_id "
+            f"  JOIN {ench_s}.subcap_platform sp ON sp.l3_id = l.l3_id"
+            "), vstory AS ("
+            "  SELECT dvs.vendor, coalesce(sum(stc.n), 0)::int AS stories FROM dvs "
+            "  LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
+            "    WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = dvs.subcap_id "
+            "  GROUP BY dvs.vendor"
+            ") "
             "SELECT coalesce(v.name, 'Unattributed') AS vendor, count(DISTINCT l.l3_id) AS plats, "
             "count(DISTINCT sp.subcap_id) AS subcap_count, "
             "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P1') AS p1, "
             "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P2') AS p2, "
             "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P3') AS p3, "
-            "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P4') AS p4 "
+            "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P4') AS p4, "
+            "coalesce(vs.stories, 0) AS stories "
             f"FROM {ench_s}.l3_platform l LEFT JOIN {ench_s}.vendor v ON v.vendor_id = l.vendor_id "
             f"LEFT JOIN {ench_s}.subcap_platform sp ON sp.l3_id = l.l3_id "
-            "GROUP BY coalesce(v.name, 'Unattributed') ORDER BY subcap_count DESC, vendor"
+            "LEFT JOIN vstory vs ON vs.vendor = coalesce(v.name, 'Unattributed') "
+            "GROUP BY coalesce(v.name, 'Unattributed'), vs.stories "
+            "ORDER BY subcap_count DESC, vendor"
         )
-        rows = (await conn.execute(sql)).mappings().all()
+        rows = (await conn.execute(sql, {"ver": v.version_id})).mappings().all()
     return [VendorRow.model_validate(dict(r)) for r in rows]
+
+
+@router.get("/{version}/vendors/{vendor}/cell")
+async def vendor_cell(
+    version: str,
+    vendor: str,
+    pillar: str = Query(...),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> list[VendorCellSubcap]:
+    """Heatmap-cell drilldown: a vendor's platform subcaps in one pillar, delivery-ranked."""
+    v = await resolve_version(version)
+    s = _schema(v)
+    async with _engine().connect() as conn:
+        ench_s = await _enrichment_schema(conn, s, "l3_platform")
+        sql = text(
+            "SELECT DISTINCT sp.subcap_id AS id, sc.name, left(sp.subcap_id, 2) AS pillar, "
+            "coalesce(stc.n, 0)::int AS stories "
+            f"FROM {ench_s}.subcap_platform sp "
+            f"JOIN {ench_s}.l3_platform l ON l.l3_id = sp.l3_id "
+            f"LEFT JOIN {ench_s}.vendor v ON v.vendor_id = l.vendor_id "
+            f"JOIN {ench_s}.subcap sc ON sc.subcap_id = sp.subcap_id "
+            "LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
+            "  WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = sp.subcap_id "
+            "WHERE coalesce(v.name, 'Unattributed') = :vendor AND left(sp.subcap_id, 2) = :pillar "
+            "ORDER BY stories DESC, id LIMIT 12"
+        )
+        rows = (
+            (await conn.execute(sql, {"ver": v.version_id, "vendor": vendor, "pillar": pillar}))
+            .mappings()
+            .all()
+        )
+    return [VendorCellSubcap.model_validate(dict(r)) for r in rows]
 
 
 @router.get("/{version}/use-cases")
@@ -1851,22 +1945,28 @@ async def list_use_cases(
     category: str = Query(""),
     archetype: str = Query(""),
     q: str = Query(""),
+    sort: str = Query("delivery"),
     page: int = Query(1, ge=1),
     size: int = Query(12, ge=1, le=60),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> UseCasePage:
-    """Actual use cases, filterable by pillar / area / type / text (Use case explorer). Inherits the
-    reference's use cases when this version has none of its own."""
-    s = _schema(await resolve_version(version))
+    """Actual use cases, delivery-ranked, filterable by pillar / area / type / text (Use case
+    explorer). Inherits the reference's use cases when this version has none of its own."""
+    v = await resolve_version(version)
+    s = _schema(v)
     async with _engine().connect() as conn:
         ench_s = await _enrichment_schema(conn, s, "use_case")
         joins = (
             f"FROM {ench_s}.use_case uc "
             f"JOIN {ench_s}.subcap sc ON sc.subcap_id = uc.subcap_id "
             f"JOIN {ench_s}.capability cap ON cap.capability_id = sc.capability_id "
-            f"JOIN {ench_s}.category cat ON cat.category_id = cap.category_id"
+            f"JOIN {ench_s}.category cat ON cat.category_id = cap.category_id "
+            "LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
+            "WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = uc.subcap_id"
         )
-        return await _use_cases_page(conn, joins, pillar, category, archetype, q, page, size)
+        return await _use_cases_page(
+            conn, joins, pillar, category, archetype, q, v.version_id, sort, page, size
+        )
 
 
 async def _use_cases_page(
@@ -1876,6 +1976,8 @@ async def _use_cases_page(
     category: str,
     archetype: str,
     q: str,
+    ver: str,
+    sort: str,
     page: int,
     size: int,
 ) -> UseCasePage:
@@ -1895,20 +1997,24 @@ async def _use_cases_page(
         "archetype": archetype,
         "q": q,
         "qlike": f"%{q}%",
+        "ver": ver,
     }
+    order = "sc.name, uc.use_case_id" if sort == "alpha" else "n_stories DESC, uc.use_case_id"
     items_sql = text(
         "SELECT uc.use_case_id, uc.archetype, uc.description, uc.subcap_id, "
-        "sc.name AS subcap_name, left(uc.subcap_id, 2) AS pillar, cat.name AS category "
+        "sc.name AS subcap_name, left(uc.subcap_id, 2) AS pillar, cat.name AS category, "
+        "cap.name AS cluster, sc.tier AS maturity, coalesce(stc.n, 0)::int AS n_stories "
         + joins
         + where
-        + " ORDER BY uc.use_case_id LIMIT :size OFFSET :off"
+        + f" ORDER BY {order} LIMIT :size OFFSET :off"
     )
     count_sql = text("SELECT count(*) " + joins + where)
     facet_sql = text(
-        "SELECT uc.archetype, count(*) AS count "
+        "SELECT uc.archetype, count(*) AS count, "
+        "coalesce(sum(coalesce(stc.n, 0)), 0)::int AS n_stories "
         + joins
         + facet_where
-        + " GROUP BY uc.archetype ORDER BY count DESC, uc.archetype"
+        + " GROUP BY uc.archetype ORDER BY n_stories DESC, count DESC, uc.archetype"
     )
     total = (await conn.execute(count_sql, params)).scalar() or 0
     off = (page - 1) * size

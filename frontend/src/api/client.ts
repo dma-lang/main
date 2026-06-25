@@ -125,8 +125,9 @@ export interface KgNode {
 export interface KgEdge {
   source: string;
   target: string;
-  kind: string;
+  kind: string; // relation: uses_platform | maps_to_offering | shares_platform | semantically_similar
   layer: string;
+  score?: number | null; // Layer-B proposal confidence (pending_edge.weight)
 }
 
 export interface KgResp {
@@ -929,12 +930,18 @@ export interface PlatformSubcap {
   name: string;
 }
 
+export interface PlatformUseCase {
+  archetype: string;
+  stories: number; // delivered Jira stories on this platform's subcaps via this archetype
+}
+
 export interface PlatformDetail {
   l3_id: string;
   name: string;
   vendor: string | null;
   category: string | null;
   subcaps: PlatformSubcap[];
+  use_cases: PlatformUseCase[];
 }
 
 export interface VendorRow {
@@ -945,6 +952,14 @@ export interface VendorRow {
   p2: number;
   p3: number;
   p4: number;
+  stories: number; // distinct delivered stories across the vendor's subcaps
+}
+
+export interface VendorCellSubcap {
+  id: string;
+  name: string;
+  pillar: string;
+  stories: number;
 }
 
 export interface UseCaseRow {
@@ -955,6 +970,9 @@ export interface UseCaseRow {
   subcap_name: string;
   pillar: string;
   category: string;
+  cluster: string | null;
+  maturity: string | null; // owning subcap tier
+  n_stories: number; // delivered stories on the owning subcap
 }
 
 export interface UseCasePage {
@@ -962,7 +980,7 @@ export interface UseCasePage {
   page: number;
   size: number;
   items: UseCaseRow[];
-  archetypes: { archetype: string; count: number }[];
+  archetypes: { archetype: string; count: number; n_stories: number }[];
 }
 
 export interface UseCaseQuery {
@@ -970,6 +988,7 @@ export interface UseCaseQuery {
   category?: string;
   archetype?: string;
   q?: string;
+  sort?: string; // 'delivery' (default) | 'alpha'
   page?: number;
   size?: number;
 }
@@ -1168,6 +1187,10 @@ export const api = {
   platform: (v: string, id: string): Promise<PlatformDetail> =>
     http<PlatformDetail>(`/api/catalogue/${v}/platforms/${id}`),
   vendors: (v: string): Promise<VendorRow[]> => http<VendorRow[]>(`/api/catalogue/${v}/vendors`),
+  vendorCell: (v: string, vendor: string, pillar: string): Promise<VendorCellSubcap[]> =>
+    http<VendorCellSubcap[]>(
+      `/api/catalogue/${v}/vendors/${encodeURIComponent(vendor)}/cell?pillar=${pillar}`,
+    ),
   lifecycle: (v: string): Promise<LifecycleSummary> =>
     http<LifecycleSummary>(`/api/catalogue/${v}/lifecycle`),
   chat: (question: string, version: string): Promise<ChatResponse> =>
@@ -1182,6 +1205,7 @@ export const api = {
     if (p.category) qs.set('category', p.category);
     if (p.archetype) qs.set('archetype', p.archetype);
     if (p.q) qs.set('q', p.q);
+    if (p.sort) qs.set('sort', p.sort);
     qs.set('page', String(p.page ?? 1));
     qs.set('size', String(p.size ?? 12));
     return http<UseCasePage>(`/api/catalogue/${v}/use-cases?${qs.toString()}`);

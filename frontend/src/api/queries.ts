@@ -44,6 +44,7 @@ import {
   type SubcapNode,
   type UseCasePage,
   type UseCaseQuery,
+  type VendorCellSubcap,
   type VendorRow,
   type VersionInfo,
 } from './client';
@@ -239,6 +240,13 @@ export const usePlatform = (version: string, id: string | null) =>
     queryKey: ['platform', version, id],
     queryFn: () => api.platform(version, id ?? ''),
     enabled: !!version && !!id,
+  });
+
+export const useVendorCell = (version: string, vendor: string | null, pillar: string | null) =>
+  useQuery<VendorCellSubcap[]>({
+    queryKey: ['vendorCell', version, vendor, pillar],
+    queryFn: () => api.vendorCell(version, vendor ?? '', pillar ?? ''),
+    enabled: !!version && !!vendor && !!pillar,
   });
 
 export const useLifecycle = (version: string) =>

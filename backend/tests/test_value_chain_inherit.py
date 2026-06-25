@@ -138,6 +138,16 @@ def test_v5_b_group_pages_inherit_enrichment(client: TestClient) -> None:
     assert len(vendors) > 10
     ucs = client.get("/api/catalogue/v5/use-cases").json()
     assert ucs["total"] > 100 and ucs["items"]  # inherited use cases
+    # vendor delivery totals (new) + a platform's top use-case archetypes (new) + the cell drilldown
+    from urllib.parse import quote
+
+    assert any(v.get("stories", 0) > 0 for v in vendors)
+    pid = next(p["l3_id"] for p in plats if p["subcap_count"] > 0)
+    det = client.get(f"/api/catalogue/v5/platforms/{pid}").json()
+    assert isinstance(det.get("use_cases"), list)
+    vname = quote(max(vendors, key=lambda v: v["subcap_count"])["vendor"])
+    cell = client.get(f"/api/catalogue/v5/vendors/{vname}/cell?pillar=P4").json()
+    assert isinstance(cell, list)
     # KG Layer A for a real subcap: platform/sibling nodes + edges inherited
     kg = client.get("/api/catalogue/v5/kg?subcap=P4C1.1.1").json()
     assert len(kg["nodes"]) > 1 and kg["edges"]  # subcap + inherited platform/offering nodes
