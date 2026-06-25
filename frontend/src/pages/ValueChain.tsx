@@ -232,12 +232,19 @@ function ChainSection({
 }
 
 // Rollup view — the 8 canonical MECE stages as a delivery column chart + a selected-stage detail.
-function OverviewRollup({ rollup, hasDates }: { rollup: ValueChainStageRollup[]; hasDates: boolean }) {
+const CONF_BANDS: [keyof ValueChainStageRollup['confidence'], string][] = [
+  ['HIGH', 'var(--state-success-text)'],
+  ['MEDIUM', 'var(--z-slate)'],
+  ['LOW', 'var(--state-warn-text)'],
+];
+
+function OverviewRollup({ rollup }: { rollup: ValueChainStageRollup[] }) {
   const [sel, setSel] = useState<string>(rollup[0]?.code ?? '');
   const cur = rollup.find((s) => s.code === sel) ?? rollup[0] ?? null;
   const max = Math.max(1, ...rollup.map((s) => s.stories));
-  const qmax = cur ? Math.max(1, ...cur.quarters) : 1;
   const perSub = cur && cur.subcaps ? Math.round(cur.stories / cur.subcaps) : 0;
+  const conf = cur?.confidence ?? { HIGH: 0, MEDIUM: 0, LOW: 0 };
+  const confTotal = conf.HIGH + conf.MEDIUM + conf.LOW;
 
   return (
     <>
@@ -344,22 +351,27 @@ function OverviewRollup({ rollup, hasDates }: { rollup: ValueChainStageRollup[];
             ))}
           </div>
 
-          {hasDates && cur.quarters.some((q) => q > 0) && (
+          {confTotal > 0 && (
             <div style={{ marginTop: 16 }}>
-              <div className="eyebrow" style={{ marginBottom: 8 }}>Delivery trend</div>
-              <div className="row" style={{ gap: 6, alignItems: 'flex-end', height: 56 }}>
-                {cur.quarters.map((q, i) => (
-                  <div
-                    key={i}
-                    title={`${q} stories`}
-                    style={{
-                      flex: '1 1 0',
-                      height: Math.max(2, Math.round((q / qmax) * 52)),
-                      borderRadius: 3,
-                      background: 'var(--interactive)',
-                      opacity: 0.45 + 0.55 * (i / Math.max(1, cur.quarters.length - 1)),
-                    }}
-                  />
+              <div className="eyebrow" style={{ marginBottom: 8 }}>Delivery confidence</div>
+              <div className="row" style={{ height: 12, borderRadius: 6, overflow: 'hidden', gap: 0 }}>
+                {CONF_BANDS.map(([label, color]) =>
+                  conf[label] > 0 ? (
+                    <div
+                      key={label}
+                      title={`${label}: ${conf[label].toLocaleString()} stories`}
+                      style={{ width: `${(conf[label] / confTotal) * 100}%`, background: color }}
+                    />
+                  ) : null,
+                )}
+              </div>
+              <div className="row gap12" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+                {CONF_BANDS.map(([label, color]) => (
+                  <span key={label} className="row gap6" style={{ fontSize: 11 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: color }} />
+                    <span className="muted">{label}</span>
+                    <b className="num">{conf[label].toLocaleString()}</b>
+                  </span>
                 ))}
               </div>
             </div>
@@ -444,7 +456,7 @@ export function ValueChain() {
 
       {view === 'rollup' ? (
         rollup.length > 0 ? (
-          <OverviewRollup rollup={rollup} hasDates={!!data?.rollup_has_dates} />
+          <OverviewRollup rollup={rollup} />
         ) : (
           <Empty
             icon="route"

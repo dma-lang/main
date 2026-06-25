@@ -12,11 +12,6 @@
 # keyword order mirrors the prototype's VC_STAGE_ORDER, extended with explicit "Transact & process"
 # tokens (payments/settlement/disbursement) that VC_STAGE_ORDER omitted.
 
-quarter_count: 6   # trend buckets for the Rollup KPI; rendered ONLY when stories carry a real
-                   # delivery date (control.story.delivered_at). The canonical Jira corpus carries no
-                   # date today, so the sparkline stays hidden until a dated export is ingested — we
-                   # never synthesize dates (grounded-only safeguard).
-
 default_bucket: VCC-06   # raw stage names that match no keyword fall here (Operate & service ops) and
                          # the count of such fall-throughs is logged, never silently absorbed.
 

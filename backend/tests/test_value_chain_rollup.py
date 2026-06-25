@@ -2,9 +2,8 @@
 
 No DB: ``bucket_for`` / ``build_rollup`` are pure over config/value_chain.yaml + plain dicts, so the
 8-bucket taxonomy, the DISTINCT story/project counts, the pillar tally, top-8 ordering and the
-per-quarter trend are verified directly (the endpoint only supplies the per-subcap maps). The trend
-stays empty unless a story->quarter map is supplied (the corpus carries no date; we never synthesize
-one), which these tests pin explicitly.
+delivery-confidence split are verified directly (the endpoint only supplies the per-subcap maps).
+The confidence split stays all-zero unless a story->band map is supplied, which these tests pin.
 """
 
 from __future__ import annotations
@@ -78,12 +77,12 @@ def test_build_rollup_top_ordered_by_story_count() -> None:
     assert top[0]["n"] == 3 and top[1]["n"] == 1
 
 
-def test_build_rollup_quarter_trend_and_empty_default() -> None:
+def test_build_rollup_confidence_split_and_empty_default() -> None:
     story = {"P2C1.1": {"s1", "s2"}, "P2C1.2": {"s3"}}
-    # no dates -> all quarters zero (grounded: a trend is never synthesized)
+    # no confidence map -> all-zero split (grounded: nothing is assumed)
     roll0 = {b["code"]: b for b in build_rollup(_stages(), story, {}, {})}
-    assert roll0["VCC-01"]["quarters"] == [0, 0, 0, 0, 0, 0]
-    # with a story->quarter map, DISTINCT stories bin into the trend
-    sq = {"s1": 5, "s2": 5, "s3": 0}
-    roll1 = {b["code"]: b for b in build_rollup(_stages(), story, {}, sq)}
-    assert roll1["VCC-01"]["quarters"] == [1, 0, 0, 0, 0, 2]
+    assert roll0["VCC-01"]["confidence"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    # with a story->band map, DISTINCT stories split by confidence band
+    conf = {"s1": "HIGH", "s2": "HIGH", "s3": "LOW"}
+    roll1 = {b["code"]: b for b in build_rollup(_stages(), story, {}, conf)}
+    assert roll1["VCC-01"]["confidence"] == {"HIGH": 2, "MEDIUM": 0, "LOW": 1}

@@ -185,14 +185,16 @@ def test_lead_stage_key_folds_overlapping_stages() -> None:
 @needs_db
 def test_v7_value_chain_includes_canonical_rollup(client: TestClient) -> None:
     """The atlas response carries the 8-stage canonical Rollup + per-stage delivery (stories/pillars
-    /top) for Pipeline/Radial. The corpus has no delivery date, so the quarter trend stays empty."""
+    /top) for Pipeline/Radial, plus a real HIGH/MEDIUM/LOW delivery-confidence split per stage."""
     vc = client.get("/api/catalogue/v7/value-chain").json()
     roll = vc["rollup"]
     assert [s["code"] for s in roll] == [f"VCC-{i:02d}" for i in range(1, 9)]
     assert sum(s["stories"] for s in roll) > 0  # real Jira delivery, aggregated per bucket
     assert sum(s["projects"] for s in roll) > 0
-    assert vc["rollup_has_dates"] is False  # no dated corpus -> trend never synthesized
-    assert all(s["quarters"] == [0] * vc["quarter_count"] for s in roll)
+    # delivery-confidence split is grounded: bands sum to at most the stage's distinct stories
+    assert all(set(s["confidence"]) == {"HIGH", "MEDIUM", "LOW"} for s in roll)
+    assert all(sum(s["confidence"].values()) <= s["stories"] for s in roll)
+    assert sum(sum(s["confidence"].values()) for s in roll) > 0
     # per-stage delivery enrichment on the Pipeline clusters
     cl = vc["clusters"]
     assert any(c.get("stories", 0) > 0 for c in cl)

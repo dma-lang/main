@@ -305,7 +305,7 @@ export interface ValueChainStageRollup {
   stories: number;
   projects: number;
   pillars: VcPillarTally;
-  quarters: number[]; // per-quarter delivery trend (zeros until a dated corpus exists)
+  confidence: { HIGH: number; MEDIUM: number; LOW: number }; // delivery-confidence split (Jira)
   top: VcTopSubcap[];
 }
 export interface ValueChainResp {
@@ -322,8 +322,6 @@ export interface ValueChainResp {
   deduped: number;
   total_subcaps: number;
   rollup?: ValueChainStageRollup[]; // the 8 canonical MECE stages (Rollup view); absent on derived
-  rollup_has_dates?: boolean; // true only when stories carry a real delivery date (quarter trend)
-  quarter_count?: number; // number of trend buckets (default 6)
 }
 
 export interface SubcapDetail {

@@ -245,7 +245,7 @@ def build_rollup(
     stages: list[dict[str, Any]],
     story_by_subcap: dict[str, set[str]],
     project_by_subcap: dict[str, set[str]] | None = None,
-    story_quarter: dict[str, int] | None = None,
+    story_conf: dict[str, str] | None = None,
     *,
     cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -254,13 +254,11 @@ def build_rollup(
     ``stages`` = [{name, subcaps:[{id,name,pillar}]}] (the endpoint's clusters). Each stage NAME is
     bucketed; a subcap in stages of two buckets counts in BOTH (matches the prototype). Per bucket:
     DISTINCT stories and projects (one spanning several subcaps counts once), a P1-P4 pillar tally,
-    the top-8 subcaps by story count, and a per-quarter delivery trend (``story_quarter`` maps
-    story_key->quarter index; empty until the corpus carries a real delivery date, never
-    synthesized). Returns all 8 buckets (zeros if empty)."""
+    the top-8 subcaps by story count, and a delivery-confidence split (``story_conf`` maps
+    story_key->HIGH/MEDIUM/LOW from control.story). Returns all 8 buckets (zeros if empty)."""
     cfg = cfg or load_rollup_config()
-    qn = int(cfg.get("quarter_count", 6))
     project_by_subcap = project_by_subcap or {}
-    story_quarter = story_quarter or {}
+    story_conf = story_conf or {}
     default_bucket = str(cfg.get("default_bucket", "VCC-06"))
     order = [dict(s) for s in cfg.get("stages", [])]
     valid = {str(s["code"]) for s in order}
@@ -290,11 +288,11 @@ def build_rollup(
             p = str(x.get("pillar") or "")[:2]
             if p in pillars:
                 pillars[p] += 1
-        quarters = [0] * qn
+        confidence = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
         for sk in stories_union:
-            qi = story_quarter.get(sk)
-            if qi is not None and 0 <= qi < qn:
-                quarters[qi] += 1
+            band = story_conf.get(sk, "")
+            if band in confidence:
+                confidence[band] += 1
         top = sorted(
             (
                 {
@@ -316,7 +314,7 @@ def build_rollup(
                 "stories": len(stories_union),
                 "projects": len(projects_union),
                 "pillars": pillars,
-                "quarters": quarters,
+                "confidence": confidence,
                 "top": top,
             }
         )
