@@ -18,6 +18,7 @@ from sqlalchemy import text
 from app import db
 from app.deps import get_current_user, require_admin
 from app.services import change_flags as flags_svc
+from app.services import embeddings as embeddings_svc
 from app.services import kg as kg_svc
 from app.services import subverticals as subverticals_svc
 
@@ -263,6 +264,16 @@ async def propose_kg_edges(
     cross-capability subcaps that co-occur structurally (shared L3 platforms / personas), each
     gated G1-G8 and queued in the Change-Flags inbox for human approval — never written live."""
     return await kg_svc.propose_structural_edges(version)
+
+
+@router.post("/admin/embeddings/build/{version}")
+async def build_embeddings(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Populate the shared vector(768) embedding space for the version (F6): embed every subcap that
+    has none yet, idempotent + metered. Hermetic = no spend; live spend is governed by the G8 cost
+    envelope. Unlocks dense retrieval + the semantic KG Layer-B."""
+    return await embeddings_svc.build_embeddings(version)
 
 
 @router.post("/change-flags/{flag_id}/approve")

@@ -7,10 +7,16 @@ not wired in hermetic-dev and raises, so a stray live call can never silently bi
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from app.intelligence import cost_meter, model_config
+from app.resilience import retry_async
 from app.settings import get_settings
 
 # the nine modelled subverticals — a provisional code for a NEW one must never collide with these
@@ -58,6 +64,66 @@ class SubverticalInference:
     cost_usd: float
 
 
+_TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
+_CLIENT: Any = None
+
+
+def _client() -> Any:
+    """Lazily build + cache the Vertex GenAI client — constructed ONLY for a live call, never at
+    import or in hermetic mode, so tests and hermetic runs never touch GCP."""
+    global _CLIENT
+    if _CLIENT is None:
+        from google import genai  # lazy: the SDK is only needed on the live path
+
+        project, region = model_config.vertex_target()
+        _CLIENT = genai.Client(vertexai=True, project=project, location=region)
+    return _CLIENT
+
+
+async def _retry[T](fn: Callable[[], Awaitable[T]]) -> T:
+    """Run a live call under the models.yaml retry/backoff/jitter policy (safeguard 9)."""
+    pol = model_config.retry_policy()
+    return await retry_async(
+        fn,
+        retryable=pol["retryable"],
+        no_retry=pol["no_retry"],
+        max_attempts=pol["max_attempts"],
+        base=pol["base"],
+        cap=pol["cap"],
+        jitter=pol["jitter"],
+    )
+
+
+def _gen_cost(resp: Any) -> float:
+    """Estimate one generation's spend from its token usage (G8 envelope meter, not the invoice)."""
+    usage = getattr(resp, "usage_metadata", None)
+    total = getattr(usage, "total_token_count", None) or 0
+    return round(total / 1000.0 * model_config.token_price()[0], 6)
+
+
+def _truncated(resp: Any) -> bool:
+    """True when the response stopped on MAX_TOKENS (so we double the budget and retry once)."""
+    cands = getattr(resp, "candidates", None) or []
+    if not cands:
+        return False
+    return str(getattr(cands[0], "finish_reason", "")).upper().endswith("MAX_TOKENS")
+
+
+def _hermetic_embed(texts: list[str], dim: int) -> list[list[float]]:
+    """Deterministic stand-in for gemini-embedding-001: an L2-normalised token-hash vector, so
+    cosine reflects real text overlap. Lets the embeddings job, dense retrieval and semantic KG run
+    end-to-end with no spend; the live model swaps in transparently (same 768-d contract)."""
+    out: list[list[float]] = []
+    for t in texts:
+        vec = [0.0] * dim
+        for tok in _TOKEN_RE.findall((t or "").lower()):
+            h = int.from_bytes(hashlib.blake2b(tok.encode(), digest_size=8).digest(), "big")
+            vec[h % dim] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        out.append([v / norm for v in vec])
+    return out
+
+
 class Gemini:
     """Model-router facade. Only ``ground`` (grounded chat) is implemented for the hermetic slice;
     classify / enrich / match / synthesize / adversarial extend this against the pinned models."""
@@ -66,10 +132,12 @@ class Gemini:
         self._settings = get_settings()
 
     async def ground(self, question: str, evidence: list[dict[str, Any]]) -> GroundedAnswer:
-        """Answer ``question`` using ONLY ``evidence`` (retrieved rows), never model memory."""
-        if self._settings.is_hermetic:
+        """Answer ``question`` using ONLY ``evidence`` (retrieved rows), never model memory. Live:
+        the pinned ``ground`` model; degrades to the deterministic stub when the budget envelope is
+        spent (G8) so chat never hard-fails."""
+        if self._settings.is_hermetic or await cost_meter.over_throttle():
             return self._hermetic_ground(question, evidence)
-        raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
+        return await self._ground_live(question, evidence)
 
     async def fetch_news(self) -> list[RawNewsItem]:
         """Stage-1 news fetch: the weekly grounded-search Batch call (Google Search grounding;
@@ -133,11 +201,11 @@ class Gemini:
         (``overlap_sv``/``overlap``). Live mode names + refines the industry classification on the
         pinned *enrich* model (config/models.yaml: gemini-3.5-flash GA) with retry/backoff,
         MAX_TOKENS->chunk and SAFETY->review, its spend governed by the G8 budget gate + the cost
-        meter. Hermetic mode returns a deterministic, capability-grounded provisional name (no
-        Vertex, no spend) so the gated proposal is fully functional before live wiring lands."""
-        if self._settings.is_hermetic:
+        meter. Hermetic mode (and a spent budget envelope) returns a deterministic, capability-
+        grounded provisional name (no Vertex, no spend) so the gated proposal stays functional."""
+        if self._settings.is_hermetic or await cost_meter.over_throttle():
             return self._hermetic_infer_subvertical(fingerprint)
-        raise NotImplementedError("live Vertex AI is not wired in hermetic-dev")
+        return await self._infer_subvertical_live(fingerprint)
 
     @staticmethod
     def _hermetic_infer_subvertical(fingerprint: dict[str, Any]) -> SubverticalInference:
@@ -194,3 +262,106 @@ class Gemini:
             f"citation-backed — open the reasoning chain to see the retrieval and gate checks."
         )
         return GroundedAnswer(text=text, claim_label="FACT", model="hermetic-stub", cost_usd=0.0)
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed ``texts`` into the shared vector(768) space (gemini-embedding-001). Hermetic — and
+        a spent budget envelope — use the deterministic token-hash stub (no spend); the embeddings
+        job records the live batch cost."""
+        model, dim = model_config.embedding_model()
+        if self._settings.is_hermetic or await cost_meter.over_throttle():
+            return _hermetic_embed(texts, dim)
+        return await self._embed_live(texts, model, dim)
+
+    async def _embed_live(self, texts: list[str], model: str, dim: int) -> list[list[float]]:
+        from google.genai import types
+
+        cfg = types.EmbedContentConfig(output_dimensionality=dim)
+        resp = await _retry(
+            lambda: _client().aio.models.embed_content(model=model, contents=texts, config=cfg)
+        )
+        return [[float(x) for x in e.values] for e in (getattr(resp, "embeddings", None) or [])]
+
+    async def _ground_live(self, question: str, evidence: list[dict[str, Any]]) -> GroundedAnswer:
+        model = model_config.model_for("ground")
+        ev = "\n".join(
+            f"- {e.get('name')} ({e.get('subcap_id')}): {e.get('description', '')}"
+            for e in evidence[:8]
+        )
+        system = (
+            "You are a capability-catalogue assistant. Answer ONLY from the provided evidence. If "
+            "the evidence does not support an answer, say so plainly. Never use outside knowledge."
+        )
+        user = f"Question: {question}\n\nEvidence:\n{ev}"
+        text_out, cost = await self._generate(model, system, user)
+        if not text_out:  # SAFETY block / empty -> safe, non-fabricated answer
+            return GroundedAnswer(
+                text="No grounded answer is available from the catalogue for this question.",
+                claim_label="HYPOTHESIS",
+                model=model,
+                cost_usd=cost,
+            )
+        return GroundedAnswer(text=text_out, claim_label="FACT", model=model, cost_usd=cost)
+
+    async def _infer_subvertical_live(self, fingerprint: dict[str, Any]) -> SubverticalInference:
+        model = model_config.model_for("enrich")
+        clients = list(fingerprint.get("clients", []))
+        caps = "; ".join(
+            f"{c['name']} ({c['n']})" for c in fingerprint.get("top_capabilities", [])[:6]
+        )
+        samples = " | ".join(fingerprint.get("sample_summaries", [])[:5])
+        system = (
+            "You name a NEW financial-services subvertical from a cluster of delivered work. "
+            'Return ONLY JSON {"name": "<short industry label>", "rationale": "<1-2 sentences>"}. '
+            "Ground the name in the capabilities and sample work; invent nothing."
+        )
+        user = (
+            f"Capabilities: {caps}\nPillars: {', '.join(fingerprint.get('pillars', []))}\n"
+            f"Sample work: {samples}\nStory count: {fingerprint.get('story_count', 0)}"
+        )
+        text_out, cost = await self._generate(model, system, user, as_json=True)
+        try:
+            data = json.loads(text_out)
+            name = str(data["name"]).strip()
+            rationale = str(data.get("rationale", "")).strip()
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return self._hermetic_infer_subvertical(fingerprint)  # bad parse -> never crash
+        return SubverticalInference(
+            code=_provisional_sv_code(name, clients),
+            name=name or "Cross-pillar delivery",
+            rationale=rationale,
+            claim_label="HYPOTHESIS",
+            model=model,
+            cost_usd=cost,
+        )
+
+    async def _generate(
+        self, model: str, system: str, user: str, *, as_json: bool = False
+    ) -> tuple[str, float]:
+        """One grounded generation under retry; doubles the token budget once on MAX_TOKENS (the
+        ``on_max_tokens: double_and_retry`` policy). Returns (text, estimated_cost); empty text on a
+        SAFETY block so callers degrade to a safe, non-fabricated response."""
+        from google.genai import types
+
+        max_tok = model_config.max_output_tokens()
+
+        def _cfg(mt: int) -> Any:
+            kwargs: dict[str, Any] = {
+                "system_instruction": system,
+                "max_output_tokens": mt,
+                "temperature": 0.2,
+            }
+            if as_json:
+                kwargs["response_mime_type"] = "application/json"
+            return types.GenerateContentConfig(**kwargs)
+
+        async def _call(mt: int) -> Any:
+            return await _client().aio.models.generate_content(
+                model=model, contents=user, config=_cfg(mt)
+            )
+
+        resp = await _retry(lambda: _call(max_tok))
+        text_out = str(getattr(resp, "text", "") or "").strip()
+        if not text_out and _truncated(resp):
+            resp = await _retry(lambda: _call(max_tok * 2))
+            text_out = str(getattr(resp, "text", "") or "").strip()
+        return text_out, _gen_cost(resp)

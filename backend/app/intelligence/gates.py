@@ -160,6 +160,16 @@ def knowledge_graph_config() -> tuple[int, int, int]:
     return sp_min, sf_min, cap
 
 
+def knowledge_graph_semantic_config() -> float:
+    """Cosine floor for the AI semantic KG Layer-B (``SEMANTICALLY_SIMILAR``): two subcaps must
+    embed at least this close in the shared vector(768) space to be proposed. Config, not code."""
+    section = load_gate_config().get("knowledge_graph") or {}
+    cosine = float(section.get("semantically_similar_min_cosine", 0.85))
+    if not 0 < cosine <= 1:
+        raise ValueError("gates.yaml: semantically_similar_min_cosine must be in (0, 1]")
+    return cosine
+
+
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
     """Run G5 + G7 over a grounded answer; return the gate_results jsonb and the verdict."""
     g5 = retrieval_count > 0 and citation_count > 0

@@ -33,6 +33,7 @@ from app.versioning import resolve_version
 _KG_EDGE_KIND = "kg_edge_proposal"  # the change_flag kind (also the pending_edge promotion target)
 _SHARES_PLATFORM = "shares_platform"
 _SHARES_FEATURE = "shares_feature"
+_SEMANTIC = "semantically_similar"  # Phase B: cosine-near in the shared vector(768) space
 
 
 def _severity(shared: int) -> str:
@@ -46,11 +47,14 @@ def _weight(kind: str, shared: int) -> float:
     return round(min(0.999, base + 0.08 * shared), 3)
 
 
+_SHORT = {_SHARES_PLATFORM: "sp", _SHARES_FEATURE: "sf", _SEMANTIC: "ss"}
+
+
 def _pair_ref(a: str, b: str, kind: str) -> str:
-    """Stable, order-independent change_flag target_ref for one proposed edge (idempotency key)."""
+    """Stable, order-independent change_flag target_ref for one proposed edge (idempotency key). The
+    per-kind suffix keeps a structural and a semantic edge over the same pair distinct."""
     lo, hi = sorted((a, b))
-    short = "sp" if kind == _SHARES_PLATFORM else "sf"
-    return f"{lo}>{hi}:{short}"
+    return f"{lo}>{hi}:{_SHORT.get(kind, 'sf')}"
 
 
 async def _ench_schema(conn: AsyncConnection, schema: str, table: str) -> str:
@@ -198,26 +202,110 @@ async def _candidate_pairs(
     return out[:cap]
 
 
+async def _embedding_schema(conn: AsyncConnection, schema: str) -> str | None:
+    """The schema whose subcap embeddings to read — the version's OWN once populated, else the
+    reference version's (so a base-only version inherits the embedding space), else None (no
+    embeddings anywhere yet → the semantic layer is simply skipped, never an error)."""
+    own = (
+        await conn.execute(
+            text(f"SELECT 1 FROM {schema}.subcap WHERE embedding IS NOT NULL LIMIT 1")
+        )
+    ).first()
+    if own is not None:
+        return schema
+    from app.services import enrichment_seed
+
+    ref_ver = enrichment_seed.reference_version()
+    if not ref_ver:
+        return None
+    try:
+        ref_v = await resolve_version(ref_ver)
+    except Exception:  # noqa: BLE001 - reference not provisioned -> no semantic layer
+        return None
+    if ref_v.schema_name == schema:
+        return None
+    ref = (
+        await conn.execute(
+            text(f"SELECT 1 FROM {ref_v.schema_name}.subcap WHERE embedding IS NOT NULL LIMIT 1")
+        )
+    ).first()
+    return ref_v.schema_name if ref is not None else None
+
+
+async def _semantic_pairs(
+    conn: AsyncConnection, schema: str, min_cosine: float, cap: int
+) -> list[dict[str, Any]]:
+    """Cross-capability subcap pairs that embed close together (cosine >= min_cosine) in the shared
+    vector(768) space — the semantic relationships the flat catalogue hides. Strongest first,
+    bounded. ``shared`` carries cosine*100 so the gate's G2 floor (>= 2) passes."""
+    rows = (
+        (
+            await conn.execute(
+                text(
+                    "SELECT a, b, a_name, b_name, cosine FROM ("
+                    "SELECT s1.subcap_id AS a, s2.subcap_id AS b, s1.name AS a_name, "
+                    "s2.name AS b_name, 1 - (s1.embedding <=> s2.embedding) AS cosine "
+                    f"FROM {schema}.subcap s1 JOIN {schema}.subcap s2 "
+                    "  ON s2.subcap_id > s1.subcap_id AND s1.capability_id <> s2.capability_id "
+                    "WHERE s1.embedding IS NOT NULL AND s2.embedding IS NOT NULL"
+                    ") q WHERE cosine >= :min ORDER BY cosine DESC, a, b LIMIT :cap"
+                ),
+                {"min": min_cosine, "cap": cap},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return [
+        {
+            "a": r["a"],
+            "b": r["b"],
+            "a_name": r["a_name"],
+            "b_name": r["b_name"],
+            "kind": _SEMANTIC,
+            "shared": max(2, round(float(r["cosine"]) * 100)),
+            "cosine": round(float(r["cosine"]), 4),
+        }
+        for r in rows
+    ]
+
+
 async def propose_structural_edges(
     version: str,
     shares_platform_min: int | None = None,
     shares_feature_min: int | None = None,
     max_proposals: int | None = None,
+    semantic_min_cosine: float | None = None,
 ) -> dict[str, Any]:
-    """Compute deterministic structural co-occurrence pairs, gate G1-G8, and queue each as a dashed
-    ``pending_edge`` + a Change-Flags proposal (kind ``kg_edge_proposal``) with the full trust
-    envelope. Never writes a kg_edge live — approval in the inbox promotes it. Idempotent on the
-    pair key. Returns ``{version, created, proposed, candidates, already}``."""
+    """Compute deterministic structural co-occurrence pairs PLUS (when an embedding space exists)
+    semantic cosine-near pairs, gate G1-G8, and queue each as a dashed ``pending_edge`` + a
+    Change-Flags proposal (kind ``kg_edge_proposal``) with the full trust envelope. Never writes a
+    kg_edge live — approval in the inbox promotes it. Idempotent on the pair key; each layer is
+    bounded by the cap and the semantic layer is deduped against the (stronger) structural pairs.
+    Returns ``{version, created, proposed, candidates, already}``."""
     cfg_sp, cfg_sf, cfg_cap = gates.knowledge_graph_config()
     sp_min = cfg_sp if shares_platform_min is None else shares_platform_min
     sf_min = cfg_sf if shares_feature_min is None else shares_feature_min
     cap = cfg_cap if max_proposals is None else max_proposals
+    sem_cos = (
+        gates.knowledge_graph_semantic_config()
+        if semantic_min_cosine is None
+        else semantic_min_cosine
+    )
     v = await resolve_version(version)
     engine = db.require_engine()
     created = already = 0
     async with engine.begin() as conn:
         ench_s = await _ench_schema(conn, v.schema_name, "subcap_platform")
         pairs = await _candidate_pairs(conn, ench_s, sp_min, sf_min, cap)
+        emb_s = await _embedding_schema(conn, v.schema_name)
+        if emb_s is not None:
+            seen = {(p["a"], p["b"]) for p in pairs}
+            for sp in await _semantic_pairs(conn, emb_s, sem_cos, cap):
+                if (sp["a"], sp["b"]) in seen:
+                    continue  # already proposed structurally (the stronger evidence) — dedup
+                seen.add((sp["a"], sp["b"]))
+                pairs.append(sp)
         for p in pairs:
             ref = _pair_ref(p["a"], p["b"], p["kind"])
             if await _flag_exists(conn, ref):
@@ -239,44 +327,56 @@ async def _create_edge_proposal(
 ) -> None:
     a, b, kind, shared = p["a"], p["b"], p["kind"], int(p["shared"])
     a_name, b_name = p["a_name"], p["b_name"]
-    basis = (
-        f"{shared} shared L3 platforms" if kind == _SHARES_PLATFORM else f"{shared} shared personas"
-    )
+    cosine = p.get("cosine")
+    if kind == _SEMANTIC:
+        basis = f"cosine {float(cosine or 0.0):.3f} in the shared embedding space"
+        relation, ev_phrase, operation = (
+            "are semantically similar",
+            "embed close together in the shared vector(768) space",
+            "kg_semantic",
+        )
+    else:
+        unit = "shared L3 platforms" if kind == _SHARES_PLATFORM else "shared personas"
+        basis = f"{shared} {unit}"
+        relation, ev_phrase, operation = (
+            "co-occur structurally",
+            "trace to real catalogue link rows",
+            "kg_structural",
+        )
     results, verdict = gates.evaluate_suggestion(
         target_exists=True,  # both subcaps exist in the active version; nothing is mutated
-        evidence_count=shared,  # the co-occurring rows (>= 2 by the HAVING floor -> G2 passes)
+        evidence_count=shared,  # >= 2 by construction (HAVING floor / cosine*100) -> G2 passes
         source_tier="T1",
         cited=True,
-        contradicts=False,  # a structural link contradicts nothing — it is purely additive
+        contradicts=False,  # an additional edge contradicts nothing — it is purely additive
         cost_usd=0.0,
     )
     title = f"Proposed knowledge-graph edge: {a} ~ {b} ({kind})"
     body = (
-        f"{a} ({a_name}) and {b} ({b_name}) sit in different capabilities yet co-occur "
-        f"structurally — {basis}. The flat catalogue hides this link. Proposed Layer-B edge "
-        f"{kind} (dashed, AI-proposed). Approve to confirm it as a knowledge-graph relationship, "
-        "or reject to keep the subcaps unlinked. Nothing is written to the graph as fact until "
-        "approved."
+        f"{a} ({a_name}) and {b} ({b_name}) sit in different capabilities yet {relation} — "
+        f"{basis}. The flat catalogue hides this link. Proposed Layer-B edge {kind} (dashed, "
+        "AI-proposed). Approve to confirm it as a knowledge-graph relationship, or reject to keep "
+        "the subcaps unlinked. Nothing is written to the graph as fact until approved."
     )
-    summary = f"Structural KG edge {a} ~ {b} [{kind}] — {basis}."
+    summary = f"KG Layer-B edge {a} ~ {b} [{kind}] — {basis}."
     chain_id = (
         await conn.execute(
             text(
                 "INSERT INTO control.reasoning_chain "
                 "(operation, subject_ref, claim_label, summary, model, cost_usd) "
-                "VALUES ('kg_structural', :subj, 'INFERENCE', :summary, 'hermetic-stub', 0) "
+                "VALUES (:op, :subj, 'INFERENCE', :summary, 'hermetic-stub', 0) "
                 "RETURNING chain_id"
             ),
-            {"subj": ref, "summary": summary},
+            {"op": operation, "subj": ref, "summary": summary},
         )
     ).scalar_one()
     ev = await _edge_evidence(conn, a, b, kind)
     steps = [
-        ("retrieve", f"Both {a} and {b} trace to real catalogue link rows ({basis}).", ev),
+        ("retrieve", f"Both {a} and {b} {ev_phrase} ({basis}).", ev),
         (
             "weigh",
             "They live in different capabilities, so this is not an existing Layer-A sibling edge "
-            "— it is a structural relationship the flat tree hides.",
+            "— it is a relationship the flat tree hides.",
             None,
         ),
         (
@@ -336,6 +436,7 @@ async def _create_edge_proposal(
         "to_name": b_name,
         "shared": shared,
         "basis": basis,
+        "cosine": float(cosine) if cosine is not None else None,
         "weight": weight,
         "pending_id": str(pending_id),
     }

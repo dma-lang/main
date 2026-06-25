@@ -42,6 +42,8 @@ cost:
   grounded_search_free_monthly: 5000     # then ~ $14 / 1,000 queries; metered under G8
   max_output_tokens_default: 2048
   thinking_level_default: low            # higher only for synthesize/adversarial
+  est_usd_per_1k_tokens: 0.0005          # in-app spend ESTIMATE for the G8 envelope (NOT the GCP invoice)
+  est_embed_usd_per_1k_tokens: 0.0001    # estimate for embeddings batches
 
 # Hermetic dev: when LLM_MODE=hermetic the wrapper returns deterministic stubs (no provider calls, no spend).
 hermetic_mode_env: LLM_MODE

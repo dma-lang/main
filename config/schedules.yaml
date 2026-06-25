@@ -27,9 +27,15 @@ schedules:
     job: weekly_unscoped_subverticals
     batch: true
 
+  embeddings_build:
+    description: Weekly fill of the shared vector(768) space (F6) — embed any un-embedded subcaps (metered).
+    cron: "40 6 * * MON"          # Monday 06:40 UTC (before the KG semantic scan consumes it)
+    job: weekly_embeddings
+    batch: true
+
   kg_structural_propose:
-    description: Weekly KG Layer-B structural discovery -> dashed pending_edge proposals -> Change Flags.
-    cron: "50 6 * * MON"          # Monday 06:50 UTC (after the unscoped-subvertical scan)
+    description: Weekly KG Layer-B discovery (structural + semantic) -> dashed pending_edge proposals -> Change Flags.
+    cron: "50 6 * * MON"          # Monday 06:50 UTC (after embeddings + the unscoped-subvertical scan)
     job: weekly_kg_structural
     batch: true
 
