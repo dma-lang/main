@@ -20,7 +20,10 @@ the rows from ``cat_<version>``.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 # tokens that carry no discriminating meaning for cluster identity
 _STOP = {"and", "the", "of", "for", "to", "a", "an", "&", "in", "on", "management", "mgmt"}
@@ -199,3 +202,122 @@ def derive_value_chain(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "deduped": raw_count - len(clusters),
         "total_subcaps": sum(c["count"] for c in clusters),
     }
+
+
+# ── Canonical value-chain ROLLUP (A3 "Rollup" view) ─────────────────────────────────────────────
+# The 8 MECE buckets + their ordered keyword map live in config/value_chain.yaml (DATA, not code) so
+# the taxonomy is auditable and re-bucketing needs no deploy. build_rollup is PURE — the router
+# supplies the per-subcap story/project/quarter maps from story_catalogue_link → control.story.
+
+
+def _rollup_config_path() -> Path:
+    here = Path(__file__).resolve()
+    for root in here.parents:
+        candidate = root / "config" / "value_chain.yaml"
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("config/value_chain.yaml not found")
+
+
+def load_rollup_config() -> dict[str, Any]:
+    """The canonical 8-stage taxonomy + ordered keyword→bucket map. Re-read each call (like
+    model_config) so an edit applies without a deploy."""
+    with _rollup_config_path().open() as fh:
+        cfg = yaml.safe_load(fh) or {}
+    if not isinstance(cfg, dict):
+        raise ValueError("value_chain.yaml: top level must be a mapping")
+    return cfg
+
+
+def bucket_for(stage_name: str, cfg: dict[str, Any] | None = None) -> str:
+    """Map a raw per-SV stage NAME to one of the 8 canonical buckets by FIRST keyword match
+    (case-insensitive, against the cleaned UPPERCASE name); unmatched → default_bucket."""
+    cfg = cfg or load_rollup_config()
+    name = clean_stage_name(stage_name).upper()
+    for entry in cfg.get("bucket_keywords", []):
+        kw = str(entry.get("kw", "")).upper()
+        if kw and kw in name:
+            return str(entry.get("code"))
+    return str(cfg.get("default_bucket", "VCC-06"))
+
+
+def build_rollup(
+    stages: list[dict[str, Any]],
+    story_by_subcap: dict[str, set[str]],
+    project_by_subcap: dict[str, set[str]] | None = None,
+    story_quarter: dict[str, int] | None = None,
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Aggregate the per-SV stages into the 8 canonical buckets, in canonical order.
+
+    ``stages`` = [{name, subcaps:[{id,name,pillar}]}] (the endpoint's clusters). Each stage NAME is
+    bucketed; a subcap in stages of two buckets counts in BOTH (matches the prototype). Per bucket:
+    DISTINCT stories and projects (one spanning several subcaps counts once), a P1-P4 pillar tally,
+    the top-8 subcaps by story count, and a per-quarter delivery trend (``story_quarter`` maps
+    story_key->quarter index; empty until the corpus carries a real delivery date, never
+    synthesized). Returns all 8 buckets (zeros if empty)."""
+    cfg = cfg or load_rollup_config()
+    qn = int(cfg.get("quarter_count", 6))
+    project_by_subcap = project_by_subcap or {}
+    story_quarter = story_quarter or {}
+    default_bucket = str(cfg.get("default_bucket", "VCC-06"))
+    order = [dict(s) for s in cfg.get("stages", [])]
+    valid = {str(s["code"]) for s in order}
+
+    # accumulate the UNIQUE subcaps that land in each bucket (a subcap can land in several buckets)
+    bucket_subs: dict[str, dict[str, dict[str, Any]]] = {str(s["code"]): {} for s in order}
+    for st in stages:
+        code = bucket_for(str(st.get("name", "")), cfg)
+        if code not in valid:
+            code = default_bucket
+        for sub in st.get("subcaps", []):
+            sid = str(sub["id"])
+            bucket_subs[code].setdefault(
+                sid, {"id": sid, "name": sub.get("name"), "pillar": sub.get("pillar")}
+            )
+
+    out: list[dict[str, Any]] = []
+    for s in order:
+        code = str(s["code"])
+        subs = list(bucket_subs[code].values())
+        stories_union: set[str] = set()
+        projects_union: set[str] = set()
+        pillars = {"P1": 0, "P2": 0, "P3": 0, "P4": 0}
+        for x in subs:
+            stories_union |= story_by_subcap.get(x["id"], set())
+            projects_union |= project_by_subcap.get(x["id"], set())
+            p = str(x.get("pillar") or "")[:2]
+            if p in pillars:
+                pillars[p] += 1
+        quarters = [0] * qn
+        for sk in stories_union:
+            qi = story_quarter.get(sk)
+            if qi is not None and 0 <= qi < qn:
+                quarters[qi] += 1
+        top = sorted(
+            (
+                {
+                    "id": x["id"],
+                    "name": x["name"],
+                    "n": len(story_by_subcap.get(x["id"], set())),
+                    "pillar": x.get("pillar"),
+                }
+                for x in subs
+            ),
+            key=lambda t: (-int(t["n"]), str(t["id"])),
+        )[:8]
+        out.append(
+            {
+                "code": code,
+                "name": s["name"],
+                "blurb": s.get("blurb", ""),
+                "subcaps": len(subs),
+                "stories": len(stories_union),
+                "projects": len(projects_union),
+                "pillars": pillars,
+                "quarters": quarters,
+                "top": top,
+            }
+        )
+    return out

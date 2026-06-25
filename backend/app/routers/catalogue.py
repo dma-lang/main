@@ -1317,6 +1317,67 @@ async def value_chain(
                         "merged_from": [],
                     }
                 )
+            # Per-stage + canonical-rollup DELIVERY aggregation (A3). Story/project counts are the
+            # REAL Jira corpus (story_catalogue_link is Jira-only) for THIS version; delivered_at is
+            # NULL until a dated export lands, so the quarter trend stays empty (never synthesized).
+            from app.services.value_chain import build_rollup, load_rollup_config
+
+            all_subs = sorted({x["id"] for c in clusters for x in c["subcaps"]})
+            story_by_subcap: dict[str, set[str]] = {}
+            project_by_subcap: dict[str, set[str]] = {}
+            delivered: dict[str, Any] = {}  # story_key -> delivered_at
+            if all_subs:
+                link_sql = text(
+                    "SELECT l.subcap_id, l.story_key, st.project_key, st.delivered_at "
+                    "FROM control.story_catalogue_link l "
+                    "JOIN control.story st ON st.story_key = l.story_key "
+                    "WHERE l.version_id = :vid AND l.subcap_id = ANY(:subs)"
+                )
+                link_rows = (
+                    (await conn.execute(link_sql, {"vid": v.version_id, "subs": all_subs}))
+                    .mappings()
+                    .all()
+                )
+                for r in link_rows:
+                    sid = str(r["subcap_id"])
+                    sk = str(r["story_key"])
+                    story_by_subcap.setdefault(sid, set()).add(sk)
+                    if r["project_key"]:
+                        project_by_subcap.setdefault(sid, set()).add(str(r["project_key"]))
+                    if r["delivered_at"] is not None:
+                        delivered[sk] = r["delivered_at"]
+            qn = int(load_rollup_config().get("quarter_count", 6))
+            story_quarter: dict[str, int] = {}
+            if delivered:
+                max_yq = max(d.year * 4 + (d.month - 1) // 3 for d in delivered.values())
+                for sk, dt in delivered.items():
+                    qi = qn - 1 - (max_yq - (dt.year * 4 + (dt.month - 1) // 3))
+                    if 0 <= qi < qn:
+                        story_quarter[sk] = qi
+            # enrich each stage with delivery stories + a P1-P4 pillar tally + top-8 by story count
+            for c in clusters:
+                pill = {"P1": 0, "P2": 0, "P3": 0, "P4": 0}
+                s_union: set[str] = set()
+                for x in c["subcaps"]:
+                    s_union |= story_by_subcap.get(x["id"], set())
+                    pk = str(x.get("pillar") or "")[:2]
+                    if pk in pill:
+                        pill[pk] += 1
+                c["stories"] = len(s_union)
+                c["pillars"] = pill
+                c["top"] = sorted(
+                    (
+                        {
+                            "id": x["id"],
+                            "name": x["name"],
+                            "n": len(story_by_subcap.get(x["id"], set())),
+                            "pillar": x.get("pillar"),
+                        }
+                        for x in c["subcaps"]
+                    ),
+                    key=lambda t: (-int(t["n"]), str(t["id"])),
+                )[:8]
+            rollup = build_rollup(clusters, story_by_subcap, project_by_subcap, story_quarter)
             total = len({x["id"] for c in clusters for x in c["subcaps"]})
             return {
                 "version": version,
@@ -1337,6 +1398,9 @@ async def value_chain(
                 "raw_clusters": len(clusters),
                 "deduped": 0,
                 "total_subcaps": total,
+                "rollup": rollup,
+                "rollup_has_dates": bool(story_quarter),
+                "quarter_count": qn,
             }
         # TRUE greenfield (no mapping anywhere, no reference to inherit): derive from clusters.
         where_sql = " WHERE cat.pillar_id = :p" if p_active else ""

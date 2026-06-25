@@ -1,0 +1,105 @@
+# config/value_chain.yaml — canonical value-chain ROLLUP taxonomy (A3, Value-chain atlas "Rollup" view)
+#
+# The atlas has three stage layers (all DATA-DRIVEN, none hardcoded into logic):
+#   1. raw per-subvertical stage names (~234) from cat_<v>.subcap_vcc  -> Pipeline / Radial views;
+#   2. an ordered keyword vocabulary (below)                            -> sequences the pipeline;
+#   3. these 8 canonical MECE buckets                                   -> the Rollup view.
+# The backend maps every raw stage name into one of the 8 buckets by FIRST-MATCH on the ordered
+# `bucket_keywords` list (case-insensitive, against the cleaned UPPERCASE stage name) — deterministic,
+# auditable, version-overridable. This file is config, not code: editing it re-buckets without a deploy.
+#
+# Provenance: the 8 stages + blurbs are the prototype's canonical chain (CIA_VC, VCC-01..08); the
+# keyword order mirrors the prototype's VC_STAGE_ORDER, extended with explicit "Transact & process"
+# tokens (payments/settlement/disbursement) that VC_STAGE_ORDER omitted.
+
+quarter_count: 6   # trend buckets for the Rollup KPI; rendered ONLY when stories carry a real
+                   # delivery date (control.story.delivered_at). The canonical Jira corpus carries no
+                   # date today, so the sparkline stays hidden until a dated export is ingested — we
+                   # never synthesize dates (grounded-only safeguard).
+
+default_bucket: VCC-06   # raw stage names that match no keyword fall here (Operate & service ops) and
+                         # the count of such fall-throughs is logged, never silently absorbed.
+
+stages:
+  - { code: VCC-01, name: "Acquire & onboard",      blurb: "Lead, KYC, account open" }
+  - { code: VCC-02, name: "Engage & serve",         blurb: "Service, advice, support" }
+  - { code: VCC-03, name: "Originate & underwrite", blurb: "Apply, decision, fund" }
+  - { code: VCC-04, name: "Transact & process",     blurb: "Payments, posting, recon" }
+  - { code: VCC-05, name: "Manage risk & comply",   blurb: "Risk, fraud, regulatory" }
+  - { code: VCC-06, name: "Operate & service ops",  blurb: "Back office, exceptions" }
+  - { code: VCC-07, name: "Analyse & decide",       blurb: "Reporting, insight, BI" }
+  - { code: VCC-08, name: "Govern & enable",        blurb: "Data, platform, controls" }
+
+# ORDERED — first keyword contained in the cleaned UPPERCASE stage name wins. Order encodes precedence
+# (e.g. KYC/KYB resolve to onboarding before the later RISK/COMPLIANCE tokens, matching the prototype).
+bucket_keywords:
+  # --- VCC-01 Acquire & onboard ---
+  - { kw: "MARKET",            code: VCC-01 }
+  - { kw: "PROSPECT",          code: VCC-01 }
+  - { kw: "LEAD",              code: VCC-01 }
+  - { kw: "ACQUI",             code: VCC-01 }
+  - { kw: "ONBOARD",           code: VCC-01 }
+  - { kw: "KYC",               code: VCC-01 }
+  - { kw: "KYB",               code: VCC-01 }
+  - { kw: "ACCOUNT OPENING",   code: VCC-01 }
+  - { kw: "ACCOUNT",           code: VCC-01 }
+  - { kw: "APPLICATION",       code: VCC-01 }
+  # --- VCC-03 Originate & underwrite ---
+  - { kw: "ORIGINAT",          code: VCC-03 }
+  - { kw: "UNDERWRIT",         code: VCC-03 }
+  - { kw: "QUOTE",             code: VCC-03 }
+  - { kw: "BIND",              code: VCC-03 }
+  - { kw: "ISSUE & POLICY",    code: VCC-03 }
+  - { kw: "FUND",              code: VCC-03 }
+  # --- VCC-04 Transact & process (VC_STAGE_ORDER omitted these) ---
+  - { kw: "PAYMENT",           code: VCC-04 }
+  - { kw: "DISBURS",           code: VCC-04 }
+  - { kw: "TRANSACT",          code: VCC-04 }
+  - { kw: "POSTING",           code: VCC-04 }
+  - { kw: "SETTLE",            code: VCC-04 }
+  - { kw: "CARD",              code: VCC-04 }
+  - { kw: "RECON",             code: VCC-04 }
+  # --- VCC-02 Engage & serve ---
+  - { kw: "SERVIC",            code: VCC-02 }
+  - { kw: "ENGAGE",            code: VCC-02 }
+  - { kw: "RELATIONSHIP",      code: VCC-02 }
+  - { kw: "COVERAGE",          code: VCC-02 }
+  - { kw: "ADVIC",             code: VCC-02 }
+  - { kw: "ADVISOR",           code: VCC-02 }
+  - { kw: "CROSS-SELL",        code: VCC-02 }
+  - { kw: "WALLET",            code: VCC-02 }
+  - { kw: "LOYALTY",           code: VCC-02 }
+  - { kw: "RETENTION",         code: VCC-02 }
+  - { kw: "RENEWAL",           code: VCC-02 }
+  - { kw: "MEMBER",            code: VCC-02 }
+  # --- VCC-05 Manage risk & comply ---
+  - { kw: "RISK",              code: VCC-05 }
+  - { kw: "COMPLIANCE",        code: VCC-05 }
+  - { kw: "SURVEILL",          code: VCC-05 }
+  - { kw: "FRAUD",             code: VCC-05 }
+  - { kw: "AML",               code: VCC-05 }
+  - { kw: "BSA",               code: VCC-05 }
+  - { kw: "OFAC",              code: VCC-05 }
+  - { kw: "REGULAT",           code: VCC-05 }
+  - { kw: "COVENANT",          code: VCC-05 }
+  - { kw: "BORROWER PROTECT",  code: VCC-05 }
+  # --- VCC-06 Operate & service ops ---
+  - { kw: "BACK OFFICE",       code: VCC-06 }
+  - { kw: "EXCEPTION",         code: VCC-06 }
+  - { kw: "SHARED SERVICE",    code: VCC-06 }
+  - { kw: "OPS",               code: VCC-06 }
+  # --- VCC-07 Analyse & decide ---
+  - { kw: "PORTFOLIO",         code: VCC-07 }
+  - { kw: "ANALYT",            code: VCC-07 }
+  - { kw: "PERFORMANCE",       code: VCC-07 }
+  - { kw: "REPORT",            code: VCC-07 }
+  - { kw: "INSIGHT",           code: VCC-07 }
+  - { kw: "FORECAST",          code: VCC-07 }
+  # --- VCC-08 Govern & enable ---
+  - { kw: "PLATFORM",          code: VCC-08 }
+  - { kw: "TECHNOLOGY",        code: VCC-08 }
+  - { kw: "AUTOMATION",        code: VCC-08 }
+  - { kw: "DATA",              code: VCC-08 }
+  - { kw: "GOVERN",            code: VCC-08 }
+  - { kw: "CONTROL",           code: VCC-08 }
+  - { kw: "STRATEGY",          code: VCC-08 }

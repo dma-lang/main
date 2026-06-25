@@ -261,6 +261,18 @@ export interface SubcapNode {
   is_new: boolean;
 }
 
+export interface VcPillarTally {
+  P1: number;
+  P2: number;
+  P3: number;
+  P4: number;
+}
+export interface VcTopSubcap {
+  id: string;
+  name: string;
+  n: number; // delivered Jira stories
+  pillar: string | null;
+}
 export interface ValueChainSubcap {
   id: string;
   name: string;
@@ -274,6 +286,9 @@ export interface ValueChainCluster {
   pillar: string | null;
   count: number;
   subcaps: ValueChainSubcap[];
+  stories?: number; // delivered Jira stories across the stage's subcaps (Pipeline/Radial heat)
+  pillars?: VcPillarTally; // P1-P4 subcap tally for the stage
+  top?: VcTopSubcap[]; // top-8 subcaps by delivery
   stages?: { name: string; count: number }[]; // present only in the derived fallback
   merged_from: string[];
 }
@@ -281,6 +296,17 @@ export interface ValueChainGroup {
   sv: string; // the subvertical this ordered chain belongs to
   clusters: ValueChainCluster[];
   total_subcaps: number;
+}
+export interface ValueChainStageRollup {
+  code: string; // VCC-01..08
+  name: string;
+  blurb: string;
+  subcaps: number;
+  stories: number;
+  projects: number;
+  pillars: VcPillarTally;
+  quarters: number[]; // per-quarter delivery trend (zeros until a dated corpus exists)
+  top: VcTopSubcap[];
 }
 export interface ValueChainResp {
   version: string;
@@ -295,6 +321,9 @@ export interface ValueChainResp {
   raw_clusters: number;
   deduped: number;
   total_subcaps: number;
+  rollup?: ValueChainStageRollup[]; // the 8 canonical MECE stages (Rollup view); absent on derived
+  rollup_has_dates?: boolean; // true only when stories carry a real delivery date (quarter trend)
+  quarter_count?: number; // number of trend buckets (default 6)
 }
 
 export interface SubcapDetail {

@@ -57,10 +57,9 @@ def provisioned() -> Iterator[None]:
         engine = db.get_engine()
         assert engine is not None
         async with engine.begin() as conn:
-            # the auto-run detector (carry_forward) writes these — clean FK-safe so nothing leaks
-            await conn.execute(text("DELETE FROM control.change_flag"))
-            await conn.execute(text("DELETE FROM control.validation_gate_run"))
-            await conn.execute(text("DELETE FROM control.reasoning_chain"))
+            # the auto-run detector writes reasoning_chain + many FK dependents (suggestion, change_
+            # flag, citation, pending_edge, trend, …) — TRUNCATE CASCADE clears them all FK-safe.
+            await conn.execute(text("TRUNCATE control.reasoning_chain CASCADE"))
             await conn.execute(text("DELETE FROM control.evidence_item WHERE kind = 'catalogue'"))
             await conn.execute(text("DELETE FROM control.story_subcap_carry"))
             await conn.execute(text("DELETE FROM control.story"))
@@ -181,3 +180,22 @@ def test_lead_stage_key_folds_overlapping_stages() -> None:
     assert lead_stage_key("AG MARKET INTELLIGENCE & SEASONAL FORECASTING") == "market"
     assert lead_stage_key("AGENCY MGMT SYSTEM & DATA") == "agency"  # distinct -> own key
     assert lead_stage_key("MARKETING & LEAD GENERATION") == "marketing"  # not 'market'
+
+
+@needs_db
+def test_v7_value_chain_includes_canonical_rollup(client: TestClient) -> None:
+    """The atlas response carries the 8-stage canonical Rollup + per-stage delivery (stories/pillars
+    /top) for Pipeline/Radial. The corpus has no delivery date, so the quarter trend stays empty."""
+    vc = client.get("/api/catalogue/v7/value-chain").json()
+    roll = vc["rollup"]
+    assert [s["code"] for s in roll] == [f"VCC-{i:02d}" for i in range(1, 9)]
+    assert sum(s["stories"] for s in roll) > 0  # real Jira delivery, aggregated per bucket
+    assert sum(s["projects"] for s in roll) > 0
+    assert vc["rollup_has_dates"] is False  # no dated corpus -> trend never synthesized
+    assert all(s["quarters"] == [0] * vc["quarter_count"] for s in roll)
+    # per-stage delivery enrichment on the Pipeline clusters
+    cl = vc["clusters"]
+    assert any(c.get("stories", 0) > 0 for c in cl)
+    assert all("pillars" in c and "top" in c for c in cl)
+    top_stage = max(cl, key=lambda c: c.get("stories", 0))
+    assert top_stage["top"] and top_stage["top"][0]["n"] >= top_stage["top"][-1]["n"]

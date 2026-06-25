@@ -81,19 +81,19 @@ _INGEST = text(
     "(story_key, project_key, epic_key, sub_cap_id, cap_id, pillar_id, category_id, category_name, "
     "cap_name, sub_cap_name, tier, story_sv_code, project_sv_code, reusability_layer, population, "
     "summary, ac_quality, sd_quality, delivery_score, composite_score, confidence_level, "
-    "ac_score, sd_score, story_score, source_version, is_synthetic) VALUES "
+    "ac_score, sd_score, story_score, delivered_at, source_version, is_synthetic) VALUES "
     "(:story_key, :project_key, :epic_key, :sub_cap_id, :cap_id, :pillar_id, :category_id, "
     ":category_name, :cap_name, :sub_cap_name, :tier, :story_sv_code, :project_sv_code, "
     ":reusability_layer, :population, :summary, :ac_quality, :sd_quality, :delivery_score, "
     ":composite_score, CAST(:confidence_level AS confidence_level), "
-    ":ac_score, :sd_score, :story_score, "
+    ":ac_score, :sd_score, :story_score, :delivered_at, "
     ":source_version, false) "
     "ON CONFLICT (story_key) DO UPDATE SET "
     "sub_cap_id = EXCLUDED.sub_cap_id, summary = EXCLUDED.summary, "
     "composite_score = EXCLUDED.composite_score, ac_score = EXCLUDED.ac_score, "
     "sd_score = EXCLUDED.sd_score, story_score = EXCLUDED.story_score, "
     "confidence_level = EXCLUDED.confidence_level, source_version = EXCLUDED.source_version, "
-    "ingested_at = now()"
+    "delivered_at = EXCLUDED.delivered_at, ingested_at = now()"
 )
 
 # One story may evidence SEVERAL subcaps (corpus mapping + the catalogue's own story refs), so the
@@ -108,6 +108,20 @@ _CARRY = text(
     ":carried_to_subcap, :similarity, CAST(:status AS carry_status), :via) "
     "ON CONFLICT (story_key, target_version, carried_to_subcap) DO NOTHING"
 )
+
+
+def _parse_date(raw: Any) -> Any:
+    """Best-effort parse of an export delivery date (ISO 8601) to a datetime; None when absent or
+    unparseable. The canonical corpus has no date, so this is None today; present so a future dated
+    export can populate control.story.delivered_at (we never invent a date)."""
+    if not raw:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00").strip())
+    except ValueError:
+        return None
 
 
 def _ingest_row(s: dict[str, Any], source_version: str) -> dict[str, Any]:
@@ -137,6 +151,13 @@ def _ingest_row(s: dict[str, Any], source_version: str) -> dict[str, Any]:
         "sd_score": s.get("sd"),
         "story_score": s.get("ss"),
         "source_version": source_version,
+        "delivered_at": _parse_date(
+            s.get("dt")
+            or s.get("rd")
+            or s.get("resolved")
+            or s.get("delivered")
+            or s.get("created")
+        ),
     }
 
 
