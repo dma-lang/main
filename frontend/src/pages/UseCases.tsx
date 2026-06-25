@@ -4,6 +4,7 @@
 // delivering stories. Wired to GET /api/catalogue/{v}/use-cases (server-filtered/sorted/paginated)
 // + /subcaps/{id}/stories for the drawer.
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import type { UseCaseRow } from '../api/client';
 import { useSubcaps, useSubcapStories, useUseCases } from '../api/queries';
@@ -120,9 +121,11 @@ function UseCaseDrawer({ version, uc, onClose }: { version: string; uc: UseCaseR
 
 export function UseCases() {
   const version = useUi((s) => s.version);
-  const [pillar, setPillar] = useState('all');
+  const [sp] = useSearchParams();
+  // arriving from a platform's use-case (or any deep link) pre-applies archetype/pillar filters
+  const [pillar, setPillar] = useState(() => sp.get('pillar') ?? 'all');
   const [cat, setCat] = useState('all');
-  const [arch, setArch] = useState('all');
+  const [arch, setArch] = useState(() => sp.get('archetype') ?? 'all');
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
   const [sort, setSort] = useState('delivery');
@@ -134,6 +137,13 @@ export function UseCases() {
     return () => clearTimeout(t);
   }, [qInput]);
   useEffect(() => setPage(1), [pillar, cat, arch, q, sort]);
+  // re-apply nav params if they change while the page is already mounted
+  useEffect(() => {
+    const a = sp.get('archetype');
+    const p = sp.get('pillar');
+    if (a) setArch(a);
+    if (p) setPillar(p);
+  }, [sp]);
 
   const allSubs = useSubcaps(version);
   const subs = useMemo(() => allSubs.data ?? [], [allSubs.data]);

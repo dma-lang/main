@@ -1,21 +1,30 @@
-// Vendor logo — renders the bundled brand mark when we have one (frontend/public/vendor-logos),
-// else a deterministic colored-initial avatar. Public marks only (D6); the asset set covers the
-// major vendors and every other vendor gracefully falls back to its initial.
+// Vendor logo — renders the bundled brand mark when the vendor name matches a known brand (the
+// catalogue labels some vendors compositely, e.g. "Salesforce / MuleSoft" or "AWS Bedrock", so we
+// match on brand TOKENS rather than an exact key), else a deterministic colored-initial avatar.
+// Sub-brands (MuleSoft, Tableau) are matched BEFORE their umbrella (Salesforce) so a composite name
+// resolves to the more specific mark. Public marks only (D6); assets in public/vendor-logos.
 import { useState } from 'react';
 
-const LOGOS: Record<string, string> = {
-  AWS: 'AWS.png',
-  Collibra: 'Collibra.png',
-  Databricks: 'Databricks.svg',
-  Google: 'Google.svg',
-  Microsoft: 'Microsoft.png',
-  MuleSoft: 'MuleSoft.png',
-  Salesforce: 'Salesforce.png',
-  Snowflake: 'Snowflake.svg',
-  Tableau: 'Tableau.png',
-  Twilio: 'Twilio.png',
-  nCino: 'nCino.png',
-};
+const BRANDS: { file: string; aliases: string[] }[] = [
+  // specific sub-brands first so "Salesforce / MuleSoft" → MuleSoft, not the Salesforce umbrella
+  { file: 'MuleSoft.png', aliases: ['mulesoft', 'mule'] },
+  { file: 'Tableau.png', aliases: ['tableau'] },
+  { file: 'nCino.png', aliases: ['ncino'] },
+  { file: 'Databricks.svg', aliases: ['databricks'] },
+  { file: 'Snowflake.svg', aliases: ['snowflake'] },
+  { file: 'Collibra.png', aliases: ['collibra'] },
+  { file: 'Twilio.png', aliases: ['twilio'] },
+  { file: 'Salesforce.png', aliases: ['salesforce'] },
+  { file: 'Microsoft.png', aliases: ['microsoft', 'azure'] },
+  { file: 'Google.svg', aliases: ['google'] },
+  { file: 'AWS.png', aliases: ['aws', 'amazon'] },
+];
+
+function logoFor(vendor: string): string | null {
+  const v = vendor.toLowerCase();
+  for (const b of BRANDS) if (b.aliases.some((a) => v.includes(a))) return b.file;
+  return null;
+}
 
 function hashHue(s: string): number {
   let h = 0;
@@ -26,7 +35,7 @@ function hashHue(s: string): number {
 export function PlatVendorLogo({ vendor, size = 32 }: { vendor: string | null; size?: number }) {
   const [failed, setFailed] = useState(false);
   const name = vendor ?? '';
-  const file = LOGOS[name];
+  const file = logoFor(name);
   if (file && !failed) {
     return (
       <img

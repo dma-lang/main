@@ -1,10 +1,10 @@
 // Value chain atlas (A3) — the catalogue's REAL value chain. Three views over the same delivery
-// truth: PIPELINE (the ordered per-SV stages, heat by delivered Jira stories), RADIAL (the same
-// stages as a wheel sized by delivery), and ROLLUP (the 8 canonical MECE stages — Acquire & onboard
-// … Govern & enable — each with stories, projects, a pillar mix and the top delivered subcaps).
-// Stages come from cat_<v>.subcap_vcc (cascaded v7→v5); story/project counts are the real Jira corpus
-// for the active version (story_catalogue_link, Jira-only). Click a stage to drill its top subcaps.
-import { useEffect, useState } from 'react';
+// truth: PIPELINE (the ordered per-SV stages: icon + STAGE n, subcaps & delivered Jira stories,
+// heat by delivery, with a per-stage drilldown), RADIAL (the top stages as an annular wheel sized
+// by delivery, angle ∝ stories, with a legend), and ROLLUP (the 8 canonical MECE stages). Stages
+// come from cat_<v>.subcap_vcc (cascaded v7→v5); story counts are the real Jira corpus for the
+// active version (story_catalogue_link, Jira-only). Click a stage to drill its top subcaps.
+import { useEffect, useMemo, useState } from 'react';
 
 import type {
   ValueChainCluster,
@@ -15,8 +15,8 @@ import type {
 import { useValueChain } from '../api/queries';
 import { Dropdown, Empty, Page, PillarDot, Seg } from '../components/primitives';
 import { go, openPeek } from '../lib/events';
-import { heatBg } from '../lib/helpers';
-import { Icon } from '../lib/icons';
+import { heatBg, PILLAR_COLORS } from '../lib/helpers';
+import { Icon, type IconName } from '../lib/icons';
 import { type Pillar, useUi } from '../state/store';
 
 const PILLARS: Pillar[] = ['all', 'P1', 'P2', 'P3', 'P4'];
@@ -36,9 +36,28 @@ const SV_NAME: Record<string, string> = {
   IB: 'Insurance brokerages',
 };
 
-const stagesOf = (c: ValueChainCluster) => c.stories ?? 0;
+// the prototype's 12-colour wheel palette + the keyword→icon map for a stage (verbatim).
+const PALETTE = [
+  '#185f60', '#27bbaf', '#3d81f6', '#62d7b8', '#8094c0', '#fe9732',
+  '#1c4a4d', '#139f94', '#5a6ea3', '#27bbaf', '#b5650f', '#0c7d72',
+];
+function stageIcon(s: string): IconName {
+  const u = (s || '').toUpperCase();
+  if (/MARKET|PROSPECT|ACQUI|LEAD/.test(u)) return 'trend';
+  if (/KYC|ONBOARD|ACCOUNT|APPLICATION/.test(u)) return 'upload';
+  if (/ORIGINAT|UNDERWRIT|QUOTE|FUND|CREDIT/.test(u)) return 'file';
+  if (/SERVIC|ENGAGE|RELATIONSHIP|COVERAGE|ADVIC|CARE/.test(u)) return 'chat';
+  if (/CROSS-SELL|WALLET|LOYALTY|RETENTION|RENEWAL|GROW/.test(u)) return 'sparkles';
+  if (/RISK|COMPLIANCE|SURVEILL|FRAUD/.test(u)) return 'shield';
+  if (/ANALYT|PORTFOLIO|PERFORMANCE|REPORT/.test(u)) return 'bars';
+  if (/BACK OFFICE|OPS|RECON/.test(u)) return 'gear';
+  if (/PLATFORM|TECHNOLOGY|DATA|GOVERN/.test(u)) return 'database';
+  return 'route';
+}
+const svLabelOf = (sv: string) => (sv === 'all' ? 'All subverticals' : (SV_NAME[sv] ?? sv));
+const storiesOf = (c: ValueChainCluster) => c.stories ?? 0;
 
-// P1–P4 subcap tally as inline pills — used on a stage drilldown and a rollup detail card.
+// P1–P4 subcap tally as inline pills — used on a rollup detail card.
 function PillarMix({ pillars }: { pillars?: VcPillarTally }) {
   if (!pillars) return null;
   const items: [string, number][] = [
@@ -62,128 +81,251 @@ function PillarMix({ pillars }: { pillars?: VcPillarTally }) {
   );
 }
 
-// Radial view — wedge radius ∝ delivered stories (falls back to subcap count when a version carries
-// no story link yet), in chain order.
-function RadialWheel({ segs }: { segs: ValueChainCluster[] }) {
-  const cx = 200;
-  const cy = 200;
-  const hasStories = segs.some((s) => stagesOf(s) > 0);
-  const metric = (s: ValueChainCluster) => (hasStories ? stagesOf(s) : s.count);
-  const max = Math.max(1, ...segs.map(metric));
-  const total = segs.reduce((a, s) => a + metric(s), 0);
+// Radial view — an ANNULAR wheel of the top 12 stages by delivery: segment ANGLE ∝ stories (not a
+// radial bar chart), a numbered legend, and a centre showing the total subcap placements + stage
+// count. Matches the prototype VCRadial.
+function RadialWheel({ segs: allSegs, svLabel }: { segs: ValueChainCluster[]; svLabel: string }) {
+  const cx = 170;
+  const cy = 170;
+  const inner = 62;
+  const outer = 150;
+  const segs = useMemo(
+    () => [...allSegs].sort((a, b) => storiesOf(b) - storiesOf(a)).slice(0, 12),
+    [allSegs],
+  );
+  const more = allSegs.length - segs.length;
+  const totalSubs = allSegs.reduce((a, s) => a + (s.count ?? 0), 0);
+  const totalStories = allSegs.reduce((a, s) => a + storiesOf(s), 0);
+  const [sel, setSel] = useState<string>(segs[0]?.code ?? '');
+  useEffect(() => setSel(segs[0]?.code ?? ''), [segs]);
+
+  const arc = (a0: number, a1: number, r0: number, r1: number) => {
+    const x0 = cx + Math.cos(a0) * r0;
+    const y0 = cy + Math.sin(a0) * r0;
+    const x1 = cx + Math.cos(a1) * r0;
+    const y1 = cy + Math.sin(a1) * r0;
+    const x2 = cx + Math.cos(a1) * r1;
+    const y2 = cy + Math.sin(a1) * r1;
+    const x3 = cx + Math.cos(a0) * r1;
+    const y3 = cy + Math.sin(a0) * r1;
+    const big = a1 - a0 > Math.PI ? 1 : 0;
+    return `M${x0} ${y0} A${r0} ${r0} 0 ${big} 1 ${x1} ${y1} L${x2} ${y2} A${r1} ${r1} 0 ${big} 0 ${x3} ${y3} Z`;
+  };
+  const cap = (s: string) => (s.length > 30 ? s.slice(0, 29) + '…' : s);
+
+  const tot = segs.reduce((a, s) => a + storiesOf(s), 0) || 1;
+  let acc = -Math.PI / 2;
+  const arcs = segs.map((s, i) => {
+    const frac = storiesOf(s) / tot;
+    const a0 = acc;
+    const a1 = acc + frac * 2 * Math.PI;
+    acc = a1;
+    return { s, i, a0, a1, frac };
+  });
+
   return (
-    <div className="card pad" style={{ display: 'flex', justifyContent: 'center' }}>
-      <svg width="100%" height={400} viewBox="0 0 400 400" style={{ maxWidth: 440 }}>
-        {segs.map((s, i) => {
-          const a0 = (i / segs.length) * 2 * Math.PI - Math.PI / 2;
-          const a1 = ((i + 1) / segs.length) * 2 * Math.PI - Math.PI / 2;
-          const rr = 60 + (metric(s) / max) * 90;
-          const x0 = cx + Math.cos(a0) * rr;
-          const y0 = cy + Math.sin(a0) * rr;
-          const x1 = cx + Math.cos(a1) * rr;
-          const y1 = cy + Math.sin(a1) * rr;
-          const mid = (a0 + a1) / 2;
-          const lx = cx + Math.cos(mid) * (rr + 16);
-          const ly = cy + Math.sin(mid) * (rr + 16);
-          return (
-            <g key={s.code}>
-              <path
-                d={`M${cx} ${cy} L${x0} ${y0} A${rr} ${rr} 0 0 1 ${x1} ${y1} Z`}
-                fill={heatBg(metric(s) / max)}
-                stroke="var(--surface-base)"
-                strokeWidth="2"
-              />
-              <text x={lx} y={ly} fontSize="8" fontWeight="700" fill="var(--text-tertiary)" textAnchor="middle" dominantBaseline="middle">
-                {s.name.length > 14 ? s.name.slice(0, 13) + '…' : s.name}
-              </text>
-            </g>
-          );
-        })}
-        <circle cx={cx} cy={cy} r={50} fill="var(--surface-base)" stroke="var(--border-subtle)" />
-        <text x={cx} y={cy - 4} fontSize="22" fontWeight="700" fill="var(--interactive)" textAnchor="middle">
-          {total.toLocaleString()}
-        </text>
-        <text x={cx} y={cy + 12} fontSize="9" fill="var(--text-tertiary)" textAnchor="middle">
-          {hasStories ? 'stories delivered' : 'subcaps mapped'}
-        </text>
-      </svg>
+    <div className="card pad" style={{ marginBottom: 16 }}>
+      <div className="between" style={{ marginBottom: 6 }}>
+        <div className="h3">{svLabel} value chain · radial</div>
+        <span className="chip soft">
+          {allSegs.length} stages · {totalStories.toLocaleString()} stories
+        </span>
+      </div>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
+        Ring shows the top {segs.length} stages by delivery{more > 0 ? ` (of ${allSegs.length})` : ''};
+        segment angle = stories. Click a segment or a legend row to drill in.
+      </div>
+      <div style={{ display: 'flex', gap: 28, alignItems: 'center', flexWrap: 'wrap' }}>
+        <svg width={340} height={340} viewBox="0 0 340 340" style={{ flex: 'none' }}>
+          {arcs.map(({ s, i, a0, a1, frac }) => {
+            const on = sel === s.code;
+            const mid = (a0 + a1) / 2;
+            const lr = (inner + outer) / 2;
+            const lx = cx + Math.cos(mid) * lr;
+            const ly = cy + Math.sin(mid) * lr;
+            return (
+              <g key={s.code} style={{ cursor: 'pointer' }} onClick={() => setSel(s.code)}>
+                <path
+                  d={arc(a0 + 0.008, a1 - 0.008, inner, on ? outer + 8 : outer)}
+                  fill={PALETTE[i % PALETTE.length]}
+                  opacity={on ? 1 : 0.88}
+                  stroke="var(--surface-base)"
+                  strokeWidth="2"
+                />
+                {frac > 0.06 && (
+                  <text x={lx} y={ly} fontSize="11" fontWeight="700" fill="#fff" textAnchor="middle" dominantBaseline="middle">
+                    {i + 1}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+          <circle cx={cx} cy={cy} r={inner} fill="var(--surface-base)" stroke="var(--border-subtle)" />
+          <text x={cx} y={cy - 10} fontSize="26" fontWeight="700" fill="var(--text-primary)" textAnchor="middle">
+            {totalSubs}
+          </text>
+          <text x={cx} y={cy + 8} fontSize="9" fill="var(--text-tertiary)" textAnchor="middle">
+            subcap placements
+          </text>
+          <text x={cx} y={cy + 24} fontSize="10" fontWeight="600" fill="var(--interactive)" textAnchor="middle">
+            {allSegs.length} stages
+          </text>
+        </svg>
+        <div style={{ flex: 1, minWidth: 260, display: 'grid', gap: 4, maxHeight: 300, overflowY: 'auto' }}>
+          {segs.map((s, i) => {
+            const on = sel === s.code;
+            return (
+              <div
+                key={s.code}
+                onClick={() => setSel(s.code)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '7px 10px',
+                  borderRadius: 7,
+                  cursor: 'pointer',
+                  background: on ? 'var(--surface-overlay)' : 'transparent',
+                  border: '1px solid ' + (on ? 'var(--border-medium)' : 'transparent'),
+                }}
+              >
+                <span
+                  style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: 5,
+                    background: PALETTE[i % PALETTE.length],
+                    color: '#fff',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flex: 'none',
+                  }}
+                >
+                  {i + 1}
+                </span>
+                <span
+                  style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: on ? 700 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={s.name}
+                >
+                  {cap(s.name)}
+                </span>
+                <span className="num muted" style={{ fontSize: 11, flex: 'none' }}>
+                  {s.count} subcaps
+                </span>
+                <span className="num" style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--interactive)', flex: 'none', minWidth: 46, textAlign: 'right' }}>
+                  {storiesOf(s).toLocaleString()}
+                </span>
+              </div>
+            );
+          })}
+          {more > 0 && (
+            <div className="muted" style={{ fontSize: 11, padding: '6px 10px' }}>
+              +{more} more stages — switch to Pipeline view to see all.
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-// One subvertical's ordered pipeline + its inline stage drilldown. Self-contained so the 'All SV'
-// view can stack one section per subvertical, each with its own open stage.
-function ChainSection({
-  chain,
-  showHeader,
-}: {
-  chain: ValueChainGroup;
-  showHeader: boolean;
-}) {
+// One subvertical's ordered pipeline + its inline stage drilldown (icon badge + STAGE n cards,
+// subcaps & stories dual metrics, delivery heat as a top border, chevrons between; the drilldown
+// shows the pillar mix as bars and the top delivered subcaps as a 2-column card grid).
+function ChainSection({ chain }: { chain: ValueChainGroup }) {
   const clusters = chain.clusters;
+  const svLabel = svLabelOf(chain.sv);
   const [open, setOpen] = useState<string | null>(clusters[0]?.code ?? null);
-  // re-focus the first stage when the underlying chain changes (version / pillar / sv switch)
   useEffect(() => setOpen(clusters[0]?.code ?? null), [chain.sv, clusters.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const current = clusters.find((c) => c.code === open) ?? clusters[0] ?? null;
-  const maxStories = Math.max(1, ...clusters.map(stagesOf));
-  // top delivered subcaps for the open stage — prefer the story-ranked top, fall back to members
+  const maxStories = Math.max(1, ...clusters.map(storiesOf));
+  const totalSubs = clusters.reduce((a, c) => a + (c.count ?? 0), 0);
   const drill =
     current?.top && current.top.length
       ? current.top
       : (current?.subcaps ?? []).map((s) => ({ id: s.id, name: s.name, n: 0, pillar: s.pillar }));
 
   return (
-    <div style={{ marginBottom: showHeader ? 22 : 0 }}>
-      {showHeader && (
-        <div className="row gap8" style={{ marginBottom: 8, alignItems: 'baseline' }}>
-          <Icon n="route" s={13} cls="" style={{ color: 'var(--interactive)' }} />
-          <b style={{ fontSize: 14 }}>{SV_NAME[chain.sv] ?? chain.sv} value chain</b>
-          <span className="muted" style={{ fontSize: 11.5 }}>
-            {clusters.length} stages · {chain.total_subcaps} subcaps
+    <div style={{ marginBottom: 16 }}>
+      <div className="card pad" style={{ marginBottom: 16, overflowX: 'auto' }}>
+        <div className="between" style={{ marginBottom: 14 }}>
+          <div className="h3">
+            {svLabel} value chain · {clusters.length} stages
+          </div>
+          <span className="chip soft">
+            <Icon n="route" s={12} /> {totalSubs} subcaps · complete
           </span>
         </div>
-      )}
-      {/* the ORDERED pipeline — left-to-right, stage NAME headline, DELIVERY (stories) the metric */}
-      <div className="card pad" style={{ marginBottom: 12, overflowX: 'auto' }}>
-        <div className="row" style={{ gap: 0, alignItems: 'stretch', minWidth: 'min-content' }}>
+        <div style={{ display: 'flex', gap: 0, minWidth: 'min-content' }}>
           {clusters.map((c, i) => {
             const on = c.code === open;
-            const ratio = stagesOf(c) / maxStories;
+            const ratio = storiesOf(c) / maxStories;
             return (
-              <div key={c.code} className="row" style={{ gap: 0, alignItems: 'center' }}>
-                <button
+              <div
+                key={c.code}
+                style={{ flex: '1 1 0', minWidth: 150, position: 'relative', paddingRight: i < clusters.length - 1 ? 20 : 0 }}
+              >
+                <div
                   onClick={() => setOpen(c.code)}
                   className="card hov"
                   style={{
-                    width: 150,
-                    minHeight: 104,
-                    textAlign: 'left',
-                    padding: '10px 12px',
+                    padding: '13px 14px',
                     cursor: 'pointer',
-                    flex: 'none',
-                    borderColor: on ? 'var(--interactive)' : 'var(--border-subtle)',
+                    height: '100%',
+                    borderColor: on ? 'var(--border-strong)' : 'var(--border-subtle)',
                     background: on ? 'var(--surface-overlay)' : 'var(--surface-base)',
+                    borderTop: '3px solid ' + heatBg(0.35 + ratio * 0.65),
                   }}
                 >
-                  <div className="row gap6" style={{ marginBottom: 5 }}>
-                    <span className="num" style={{ fontSize: 10, fontWeight: 700, color: 'var(--interactive)' }}>
-                      {String(c.position ?? i + 1).padStart(2, '0')}
+                  <div className="row gap8" style={{ marginBottom: 8 }}>
+                    <div
+                      style={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: 8,
+                        background: 'var(--surface-overlay)',
+                        color: 'var(--interactive)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flex: 'none',
+                      }}
+                    >
+                      <Icon n={stageIcon(c.name)} s={15} />
+                    </div>
+                    <span className="mono" style={{ fontSize: 9, color: 'var(--z-slate)', fontWeight: 700 }}>
+                      STAGE {i + 1}
                     </span>
-                    {c.pillar && <PillarDot p={c.pillar} s={6} />}
                   </div>
-                  <div style={{ fontSize: 11.5, fontWeight: 600, lineHeight: 1.25, minHeight: 42 }}>
+                  <div className="h3" style={{ fontSize: 11.5, lineHeight: 1.25, minHeight: 42, textTransform: 'none' }}>
                     {c.name}
                   </div>
-                  <div className="num" style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>
-                    {stagesOf(c).toLocaleString()}
-                    <span className="muted" style={{ fontSize: 9.5, fontWeight: 400 }}> stories</span>
+                  <div className="row gap12" style={{ marginTop: 8 }}>
+                    <div>
+                      <div className="num" style={{ fontSize: 17, fontWeight: 700, color: 'var(--interactive)' }}>
+                        {c.count}
+                      </div>
+                      <div className="muted" style={{ fontSize: 9 }}>
+                        subcaps
+                      </div>
+                    </div>
+                    <div>
+                      <div className="num" style={{ fontSize: 17, fontWeight: 700 }}>
+                        {storiesOf(c).toLocaleString()}
+                      </div>
+                      <div className="muted" style={{ fontSize: 9 }}>
+                        stories
+                      </div>
+                    </div>
                   </div>
-                  <div className="muted num" style={{ fontSize: 10 }}>{c.count} subcaps</div>
-                  {/* delivery heat strip */}
-                  <div style={{ height: 4, borderRadius: 3, marginTop: 6, background: heatBg(0.15 + ratio * 0.85) }} />
-                </button>
+                </div>
                 {i < clusters.length - 1 && (
-                  <Icon n="chevR" s={14} cls="" style={{ color: 'var(--text-tertiary)', flex: 'none', margin: '0 2px' }} />
+                  <div style={{ position: 'absolute', right: 4, top: '42%', color: 'var(--text-disabled)', zIndex: 1 }}>
+                    <Icon n="chevR" s={16} />
+                  </div>
                 )}
               </div>
             );
@@ -193,37 +335,104 @@ function ChainSection({
 
       {current && (
         <div className="card pad fade-in">
-          <div className="between" style={{ marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-            <div className="row gap8">
-              <span className="num chip teal" style={{ fontSize: 11 }}>
-                Stage {String(current.position ?? 1).padStart(2, '0')}
-              </span>
-              <b style={{ fontSize: 15 }}>{current.name}</b>
-              {current.pillar && <span className="chip soft">{current.pillar}</span>}
-              <span className="muted" style={{ fontSize: 12 }}>
-                {stagesOf(current).toLocaleString()} stories · {current.count} subcaps
-              </span>
-            </div>
-            <PillarMix pillars={current.pillars} />
-          </div>
-          <div className="eyebrow" style={{ marginBottom: 8 }}>
-            Top delivered subcaps — click to peek, double-click to open the deep dive
-          </div>
-          <div className="row wrap gap6">
-            {drill.map((s) => (
-              <span
-                key={s.id}
-                className="chip soft"
-                style={{ cursor: 'pointer', fontSize: 11 }}
-                title={s.id}
-                onClick={() => openPeek(s.id)}
-                onDoubleClick={() => go('subcap/' + s.id)}
+          <div className="between" style={{ marginBottom: 4 }}>
+            <div className="row gap10">
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 9,
+                  background: 'var(--surface-overlay)',
+                  color: 'var(--interactive)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
               >
-                {s.pillar && <PillarDot p={s.pillar} s={6} />}
-                {s.name}
-                {s.n > 0 && <b className="num" style={{ color: 'var(--interactive)' }}>{s.n}</b>}
-              </span>
-            ))}
+                <Icon n={stageIcon(current.name)} s={17} />
+              </div>
+              <div>
+                <div className="h2" style={{ fontSize: 16 }}>
+                  {current.name}
+                </div>
+                <div className="muted" style={{ fontSize: 11 }}>
+                  {svLabel} · value-chain stage
+                </div>
+              </div>
+            </div>
+            <span className="chip soft">
+              {current.count} subcaps · {storiesOf(current).toLocaleString()} stories
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 20, marginTop: 14, alignItems: 'start' }}>
+            <div>
+              <div className="eyebrow" style={{ marginBottom: 8 }}>
+                Pillar mix
+              </div>
+              {(['P1', 'P2', 'P3', 'P4'] as const).map((pk) => {
+                const v = current.pillars?.[pk] ?? 0;
+                const mx = Math.max(
+                  1,
+                  current.pillars?.P1 ?? 0,
+                  current.pillars?.P2 ?? 0,
+                  current.pillars?.P3 ?? 0,
+                  current.pillars?.P4 ?? 0,
+                );
+                return v ? (
+                  <div key={pk} className="row gap8" style={{ marginBottom: 6 }}>
+                    <span className="row gap6" style={{ minWidth: 96 }}>
+                      <PillarDot p={pk} s={7} />
+                      <span className="muted" style={{ fontSize: 11 }}>
+                        {pk}
+                      </span>
+                    </span>
+                    <div style={{ flex: 1 }}>
+                      <div className="bartrack">
+                        <div className="barfill" style={{ width: `${(v / mx) * 100}%`, background: PILLAR_COLORS[pk] }} />
+                      </div>
+                    </div>
+                    <b className="num" style={{ fontSize: 11 }}>
+                      {v}
+                    </b>
+                  </div>
+                ) : null;
+              })}
+              <div className="card" style={{ padding: '10px 12px', background: 'var(--surface-overlay)', marginTop: 16 }}>
+                <div className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
+                  Stage name is verbatim from the v7 <span className="mono">21_VC_Mapping_PerSubcap</span> mapping
+                  {chain.sv !== 'all' ? ` for ${svLabel}` : ''}.
+                </div>
+              </div>
+            </div>
+            <div>
+              <div className="eyebrow" style={{ marginBottom: 8 }}>
+                Subcaps at this stage · top by delivery
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                {drill.map((s) => (
+                  <div
+                    key={s.id}
+                    className="card hov"
+                    style={{ padding: '9px 11px', cursor: 'pointer' }}
+                    onClick={() => openPeek(s.id)}
+                    onDoubleClick={() => go('subcap/' + s.id)}
+                  >
+                    <div className="row gap6" style={{ marginBottom: 4 }}>
+                      {s.pillar && <PillarDot p={s.pillar} s={6} />}
+                      <span className="mono sclink" style={{ fontSize: 10 }}>
+                        {s.id}
+                      </span>
+                      <b className="num" style={{ fontSize: 10.5, marginLeft: 'auto', color: 'var(--interactive)' }}>
+                        {s.n}
+                      </b>
+                    </div>
+                    <div style={{ fontSize: 11.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.name}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -303,14 +512,7 @@ function OverviewRollup({ rollup }: { rollup: ValueChainStageRollup[] }) {
           </div>
           {cur.blurb && <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>{cur.blurb}</div>}
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: 12,
-              marginBottom: 16,
-            }}
-          >
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
             {[
               ['subcaps', cur.subcaps.toLocaleString()],
               ['stories', cur.stories.toLocaleString()],
@@ -391,7 +593,6 @@ export function ValueChain() {
 
   const res = useValueChain(version, pillar, ui.sv);
   const data = res.data;
-  // prefer the per-subvertical chains; fall back to wrapping the flat clusters (derived path)
   const chains: ValueChainGroup[] =
     data?.chains && data.chains.length > 0
       ? data.chains
@@ -471,19 +672,9 @@ export function ValueChain() {
           desc="Provision a catalogue version (upload its workbooks) and its value-chain stages appear here, in order, per subvertical."
         />
       ) : view === 'radial' ? (
-        chains.map((ch) => (
-          <div key={ch.sv} style={{ marginBottom: multi ? 22 : 0 }}>
-            {multi && (
-              <div className="row gap8" style={{ marginBottom: 8, alignItems: 'baseline' }}>
-                <Icon n="route" s={13} cls="" style={{ color: 'var(--interactive)' }} />
-                <b style={{ fontSize: 14 }}>{SV_NAME[ch.sv] ?? ch.sv} value chain</b>
-              </div>
-            )}
-            <RadialWheel segs={ch.clusters} />
-          </div>
-        ))
+        chains.map((ch) => <RadialWheel key={ch.sv} segs={ch.clusters} svLabel={svLabelOf(ch.sv)} />)
       ) : (
-        chains.map((ch) => <ChainSection key={ch.sv} chain={ch} showHeader={multi} />)
+        chains.map((ch) => <ChainSection key={ch.sv} chain={ch} />)
       )}
     </Page>
   );
