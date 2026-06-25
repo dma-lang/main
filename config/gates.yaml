@@ -61,7 +61,13 @@ matching:
 
 # Knowledge-graph Layer B proposal thresholds (pending_edge; gated + human-approved before commit).
 knowledge_graph:
-  semantically_similar_min_cosine: 0.85
+  semantically_similar_min_cosine: 0.85   # Phase B (live embeddings): SEMANTICALLY_SIMILAR floor
+  # Phase A (deterministic, structural): two CROSS-capability subcaps sharing at least this many
+  # distinct L3 platforms -> a SHARES_PLATFORM proposal; sharing this many personas -> SHARES_FEATURE.
+  # Both >= 2 so G2 (>= 2 supporting items) always passes for a real proposal.
+  shares_platform_min_shared: 2
+  shares_feature_min_shared: 2
+  max_proposals_per_scan: 200             # bound the run (resilience: bounded everything)
 
 # Unscoped-subvertical discovery (clients delivering outside the 9 modelled subverticals).
 # A candidate is proposed only with real volume AND when the client is not already an existing SV.

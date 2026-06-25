@@ -144,6 +144,22 @@ def unscoped_subverticals_config() -> tuple[int, float]:
     return min_stories, overlap_max
 
 
+def knowledge_graph_config() -> tuple[int, int, int]:
+    """(shares_platform_min, shares_feature_min, max_proposals) for the deterministic KG Layer-B
+    structural builder: how many distinct L3 platforms two cross-capability subcaps must share to
+    propose a ``SHARES_PLATFORM`` edge, how many personas to propose a ``SHARES_FEATURE`` edge, and
+    the per-scan proposal cap (resilience: bounded everything). Both floors are >= 2 so G2 (>= 2
+    supporting items) always passes for a real proposal. Config, not code — recalibrated without a
+    deploy."""
+    section = load_gate_config().get("knowledge_graph") or {}
+    sp_min = int(section.get("shares_platform_min_shared", 2))
+    sf_min = int(section.get("shares_feature_min_shared", 2))
+    cap = int(section.get("max_proposals_per_scan", 200))
+    if sp_min < 2 or sf_min < 2 or cap < 1:
+        raise ValueError("gates.yaml: invalid knowledge_graph thresholds")
+    return sp_min, sf_min, cap
+
+
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
     """Run G5 + G7 over a grounded answer; return the gate_results jsonb and the verdict."""
     g5 = retrieval_count > 0 and citation_count > 0

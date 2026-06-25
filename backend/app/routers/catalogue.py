@@ -945,15 +945,20 @@ async def knowledge_graph(
             .mappings()
             .all()
         )
+        # Layer-B pending edges: resolve the kg_node uuids back to their subcap ref_ids (the ids the
+        # graph renders), so a proposed edge connects the centre to a real rendered node.
         pend = (
             (
                 await conn.execute(
                     text(
-                        "SELECT from_node::text AS source, to_node::text AS target, "
-                        "kind::text AS kind "
-                        "FROM control.pending_edge WHERE version_id = :ver "
-                        "AND (from_node::text = :sid OR to_node::text = :sid) "
-                        "AND status = 'pending' LIMIT 10"
+                        "SELECT fn.ref_id AS source, fn.label AS source_label, "
+                        "tn.ref_id AS target, tn.label AS target_label, pe.kind::text AS kind "
+                        "FROM control.pending_edge pe "
+                        "JOIN control.kg_node fn ON fn.node_id = pe.from_node "
+                        "JOIN control.kg_node tn ON tn.node_id = pe.to_node "
+                        "WHERE pe.version_id = :ver "
+                        "AND (fn.ref_id = :sid OR tn.ref_id = :sid) "
+                        "AND pe.status = 'pending' LIMIT 10"
                     ),
                     params,
                 )
@@ -978,10 +983,17 @@ async def knowledge_graph(
         edges.append(
             KgEdge(source=subcap, target=sb["id"], kind="shares_platform", layer="A_deterministic")
         )
-    pending = [
-        KgEdge(source=p["source"], target=p["target"], kind=p["kind"], layer="B_proposed")
-        for p in pend
-    ]
+    pending: list[KgEdge] = []
+    existing_ids = {n.id for n in nodes}
+    for p in pend:
+        pending.append(
+            KgEdge(source=p["source"], target=p["target"], kind=p["kind"], layer="B_proposed")
+        )
+        # add the proposed neighbour subcap node(s) so the dashed edge connects to a drawn node
+        for ref, label in ((p["source"], p["source_label"]), (p["target"], p["target_label"])):
+            if ref != subcap and ref not in existing_ids:
+                nodes.append(KgNode(id=ref, kind="subcap", label=str(label), pillar=ref[:2]))
+                existing_ids.add(ref)
     stats = {
         "platforms": len(plats),
         "offerings": len(offs),

@@ -252,6 +252,7 @@ async def _create_flag(conn: AsyncConnection, c: Any, version_id: str) -> None:
 _DECAY_KIND = "decay_missing_subcap"  # removed-from-previous (kept stable for existing rows)
 _DECAY_NO_DELIVERY = "decay_no_delivery"  # in this version but zero real Jira stories
 _UNSCOPED_KIND = "unscoped_subvertical"  # proposed new subvertical (services/subverticals.py)
+_KG_EDGE_KIND = "kg_edge_proposal"  # proposed structural KG Layer-B edge (services/kg.py)
 _INACTIVE_STATE = "dead"  # "mark inactive" target lifecycle
 _LIVE_STATES = ("emerging", "rising", "stable")  # believed active -> decay is the real decision
 _NO_DELIVERY_CAP = 1000  # generous: surface ALL decayed subcaps (v7 ~765) in one scan
@@ -600,6 +601,49 @@ async def approve(flag_id: str, actor: str) -> FlagResult:
             )
             return FlagResult(resolved=True, status="approved")
 
+        if flag["kind"] == _KG_EDGE_KIND:
+            # Approving a proposed structural edge RE-GATES (deterministic structural inputs ->
+            # pass) then PROMOTES the pending_edge to an accepted Layer-B kg_edge (still dashed,
+            # now human-confirmed), audited. A failed re-gate writes nothing and keeps it open.
+            results, verdict = gates.evaluate_suggestion(
+                target_exists=True,
+                evidence_count=int(detail.get("shared", 2)),
+                source_tier="T1",
+                cited=True,
+                contradicts=False,
+                cost_usd=0.0,
+            )
+            if verdict != "pass":
+                return FlagResult(
+                    resolved=False, status="open", gate_failed=gates.first_failing(results)
+                )
+            from app.services import kg as kg_svc
+
+            await kg_svc.promote_pending_edge(conn, str(detail.get("pending_id") or ""))
+            await _audit(
+                conn,
+                actor,
+                "change_flag.approve",
+                target,
+                {
+                    "flag_id": flag_id,
+                    "accepted": "kg_edge",
+                    "edge": detail.get("kind_edge"),
+                    "from": detail.get("from"),
+                    "to": detail.get("to"),
+                    "pending_id": detail.get("pending_id"),
+                    "version": detail.get("version"),
+                },
+            )
+            await conn.execute(
+                text(
+                    "UPDATE control.change_flag SET status = 'approved', resolved_at = now() "
+                    "WHERE flag_id = :id"
+                ),
+                {"id": flag_id},
+            )
+            return FlagResult(resolved=True, status="approved")
+
         if flag["kind"] not in (_KIND, _DECAY_NO_DELIVERY):
             # Evidence-gate failures (F7 ingest) have no lifecycle correction to apply; the
             # source must be fixed or the item rejected. Stays open, failing gate named, and
@@ -738,6 +782,12 @@ async def reject(flag_id: str, reason: str, actor: str) -> FlagResult:
             ),
             {"r": json.dumps({"reason": reason}), "id": flag_id},
         )
+        if flag["kind"] == _KG_EDGE_KIND:
+            from app.services import kg as kg_svc
+
+            await kg_svc.reject_pending_edge(
+                conn, str((flag["detail"] or {}).get("pending_id") or "")
+            )
         await _audit(
             conn,
             actor,

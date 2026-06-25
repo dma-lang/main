@@ -33,29 +33,42 @@ export function KnowledgeGraph() {
   const cur = center || options[0]?.v || '';
   const kg = useKg(ui.version, isAdmin ? cur : null);
 
-  // Radial layout: centre node in the middle, neighbours evenly spaced on a ring. Memoised so the
-  // graph is stable across re-renders.
+  const showB = layer !== 'A';
+  const edges = kg.data?.edges ?? [];
+  const pending = showB ? kg.data?.pending ?? [] : [];
+  const centerId = kg.data?.center ?? '';
+  // Only draw nodes reachable by a currently-visible edge (or the centre), so toggling to
+  // Deterministic doesn't leave a Layer-B-only neighbour floating with no edge.
+  const visibleNodes = useMemo(() => {
+    const vis = showB
+      ? [...(kg.data?.edges ?? []), ...(kg.data?.pending ?? [])]
+      : kg.data?.edges ?? [];
+    const connected = new Set<string>([kg.data?.center ?? '']);
+    vis.forEach((e) => {
+      connected.add(e.source);
+      connected.add(e.target);
+    });
+    return (kg.data?.nodes ?? []).filter((n) => connected.has(n.id));
+  }, [kg.data, showB]);
+
+  // Radial layout over the visible nodes: centre in the middle, neighbours evenly spaced on a ring.
   const layout = useMemo(() => {
     const W = 620;
     const H = 460;
     const cx = W / 2;
     const cy = H / 2;
-    const nodes = kg.data?.nodes ?? [];
-    const neighbours = nodes.filter((n) => n.id !== kg.data?.center);
+    const neighbours = visibleNodes.filter((n) => n.id !== centerId);
     const pos = new Map<string, { x: number; y: number }>();
-    pos.set(kg.data?.center ?? '', { x: cx, y: cy });
+    pos.set(centerId, { x: cx, y: cy });
     neighbours.forEach((n, i) => {
       const a = (i / Math.max(1, neighbours.length)) * 2 * Math.PI - Math.PI / 2;
       const r = n.kind === 'subcap' ? 200 : 150;
       pos.set(n.id, { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
     });
     return { W, H, pos };
-  }, [kg.data]);
+  }, [visibleNodes, centerId]);
 
-  const showB = layer !== 'A';
-  const edges = kg.data?.edges ?? [];
-  const pending = showB ? kg.data?.pending ?? [] : [];
-  const nodeById = new Map((kg.data?.nodes ?? []).map((n) => [n.id, n]));
+  const nodeById = new Map(visibleNodes.map((n) => [n.id, n]));
   const onNode = (n: KgNode) => {
     if (n.kind === 'subcap') openPeek(n.id);
     else if (n.kind === 'platform') go('platforms');
@@ -92,14 +105,14 @@ export function KnowledgeGraph() {
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: 12 }}>
               {kg.isLoading && <div className="muted" style={{ fontSize: 12, padding: 12 }}>Projecting the neighbourhood…</div>}
-              {kg.data && kg.data.nodes.length <= 1 && (
+              {kg.data && visibleNodes.length <= 1 && (
                 <Empty
                   icon="graph"
                   title="No structural edges for this subcap"
                   desc="This subcap has no platform, offering or shared-platform links in the catalogue yet. Pick another centre, or open it to add platform mappings."
                 />
               )}
-              {kg.data && kg.data.nodes.length > 1 && (
+              {kg.data && visibleNodes.length > 1 && (
                 <svg width="100%" viewBox={`0 0 ${layout.W} ${layout.H}`} style={{ display: 'block' }}>
                   {[...edges, ...pending].map((e, i) => {
                     const a = layout.pos.get(e.source);
@@ -119,7 +132,7 @@ export function KnowledgeGraph() {
                       />
                     );
                   })}
-                  {(kg.data.nodes ?? []).map((n) => {
+                  {visibleNodes.map((n) => {
                     const p = layout.pos.get(n.id);
                     if (!p) return null;
                     const isCenter = n.id === kg.data!.center;
@@ -192,11 +205,11 @@ export function KnowledgeGraph() {
             </div>
             <div className="card pad">
               <div className="h3" style={{ marginBottom: 8 }}>
-                Shared-platform neighbours
+                Neighbour subcaps
               </div>
               <div style={{ display: 'grid', gap: 6 }}>
-                {(kg.data?.nodes ?? [])
-                  .filter((n) => n.kind === 'subcap' && n.id !== kg.data?.center)
+                {visibleNodes
+                  .filter((n) => n.kind === 'subcap' && n.id !== centerId)
                   .map((n) => (
                     <div
                       key={n.id}

@@ -28,6 +28,7 @@ const KIND_LABEL: Record<string, string> = {
   decay_missing_subcap: 'Decay · removed from a previous version',
   evidence_gate_failure: 'Evidence gate failures',
   unscoped_subvertical: 'New subvertical proposals',
+  kg_edge_proposal: 'Knowledge-graph edge proposals',
 };
 const RENDER_CAP = 120;
 

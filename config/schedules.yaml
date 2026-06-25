@@ -27,6 +27,12 @@ schedules:
     job: weekly_unscoped_subverticals
     batch: true
 
+  kg_structural_propose:
+    description: Weekly KG Layer-B structural discovery -> dashed pending_edge proposals -> Change Flags.
+    cron: "50 6 * * MON"          # Monday 06:50 UTC (after the unscoped-subvertical scan)
+    job: weekly_kg_structural
+    batch: true
+
   vendor_scan:
     description: Weekly vendor-development ingest -> 8-type classification -> subcap impact.
     cron: "0 7 * * MON"           # Monday 07:00 UTC

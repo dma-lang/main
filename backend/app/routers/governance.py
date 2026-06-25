@@ -18,6 +18,7 @@ from sqlalchemy import text
 from app import db
 from app.deps import get_current_user, require_admin
 from app.services import change_flags as flags_svc
+from app.services import kg as kg_svc
 from app.services import subverticals as subverticals_svc
 
 router = APIRouter(prefix="/api", tags=["governance"])
@@ -252,6 +253,16 @@ async def scan_subverticals(
     the nine modelled subverticals, infer + gate a candidate new subvertical for each (volume-
     stratified, overlap-guarded), and queue it in the Change-Flags / Notifications inbox."""
     return await subverticals_svc.detect_unscoped_subverticals(version)
+
+
+@router.post("/admin/kg/propose/{version}")
+async def propose_kg_edges(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Knowledge-graph Layer-B structural discovery: propose dashed ``pending_edge``s between
+    cross-capability subcaps that co-occur structurally (shared L3 platforms / personas), each
+    gated G1-G8 and queued in the Change-Flags inbox for human approval — never written live."""
+    return await kg_svc.propose_structural_edges(version)
 
 
 @router.post("/change-flags/{flag_id}/approve")
