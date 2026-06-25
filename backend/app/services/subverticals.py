@@ -211,6 +211,76 @@ async def _cluster_evidence(conn: AsyncConnection, client: str, title: str) -> s
     return str(created[0])
 
 
+async def _infer(
+    cl: dict[str, Any], overlap_sv: str | None, overlap: float
+) -> tuple[Any, float, dict[str, float]]:
+    """Name the candidate + its trust envelope (claim label, ERS) from the cluster — the ONE place
+    the model is asked. Live Vertex (R2 Phase B); until then, and on any live failure, degrade to
+    the deterministic name so the detector is functional in any LLM_MODE and never crashes."""
+    fingerprint = {
+        "clients": [cl["client"]],
+        "story_count": cl["stories"],
+        "pillars": cl["pillars"],
+        "top_capabilities": cl["top_capabilities"],
+        "sample_summaries": cl["samples"],
+        "overlap_sv": overlap_sv,
+        "overlap": overlap,
+    }
+    try:
+        inf = await Gemini().infer_subvertical_name(fingerprint)
+    except NotImplementedError:
+        inf = Gemini._hermetic_infer_subvertical(fingerprint)
+    dom_share = (cl["top_capabilities"][0]["n"] / cl["stories"]) if cl["top_capabilities"] else 0.0
+    components, ers = compute_ers(
+        tier="T1",
+        published=cl["latest"] or datetime.now(UTC),
+        specificity=min(1.0, dom_share),
+        corroboration=min(1.0, cl["stories"] / 100.0),
+    )
+    return inf, ers, components
+
+
+async def candidates_for(
+    version: str, min_stories: int | None = None, overlap_max: float | None = None
+) -> list[dict[str, Any]]:
+    """READ-ONLY: the unscoped-subvertical candidates as they'd be proposed — clustered, overlap-
+    guarded, named (deterministic; no spend) — WITHOUT writing any gated flag. Lets the mission-
+    control orange panel render the detection out of the box; the gated proposals (Notifications,
+    approve/reject) are still created by the explicit/scheduled scan."""
+    cfg_min, cfg_overlap = gates.unscoped_subverticals_config()
+    min_stories = cfg_min if min_stories is None else min_stories
+    overlap_max = cfg_overlap if overlap_max is None else overlap_max
+    await resolve_version(version)
+    engine = db.require_engine()
+    out: list[dict[str, Any]] = []
+    async with engine.connect() as conn:
+        for cl in await _client_clusters(conn):
+            if cl["stories"] < min_stories:
+                continue
+            dom_sv, dom = _dominant_classified(cl["classified"])
+            overlap = dom / (dom + cl["stories"]) if dom else 0.0
+            if overlap >= overlap_max:
+                continue
+            inf, ers, _ = await _infer(cl, dom_sv, overlap)
+            out.append(
+                {
+                    "client": cl["client"],
+                    "code": inf.code,
+                    "name": inf.name,
+                    "stories": cl["stories"],
+                    "pillars": cl["pillars"],
+                    "top_capabilities": cl["top_capabilities"][:6],
+                    "samples": cl["samples"],
+                    "overlap_sv": dom_sv,
+                    "overlap": round(overlap, 3),
+                    "claim_label": inf.claim_label,
+                    "source_tier": "T1",
+                    "ers": ers,
+                }
+            )
+    return out
+
+
 async def _create_subvertical_flag(
     conn: AsyncConnection,
     version_id: str,
@@ -221,24 +291,7 @@ async def _create_subvertical_flag(
     client = cl["client"]
     stories = cl["stories"]
     top_caps = cl["top_capabilities"]
-    fingerprint = {
-        "clients": [client],
-        "story_count": stories,
-        "pillars": cl["pillars"],
-        "top_capabilities": top_caps,
-        "sample_summaries": cl["samples"],
-        "overlap_sv": overlap_sv,
-        "overlap": overlap,
-    }
-    inf = await Gemini().infer_subvertical_name(fingerprint)
-    # trust envelope: claim label + source tier + ERS + reasoning backlink
-    dom_share = (top_caps[0]["n"] / stories) if top_caps else 0.0
-    components, ers = compute_ers(
-        tier="T1",
-        published=cl["latest"] or datetime.now(UTC),
-        specificity=min(1.0, dom_share),
-        corroboration=min(1.0, stories / 100.0),
-    )
+    inf, ers, components = await _infer(cl, overlap_sv, overlap)
     results, verdict = gates.evaluate_suggestion(
         target_exists=True,  # the active version exists; nothing is mutated, only proposed
         evidence_count=stories,

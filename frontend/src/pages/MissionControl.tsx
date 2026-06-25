@@ -380,6 +380,12 @@ export function MissionControl() {
                               </ul>
                             </>
                           )}
+                          {c.status === 'detected' && (
+                            <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+                              Auto-detected from unscoped delivery. Run the subvertical scan
+                              (Notifications → Scan for anomalies) to gate it as an approvable proposal.
+                            </div>
+                          )}
                           <div className="row gap12">
                             {c.chain_id && (
                               <button className="linkbtn" onClick={() => c.chain_id && openReasoning(c.chain_id)}>

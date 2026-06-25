@@ -42,11 +42,14 @@ def provisioned() -> Iterator[None]:
         engine = db.get_engine()
         assert engine is not None
         async with engine.begin() as conn:
-            # simulate v5 provisioned BEFORE the cascade: no VC mapping AND no platform enrichment
-            # of its own, so the atlas + the value-chain/vendor heatmap lenses must INHERIT v7.
+            # simulate v5 provisioned BEFORE the cascade: NO enrichment of its own, so the atlas,
+            # the value-chain/vendor lenses, AND the B-group pages (platforms / use cases / KG) must
+            # all INHERIT v7 at read time. FK-safe order: subcap_platform -> l3_platform -> vendor.
             await conn.execute(text("DELETE FROM cat_v5.subcap_vcc"))
             await conn.execute(text("DELETE FROM cat_v5.value_chain_cluster"))
             await conn.execute(text("DELETE FROM cat_v5.subcap_platform"))
+            await conn.execute(text("DELETE FROM cat_v5.l3_platform"))
+            await conn.execute(text("DELETE FROM cat_v5.use_case"))
         await db.dispose_engine()
 
     async def _teardown() -> None:
@@ -54,6 +57,11 @@ def provisioned() -> Iterator[None]:
         engine = db.get_engine()
         assert engine is not None
         async with engine.begin() as conn:
+            # the auto-run detector (carry_forward) writes these — clean FK-safe so nothing leaks
+            await conn.execute(text("DELETE FROM control.change_flag"))
+            await conn.execute(text("DELETE FROM control.validation_gate_run"))
+            await conn.execute(text("DELETE FROM control.reasoning_chain"))
+            await conn.execute(text("DELETE FROM control.evidence_item WHERE kind = 'catalogue'"))
             await conn.execute(text("DELETE FROM control.story_subcap_carry"))
             await conn.execute(text("DELETE FROM control.story"))
             await conn.execute(text("DROP SCHEMA IF EXISTS cat_v5 CASCADE"))
@@ -119,6 +127,23 @@ def test_v5_heatmap_lenses_inherit_enrichment(client: TestClient) -> None:
         h = client.get(f"/api/catalogue/v5/heatmap?lens={lens}").json()
         assert len(h["rows"]) > 0, f"{lens} lens should inherit and render, not be empty"
         assert sum(r["total"] for r in h["rows"]) > 0
+
+
+@needs_db
+def test_v5_b_group_pages_inherit_enrichment(client: TestClient) -> None:
+    """The B-group catalogue tools — Platform catalog, Use case explorer, Knowledge graph — INHERIT
+    v7's enrichment when v5 has none of its own, so they're never empty (no re-provision needed)."""
+    plats = client.get("/api/catalogue/v5/platforms").json()
+    assert len(plats) > 50 and any(p["subcap_count"] > 0 for p in plats)  # inherited platforms
+    vendors = client.get("/api/catalogue/v5/vendors").json()
+    assert len(vendors) > 10
+    ucs = client.get("/api/catalogue/v5/use-cases").json()
+    assert ucs["total"] > 100 and ucs["items"]  # inherited use cases
+    # KG Layer A for a real subcap: platform/sibling nodes + edges inherited
+    kg = client.get("/api/catalogue/v5/kg?subcap=P4C1.1.1").json()
+    assert len(kg["nodes"]) > 1 and kg["edges"]  # subcap + inherited platform/offering nodes
+    conns = client.get("/api/catalogue/v5/subcaps/P4C1.1.1/connections").json()
+    assert conns["siblings"]  # shared-platform siblings inherited
 
 
 @needs_db

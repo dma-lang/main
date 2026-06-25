@@ -813,15 +813,6 @@ async def subcap_connections(
     news signals on this subcap (each with its trust envelope + reasoning backlink)."""
     v = await resolve_version(version)
     s = _schema(v)
-    sql = text(
-        "SELECT s2.subcap_id AS id, s2.name, left(s2.subcap_id, 2) AS pillar, "
-        f"(SELECT count(DISTINCT sp2.l3_id) FROM {s}.subcap_platform sp2 "
-        f"WHERE sp2.subcap_id = s2.subcap_id AND sp2.l3_id IN "
-        f"(SELECT l3_id FROM {s}.subcap_platform WHERE subcap_id = :sid)) AS shared_platforms "
-        f"FROM {s}.subcap s2 "
-        f"WHERE s2.capability_id = (SELECT capability_id FROM {s}.subcap WHERE subcap_id = :sid) "
-        "AND s2.subcap_id <> :sid ORDER BY shared_platforms DESC, s2.subcap_id LIMIT 8"
-    )
     sig_sql = text(
         "SELECT e.title, e.source_name AS source, e.source_tier::text AS tier, "
         "coalesce(rc.claim_label::text, 'INFERENCE') AS label, "
@@ -838,6 +829,19 @@ async def subcap_connections(
         "ORDER BY e.published_at DESC NULLS LAST LIMIT 6"
     )
     async with _engine().connect() as conn:
+        # siblings = same-capability subcaps ranked by shared platforms; inherit the reference's
+        # platform links when this version has none of its own.
+        ench_s = await _enrichment_schema(conn, s, "subcap_platform")
+        sql = text(
+            "SELECT s2.subcap_id AS id, s2.name, left(s2.subcap_id, 2) AS pillar, "
+            f"(SELECT count(DISTINCT sp2.l3_id) FROM {ench_s}.subcap_platform sp2 "
+            f"WHERE sp2.subcap_id = s2.subcap_id AND sp2.l3_id IN "
+            f"(SELECT l3_id FROM {ench_s}.subcap_platform WHERE subcap_id = :sid)) "
+            "AS shared_platforms "
+            f"FROM {s}.subcap s2 WHERE s2.capability_id = "
+            f"(SELECT capability_id FROM {s}.subcap WHERE subcap_id = :sid) "
+            "AND s2.subcap_id <> :sid ORDER BY shared_platforms DESC, s2.subcap_id LIMIT 8"
+        )
         rows = (await conn.execute(sql, {"sid": subcap_id})).mappings().all()
         sigs = (
             (await conn.execute(sig_sql, {"ver": v.version_id, "sid": subcap_id})).mappings().all()
@@ -883,6 +887,9 @@ async def knowledge_graph(
     s = _schema(v)
     params = {"sid": subcap, "ver": v.version_id}
     async with _engine().connect() as conn:
+        # Layer A is the link-table projection; inherit the reference's link tables when this
+        # version has none of its own, so the graph is never empty for a base-only version.
+        ench_s = await _enrichment_schema(conn, s, "subcap_platform")
         name = (
             await conn.execute(
                 text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid"), {"sid": subcap}
@@ -896,8 +903,8 @@ async def knowledge_graph(
             (
                 await conn.execute(
                     text(
-                        f"SELECT l.l3_id AS id, l.name FROM {s}.subcap_platform sp "
-                        f"JOIN {s}.l3_platform l ON l.l3_id = sp.l3_id "
+                        f"SELECT l.l3_id AS id, l.name FROM {ench_s}.subcap_platform sp "
+                        f"JOIN {ench_s}.l3_platform l ON l.l3_id = sp.l3_id "
                         "WHERE sp.subcap_id = :sid ORDER BY l.name LIMIT 10"
                     ),
                     {"sid": subcap},
@@ -910,8 +917,8 @@ async def knowledge_graph(
             (
                 await conn.execute(
                     text(
-                        f"SELECT o.offering_id AS id, o.name FROM {s}.offering_subcap os "
-                        f"JOIN {s}.offering o ON o.offering_id = os.offering_id "
+                        f"SELECT o.offering_id AS id, o.name FROM {ench_s}.offering_subcap os "
+                        f"JOIN {ench_s}.offering o ON o.offering_id = os.offering_id "
                         "WHERE os.subcap_id = :sid ORDER BY o.name LIMIT 8"
                     ),
                     {"sid": subcap},
@@ -926,9 +933,9 @@ async def knowledge_graph(
                     text(
                         f"SELECT sp2.subcap_id AS id, sc.name, left(sp2.subcap_id, 2) AS pillar, "
                         "count(*) AS shared "
-                        f"FROM {s}.subcap_platform sp1 "
-                        f"JOIN {s}.subcap_platform sp2 ON sp2.l3_id = sp1.l3_id "
-                        f"JOIN {s}.subcap sc ON sc.subcap_id = sp2.subcap_id "
+                        f"FROM {ench_s}.subcap_platform sp1 "
+                        f"JOIN {ench_s}.subcap_platform sp2 ON sp2.l3_id = sp1.l3_id "
+                        f"JOIN {ench_s}.subcap sc ON sc.subcap_id = sp2.subcap_id "
                         "WHERE sp1.subcap_id = :sid AND sp2.subcap_id <> :sid "
                         "GROUP BY sp2.subcap_id, sc.name ORDER BY shared DESC LIMIT 6"
                     ),
@@ -1600,7 +1607,37 @@ async def unscoped_subverticals(
             .mappings()
             .all()
         )
-        clients = [str(f["target_ref"]) for f in flags]
+        # gated proposals when a scan has run; else compute the candidates READ-ONLY so the panel
+        # is functional out of the box (the explicit/scheduled scan turns them into gated proposals
+        # with approve/reject in Notifications).
+        srcs: list[dict[str, Any]] = []
+        if flags:
+            srcs = [
+                {
+                    **(f["detail"] or {}),
+                    "flag_id": str(f["flag_id"]),
+                    "chain_id": str(f["chain_id"]) if f["chain_id"] else None,
+                    "status": str(f["status"]),
+                    "severity": str(f["severity"]),
+                    "client": str(f["target_ref"]),
+                }
+                for f in flags
+            ]
+        else:
+            from app.services import subverticals
+            from app.services.change_flags import _severity
+
+            srcs = [
+                {
+                    **c,
+                    "flag_id": "",
+                    "chain_id": None,
+                    "status": "detected",
+                    "severity": _severity(int(c["stories"])),
+                }
+                for c in await subverticals.candidates_for(version)
+            ]
+        clients = [str(s["client"]) for s in srcs]
         cells_by_client: dict[str, list[int]] = {}
         if clients:
             band = "least(6, greatest(1, width_bucket(composite_score, 1, 5, 6)))"
@@ -1627,30 +1664,29 @@ async def unscoped_subverticals(
             }
     candidates: list[UnscopedCandidate] = []
     gmax = 0
-    for f in flags:
-        d = f["detail"] or {}
-        client = str(f["target_ref"])
+    for sc in srcs:
+        client = str(sc["client"])
         cells = cells_by_client.get(client, [0, 0, 0, 0, 0, 0])
         gmax = max(gmax, *cells)
         candidates.append(
             UnscopedCandidate(
-                flag_id=str(f["flag_id"]),
-                chain_id=str(f["chain_id"]) if f["chain_id"] else None,
+                flag_id=str(sc.get("flag_id") or ""),
+                chain_id=sc.get("chain_id"),
                 client=client,
-                code=d.get("code"),
-                name=str(d.get("name") or client),
-                severity=str(f["severity"]),
-                status=str(f["status"]),
-                stories=int(d.get("stories", sum(cells))),
+                code=sc.get("code"),
+                name=str(sc.get("name") or client),
+                severity=str(sc.get("severity") or "LOW"),
+                status=str(sc.get("status") or "detected"),
+                stories=int(sc.get("stories", sum(cells))),
                 cells=cells,
-                pillars=list(d.get("pillars", [])),
-                top_capabilities=list(d.get("top_capabilities", [])),
-                overlap_sv=d.get("overlap_sv"),
-                overlap=float(d.get("overlap", 0.0)),
-                claim_label=d.get("claim_label"),
-                source_tier=d.get("source_tier"),
-                ers=d.get("ers"),
-                samples=list(d.get("samples", [])),
+                pillars=list(sc.get("pillars", [])),
+                top_capabilities=list(sc.get("top_capabilities", [])),
+                overlap_sv=sc.get("overlap_sv"),
+                overlap=float(sc.get("overlap", 0.0)),
+                claim_label=sc.get("claim_label"),
+                source_tier=sc.get("source_tier"),
+                ers=sc.get("ers"),
+                samples=list(sc.get("samples", [])),
             )
         )
     return UnscopedSubverticalsResp(
@@ -1680,10 +1716,14 @@ _PLATFORMS_SQL = (
 async def list_platforms(
     version: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> list[PlatformRow]:
-    """L3 platforms with per-pillar subcap coverage + total stories (Platform catalog)."""
+    """L3 platforms with per-pillar subcap coverage + total stories (Platform catalog). A version
+    with no platform enrichment of its own INHERITS the reference's (v7), so the page is never
+    empty; story counts stay this version's own delivery."""
     v = await resolve_version(version)
-    sql = text(_PLATFORMS_SQL.format(s=_schema(v)))
+    s = _schema(v)
     async with _engine().connect() as conn:
+        ench_s = await _enrichment_schema(conn, s, "l3_platform")
+        sql = text(_PLATFORMS_SQL.format(s=ench_s))
         rows = (await conn.execute(sql, {"ver": v.version_id})).mappings().all()
     return [PlatformRow.model_validate(dict(r)) for r in rows]
 
@@ -1693,16 +1733,18 @@ async def platform_detail(
     version: str, l3_id: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> PlatformDetail:
     s = _schema(await resolve_version(version))
-    meta_sql = text(
-        f"SELECT l.l3_id, l.name, v.name AS vendor, l.category FROM {s}.l3_platform l "
-        f"LEFT JOIN {s}.vendor v ON v.vendor_id = l.vendor_id WHERE l.l3_id = :lid"
-    )
-    subs_sql = text(
-        f"SELECT sp.subcap_id AS id, left(sp.subcap_id, 2) AS pillar, s.name "
-        f"FROM {s}.subcap_platform sp JOIN {s}.subcap s ON s.subcap_id = sp.subcap_id "
-        "WHERE sp.l3_id = :lid ORDER BY sp.subcap_id"
-    )
     async with _engine().connect() as conn:
+        ench_s = await _enrichment_schema(conn, s, "l3_platform")  # inherit reference when empty
+        meta_sql = text(
+            f"SELECT l.l3_id, l.name, v.name AS vendor, l.category FROM {ench_s}.l3_platform l "
+            f"LEFT JOIN {ench_s}.vendor v ON v.vendor_id = l.vendor_id WHERE l.l3_id = :lid"
+        )
+        subs_sql = text(
+            f"SELECT sp.subcap_id AS id, left(sp.subcap_id, 2) AS pillar, s.name "
+            f"FROM {ench_s}.subcap_platform sp "
+            f"JOIN {ench_s}.subcap s ON s.subcap_id = sp.subcap_id "
+            "WHERE sp.l3_id = :lid ORDER BY sp.subcap_id"
+        )
         meta = (await conn.execute(meta_sql, {"lid": l3_id})).mappings().first()
         if meta is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"platform '{l3_id}' not found")
@@ -1716,20 +1758,22 @@ async def platform_detail(
 async def list_vendors(
     version: str, _user: dict[str, Any] = Depends(get_current_user)
 ) -> list[VendorRow]:
-    """Per-vendor deduped subcap coverage by pillar (the Platform catalog heatmap)."""
+    """Per-vendor deduped subcap coverage by pillar (the Platform catalog heatmap). Inherits the
+    reference's platform enrichment when this version has none of its own."""
     s = _schema(await resolve_version(version))
-    sql = text(
-        "SELECT coalesce(v.name, 'Unattributed') AS vendor, count(DISTINCT l.l3_id) AS plats, "
-        "count(DISTINCT sp.subcap_id) AS subcap_count, "
-        "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P1') AS p1, "
-        "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P2') AS p2, "
-        "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P3') AS p3, "
-        "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P4') AS p4 "
-        f"FROM {s}.l3_platform l LEFT JOIN {s}.vendor v ON v.vendor_id = l.vendor_id "
-        f"LEFT JOIN {s}.subcap_platform sp ON sp.l3_id = l.l3_id "
-        "GROUP BY coalesce(v.name, 'Unattributed') ORDER BY subcap_count DESC, vendor"
-    )
     async with _engine().connect() as conn:
+        ench_s = await _enrichment_schema(conn, s, "l3_platform")
+        sql = text(
+            "SELECT coalesce(v.name, 'Unattributed') AS vendor, count(DISTINCT l.l3_id) AS plats, "
+            "count(DISTINCT sp.subcap_id) AS subcap_count, "
+            "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P1') AS p1, "
+            "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P2') AS p2, "
+            "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P3') AS p3, "
+            "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P4') AS p4 "
+            f"FROM {ench_s}.l3_platform l LEFT JOIN {ench_s}.vendor v ON v.vendor_id = l.vendor_id "
+            f"LEFT JOIN {ench_s}.subcap_platform sp ON sp.l3_id = l.l3_id "
+            "GROUP BY coalesce(v.name, 'Unattributed') ORDER BY subcap_count DESC, vendor"
+        )
         rows = (await conn.execute(sql)).mappings().all()
     return [VendorRow.model_validate(dict(r)) for r in rows]
 
@@ -1745,14 +1789,30 @@ async def list_use_cases(
     size: int = Query(12, ge=1, le=60),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> UseCasePage:
-    """Actual use cases, filterable by pillar / area / type / text (Use case explorer)."""
+    """Actual use cases, filterable by pillar / area / type / text (Use case explorer). Inherits the
+    reference's use cases when this version has none of its own."""
     s = _schema(await resolve_version(version))
-    joins = (
-        f"FROM {s}.use_case uc "
-        f"JOIN {s}.subcap sc ON sc.subcap_id = uc.subcap_id "
-        f"JOIN {s}.capability cap ON cap.capability_id = sc.capability_id "
-        f"JOIN {s}.category cat ON cat.category_id = cap.category_id"
-    )
+    async with _engine().connect() as conn:
+        ench_s = await _enrichment_schema(conn, s, "use_case")
+        joins = (
+            f"FROM {ench_s}.use_case uc "
+            f"JOIN {ench_s}.subcap sc ON sc.subcap_id = uc.subcap_id "
+            f"JOIN {ench_s}.capability cap ON cap.capability_id = sc.capability_id "
+            f"JOIN {ench_s}.category cat ON cat.category_id = cap.category_id"
+        )
+        return await _use_cases_page(conn, joins, pillar, category, archetype, q, page, size)
+
+
+async def _use_cases_page(
+    conn: AsyncConnection,
+    joins: str,
+    pillar: str,
+    category: str,
+    archetype: str,
+    q: str,
+    page: int,
+    size: int,
+) -> UseCasePage:
     where = (
         " WHERE (:pillar = '' OR left(uc.subcap_id, 2) = :pillar) "
         "AND (:category = '' OR cat.category_id = :category) "
@@ -1784,13 +1844,10 @@ async def list_use_cases(
         + facet_where
         + " GROUP BY uc.archetype ORDER BY count DESC, uc.archetype"
     )
-    async with _engine().connect() as conn:
-        total = (await conn.execute(count_sql, params)).scalar() or 0
-        off = (page - 1) * size
-        rows = (
-            (await conn.execute(items_sql, {**params, "size": size, "off": off})).mappings().all()
-        )
-        facets = (await conn.execute(facet_sql, params)).mappings().all()
+    total = (await conn.execute(count_sql, params)).scalar() or 0
+    off = (page - 1) * size
+    rows = (await conn.execute(items_sql, {**params, "size": size, "off": off})).mappings().all()
+    facets = (await conn.execute(facet_sql, params)).mappings().all()
     return UseCasePage(
         total=int(total),
         page=page,
