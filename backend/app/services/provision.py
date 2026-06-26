@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app import db
 from app.services import subcap_xref
+from app.services.sv_aliases import normalize_sv_code, normalize_tier
 from app.services.value_chain import clean_stage_name
 
 _BACKEND = Path(__file__).resolve().parents[2]  # backend/ (app/services/provision.py -> backend)
@@ -170,7 +171,7 @@ def _derive(
                 "name": s["name"],
                 "description": s.get("desc"),
                 "solution_type": s.get("sol"),
-                "tier": s.get("tier"),
+                "tier": normalize_tier(s.get("tier")),  # folds legacy SV suffix, e.g. T2-PEN
                 "lifecycle_state": s.get("life", "stable"),
                 "zennify_status": s.get("status"),
                 "completeness": completeness,
@@ -444,17 +445,19 @@ async def _seed_value_chain(
     )
     ord_by_sv: dict[tuple[str, str], int] = {}
     for sv, order in (vc.get("stage_order") or {}).items():
+        nsv = normalize_sv_code(sv) or sv
         for i, st in enumerate(order):
-            okey = (sv, clean_stage_name(st))
+            okey = (nsv, clean_stage_name(st))
             if okey not in ord_by_sv or i < ord_by_sv[okey]:
                 ord_by_sv[okey] = i  # earliest position among the merged variants
     links: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for m in rows:
+        svn = normalize_sv_code(str(m["sv"])) or str(m["sv"])  # legacy SV (e.g. PEN) -> canonical
         for st in m["stages"]:
             cst = clean_stage_name(st)
             vcc = vcc_by_name[cst]
-            key = (m["subcap_id"], vcc, m["sv"])
+            key = (m["subcap_id"], vcc, svn)
             if key in seen:
                 continue
             seen.add(key)
@@ -462,9 +465,9 @@ async def _seed_value_chain(
                 {
                     "sub": m["subcap_id"],
                     "vcc": vcc,
-                    "sv": m["sv"],
+                    "sv": svn,
                     "stage": cst,
-                    "ord": ord_by_sv.get((m["sv"], cst)),
+                    "ord": ord_by_sv.get((svn, cst)),
                 }
             )
     await conn.execute(

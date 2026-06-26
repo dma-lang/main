@@ -25,6 +25,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app import db
+from app.services.sv_aliases import normalize_sv_code, normalize_tier
 
 _BACKEND = Path(__file__).resolve().parents[2]  # app/services/stories.py -> backend
 _SEED = _BACKEND / "seed" / "stories.json.gz"
@@ -122,9 +123,9 @@ def _ingest_row(s: dict[str, Any], source_version: str) -> dict[str, Any]:
         "category_name": s.get("cat"),
         "cap_name": s.get("capn"),
         "sub_cap_name": s.get("scn"),
-        "tier": s.get("tier"),
-        "story_sv_code": s.get("sv"),
-        "project_sv_code": s.get("psv"),
+        "tier": normalize_tier(s.get("tier")),
+        "story_sv_code": normalize_sv_code(s.get("sv")),
+        "project_sv_code": normalize_sv_code(s.get("psv")),
         "reusability_layer": s.get("rl"),
         "population": s.get("pop"),
         "summary": s.get("sum"),
@@ -156,7 +157,7 @@ def _carry_row(
         "source_version": source_version,
         "mapped_in_source": raw,
         "base_subcap": base,
-        "subvertical": sv or s.get("sv"),
+        "subvertical": normalize_sv_code(sv) or normalize_sv_code(s.get("sv")),
         "target_version": target_version,
         "carried_to_subcap": target,
         "similarity": sim,

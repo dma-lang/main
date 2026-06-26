@@ -1,0 +1,18 @@
+# config/subvertical_aliases.yaml — canonical subvertical-code aliases (autocorrect legacy / typo codes)
+#
+# A single alias map, applied EVERYWHERE an SV code enters or scopes the system so one canonical code
+# flows through end-to-end:
+#   (1) story ingest          -> control.story.story_sv_code / project_sv_code
+#   (2) story carry-forward   -> control.story_subcap_carry.subvertical
+#   (3) subcap tier suffix    -> cat_<v>.subcap.tier  (e.g. T2-PEN -> T2-RIA)
+#   (4) value-chain mapping   -> cat_<v>.subcap_vcc.subvertical
+#   (5) read-time scoping     -> heatmap / summary / value-chain / unscoped-detector sv filters
+#
+# This is DETERMINISTIC config (not an AI conclusion) — same trust level as config/value_chain.yaml,
+# so it needs no gate. Keys/values are matched case-insensitively; an unknown code passes through
+# unchanged (never silently dropped). Extend as new legacy/variant codes surface.
+#
+# PEN: the v5 catalogue tagged RIA / broker-dealer subcaps 'PEN' (a legacy "pension/advisory" code);
+# v7 standardised on 'RIA'. Folding PEN -> RIA reconciles v5 with v7 and the nine modelled SVs.
+aliases:
+  PEN: RIA
