@@ -13,7 +13,7 @@ import type {
   VcPillarTally,
 } from '../api/client';
 import { useValueChain } from '../api/queries';
-import { Dropdown, Empty, Page, PillarDot, Seg } from '../components/primitives';
+import { Empty, Page, PillarDot, Seg } from '../components/primitives';
 import { go, openPeek } from '../lib/events';
 import { heatBg, PILLAR_COLORS } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
@@ -608,29 +608,15 @@ export function ValueChain() {
       title="Value chain atlas"
       intro="The catalogue's value chain — the real, named stages, ranked by the Jira stories that deliver them. Pipeline and Radial show the ordered per-subvertical chain; Rollup consolidates everything into the 8 canonical stages (Acquire & onboard … Govern & enable). 'All SV' merges every subvertical; pinning one shows just its own (a version without its own mapping inherits the reference's)."
       actions={
-        <div className="row gap8">
-          {(data?.subverticals?.length ?? 0) > 0 && (
-            <Dropdown
-              label="All SV"
-              value={ui.sv}
-              icon="building"
-              options={[
-                { v: 'all', l: 'All SV — consolidated' },
-                ...(data?.subverticals ?? []).map((c) => ({ v: c, l: SV_NAME[c] ?? c })),
-              ]}
-              onChange={ui.setSv}
-            />
-          )}
-          <Seg
-            options={[
-              { v: 'chain', l: 'Pipeline' },
-              { v: 'radial', l: 'Radial' },
-              { v: 'rollup', l: 'Rollup' },
-            ]}
-            value={view}
-            onChange={(v) => setView(v as View)}
-          />
-        </div>
+        <Seg
+          options={[
+            { v: 'chain', l: 'Pipeline' },
+            { v: 'radial', l: 'Radial' },
+            { v: 'rollup', l: 'Rollup' },
+          ]}
+          value={view}
+          onChange={(v) => setView(v as View)}
+        />
       }
     >
       <div className="row wrap gap8" style={{ marginBottom: 14, alignItems: 'center' }}>

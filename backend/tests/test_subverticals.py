@@ -131,6 +131,24 @@ def test_unscoped_subvertical_discovery_lifecycle(client: TestClient) -> None:
 
 
 @needs_db
+def test_unscoped_subvertical_scopes_heatmap_and_summary(client: TestClient) -> None:
+    """Selecting an AI-detected unscoped subvertical (sv=unscoped:<client>) SCOPES Mission Control —
+    the concentration heatmap and the pillar summary restrict to that client's unscoped delivery,
+    instead of the EMPTY result a literal story_sv_code='unscoped:PF' filter would return."""
+    pf_heat = client.get("/api/catalogue/v7/heatmap?lens=pillar&sv=unscoped:PF").json()
+    all_heat = client.get("/api/catalogue/v7/heatmap?lens=pillar&sv=all").json()
+    assert pf_heat["rows"], "unscoped scope must return rows (regression: empty when unhandled)"
+    pf_total = sum(r["total"] for r in pf_heat["rows"])
+    all_total = sum(r["total"] for r in all_heat["rows"])
+    assert 0 < pf_total < all_total  # a real, strictly-scoped subset of delivery
+
+    # the pillar summary (the tiles) scopes to PF's delivered subcaps, not the whole catalogue
+    pf_sum = client.get("/api/catalogue/v7/summary?sv=unscoped:PF").json()
+    all_sum = client.get("/api/catalogue/v7/summary?sv=all").json()
+    assert 0 < pf_sum["total_subcaps"] <= all_sum["total_subcaps"]
+
+
+@needs_db
 def test_overlap_guard_skips_majority_classified_client(client: TestClient) -> None:
     """A client whose delivery is MOSTLY an existing subvertical is not proposed as a new one,
     even with enough unscoped volume — the overlap guard folds it into the existing SV."""

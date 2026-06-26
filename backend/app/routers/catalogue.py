@@ -317,6 +317,18 @@ async def _sv_membership(
     falls back to actual DELIVERY. Returns ('', {}) for the all-subvertical case."""
     if not sv or sv == "all":
         return "", {}
+    if sv.startswith("unscoped:"):
+        # an AI-detected unscoped subvertical = a client (Jira project_key) delivering outside the
+        # nine modelled SVs; membership = the subcaps that client's unscoped stories delivered to.
+        client = sv.split(":", 1)[1]
+        return (
+            " AND EXISTS (SELECT 1 FROM control.story_catalogue_link l "
+            "JOIN control.story st ON st.story_key = l.story_key "
+            "WHERE l.version_id = :vid AND l.subcap_id = s.subcap_id "
+            f"AND st.project_key = :uclient AND (st.story_sv_code IS NULL "
+            f"OR st.story_sv_code NOT IN ({_MODELLED_SV_SQL})))",
+            {"uclient": client, "vid": version_id},
+        )
     has_vcc = (await conn.execute(text(f"SELECT count(*) FROM {s}.subcap_vcc"))).scalar() or 0
     vc_s = s
     if not has_vcc:
@@ -1600,6 +1612,13 @@ async def heatmap(
         if lens == "value-chain":
             # the value-chain lens scopes by the CHAIN's subvertical (in the join), not the story sv
             params["vc_sv"] = sv
+        elif sv.startswith("unscoped:"):
+            # an AI-detected unscoped subvertical: scope to that client's stories outside the nine
+            where.append(
+                "st.project_key = :uclient AND (st.story_sv_code IS NULL "
+                f"OR st.story_sv_code NOT IN ({_MODELLED_SV_SQL}))"
+            )
+            params["uclient"] = sv.split(":", 1)[1]
         elif sv != "all":
             where.append("st.story_sv_code = :sv")
             params["sv"] = sv

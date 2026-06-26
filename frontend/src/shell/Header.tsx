@@ -1,6 +1,15 @@
 // Header — ported from the prototype shell.jsx, wired to live state/APIs.
 // pillar/sv/lens/version are filter+context; theme/lens persist to control.users.preferences.
-import { useChangeFlags, useMe, usePatchPreferences, useQaMetrics, useVersions } from '../api/queries';
+import { useLocation } from 'react-router-dom';
+
+import {
+  useChangeFlags,
+  useMe,
+  usePatchPreferences,
+  useQaMetrics,
+  useUnscopedSubverticals,
+  useVersions,
+} from '../api/queries';
 import { Dropdown } from '../components/primitives';
 import { go, toast } from '../lib/events';
 import { PILLAR_COLORS } from '../lib/helpers';
@@ -46,6 +55,10 @@ function initials(email?: string): string {
 
 export function Header() {
   const ui = useUi();
+  const loc = useLocation();
+  // the Lens only governs the Mission-control concentration heatmap, so it shows only there
+  const onMissionControl =
+    (loc.pathname.replace(/^\//, '').split('/')[0] || 'mission-control') === 'mission-control';
   const me = useMe();
   const versionsQ = useVersions();
   const patch = usePatchPreferences();
@@ -62,9 +75,13 @@ export function Header() {
   const persist = (extra: Record<string, unknown>) =>
     patch.mutate({ theme: ui.theme, lens: ui.lens, persona: ui.persona, ...extra });
 
+  const unscoped = useUnscopedSubverticals(ui.version);
+  const unscopedCands = unscoped.data?.candidates ?? [];
   const svOpts = [
     { v: 'all', l: 'All SV' },
     ...SUBVERTICALS.map((s) => ({ v: s.code, l: `${s.code} · ${s.name}` })),
+    // AI-detected unscoped subverticals — scope the page to that client's unscoped delivery
+    ...unscopedCands.map((c) => ({ v: `unscoped:${c.client}`, l: `${c.name} (unscoped)` })),
   ];
   const versions = (versionsQ.data ?? []).filter(
     (v) => v.status === 'provisioned' || v.status === 'active', // 'uploaded' has no schema yet
@@ -92,15 +109,17 @@ export function Header() {
         ))}
       </div>
       <Dropdown label="All SV" value={ui.sv} options={svOpts} onChange={ui.setSv} />
-      <Dropdown
-        label="Lens"
-        value={ui.lens}
-        options={LENSES}
-        onChange={(l) => {
-          ui.setLens(l);
-          persist({ lens: l });
-        }}
-      />
+      {onMissionControl && (
+        <Dropdown
+          label="Lens"
+          value={ui.lens}
+          options={LENSES}
+          onChange={(l) => {
+            ui.setLens(l);
+            persist({ lens: l });
+          }}
+        />
+      )}
       <span className="spring" />
       <Dropdown
         value={ui.version}
