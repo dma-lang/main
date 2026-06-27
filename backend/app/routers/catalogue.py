@@ -6,6 +6,7 @@ Lights up Capability workbench (tree + detail) and Mission control (pillar summa
 from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -1197,7 +1198,8 @@ async def value_chain(
         INDIRECT_STAGE,
         clean_stage_name,
         derive_value_chain,
-        lead_stage_key,
+        load_rollup_config,
+        stage_concept,
     )
 
     v = await resolve_version(version)
@@ -1295,52 +1297,66 @@ async def value_chain(
                 )
                 sv_out, resolved = sv, sv
             else:
-                # consolidate: the most-delivered subvertical's chain is canonical. Other
-                # subverticals' subcaps FOLD into it by overlap (a stage that keys to the same lead
-                # token — "MARKET INTELLIGENCE…" -> "MARKET"); genuinely distinct ones (agency,
-                # portfolio…) append as their own stage. Every subcap covered, none duplicated.
+                # consolidate ALL subverticals into ONE chain: group every subvertical's stages by
+                # semantic CONCEPT (config-driven) so near-duplicate stages (e.g. each subvertical's
+                # KYC/onboarding stage) merge into ONE consolidated stage with its most-common
+                # real name. A stage matching no concept keeps its own name (never over-merged), so
+                # genuinely distinct stages stay separate; every subcap lands in exactly one stage.
+                vc_cfg = load_rollup_config()
+                labels = vc_cfg.get("concept_labels", {})
                 canonical_sv = subverticals[0]
-                canon = _group([r for r in rows if str(r["sv"]) == canonical_sv])
-                covered = {sid for g in canon.values() for sid in g["subcaps"]}
-                lead_to_canon: dict[str, str] = {}
-                for nm in canon:
-                    lead_to_canon.setdefault(lead_stage_key(nm), nm)
+                groups: dict[str, dict[str, Any]] = {}
+                name_freq: dict[str, Counter[str]] = {}
+                spine_keys: set[str] = set()
+                covered: set[str] = set()
+                spine_max_ord = 0
 
-                def _sub(r: Any) -> dict[str, Any]:
-                    return {
+                def _add(r: Any) -> None:
+                    cn = clean_stage_name(str(r["name"]))
+                    key = stage_concept(cn, vc_cfg)
+                    g = groups.setdefault(key, {"code": str(r["code"]), "ord": 9999, "subcaps": {}})
+                    if str(r["code"]) < g["code"]:
+                        g["code"] = str(r["code"])
+                    if r["ord"] is not None and r["ord"] < g["ord"]:
+                        g["ord"] = r["ord"]
+                    g["subcaps"][str(r["subcap_id"])] = {
                         "id": str(r["subcap_id"]),
                         "name": str(r["subcap_name"]),
                         "pillar": r["pillar"],
                     }
+                    name_freq.setdefault(key, Counter())[cn] += 1
 
-                # pass 1: fold subcaps that overlap a canonical stage by lead token
+                # spine = the most-delivered subvertical's chain, its stages MERGED by concept (its
+                # own near-dup stages collapse); canonical subcaps keep every stage they belong to.
+                for r in rows:
+                    if str(r["sv"]) != canonical_sv:
+                        continue
+                    _add(r)
+                    spine_keys.add(stage_concept(clean_stage_name(str(r["name"])), vc_cfg))
+                    covered.add(str(r["subcap_id"]))
+                    if r["ord"] is not None:
+                        spine_max_ord = max(spine_max_ord, int(r["ord"]))
+                # fold each OTHER subvertical's not-yet-covered subcap into its concept; a concept
+                # the spine lacks appends as its own stage. Each non-canonical subcap lands once.
                 for r in rows:
                     sid = str(r["subcap_id"])
                     if sid in covered or str(r["sv"]) == canonical_sv:
                         continue
-                    lk = lead_stage_key(clean_stage_name(str(r["name"])))
-                    if lk in lead_to_canon:
-                        canon[lead_to_canon[lk]]["subcaps"][sid] = _sub(r)
-                        covered.add(sid)
-                # pass 2: the rest become their own appended stages (grouped by clean name)
-                extra: dict[str, dict[str, Any]] = {}
-                for r in rows:
-                    sid = str(r["subcap_id"])
-                    if sid in covered or str(r["sv"]) == canonical_sv:
-                        continue
-                    cn = clean_stage_name(str(r["name"]))
-                    g = extra.setdefault(
-                        cn, {"code": str(r["code"]), "name": cn, "ord": 9999, "subcaps": {}}
-                    )
-                    if str(r["code"]) < g["code"]:
-                        g["code"] = str(r["code"])
-                    g["subcaps"][sid] = _sub(r)
-                    covered.add(sid)  # each non-canonical subcap lands in exactly one stage
-                base = max((g["ord"] for g in canon.values() if g["ord"] < 9999), default=0) + 1
-                for g in extra.values():  # extras (and Indirect) sort AFTER the canonical chain
-                    g["ord"] = base + (10000 if g["name"] == INDIRECT_STAGE else 0)
+                    _add(r)
+                    covered.add(sid)
+                # display: a clean canonical label for a matched concept (c:…), else its most-common
+                # real name (so genuinely-distinct unmatched stages stay verbatim)
+                for key, g in groups.items():
+                    items = name_freq[key].items()
+                    common = sorted(items, key=lambda kv: (-kv[1], len(kv[0]), kv[0]))[0][0]
+                    g["name"] = labels.get(key[2:], common) if key.startswith("c:") else common
+                # concepts the spine lacks sort AFTER the spine chain (Indirect last)
+                base = spine_max_ord + 1
+                for key, g in groups.items():
+                    if key not in spine_keys:
+                        g["ord"] = base + (10000 if g["name"] == INDIRECT_STAGE else 0)
                 ordered = sorted(
-                    list(canon.values()) + list(extra.values()),
+                    groups.values(),
                     key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
                 )
                 sv_out, resolved = "all", ""

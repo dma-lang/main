@@ -98,3 +98,94 @@ bucket_keywords:
   - { kw: "GOVERN",            code: VCC-08 }
   - { kw: "CONTROL",           code: VCC-08 }
   - { kw: "STRATEGY",          code: VCC-08 }
+
+# ----------------------------------------------------------------------------------------------------
+# CONSOLIDATION CONCEPTS — finer than the 8 rollup buckets. Used ONLY to MERGE near-duplicate
+# per-subvertical stages in the 'All SV' consolidated chain (the Pipeline/Radial when no single
+# subvertical is pinned), so e.g. every subvertical's onboarding stage — "KYC, ONBOARD & ACTIVATE",
+# "CLIENT KYC, FACILITY SETUP & ACCESS", "MEMBER ONBOARDING & ELIGIBILITY", "INSTITUTIONAL/INTERMEDIARY
+# ONBOARDING" — collapses to ONE onboarding stage instead of a dozen near-identical rows.
+# DETERMINISTIC: the concept whose keyword appears EARLIEST in the cleaned UPPERCASE stage name wins
+# (case-insensitive; ties break by list order) — so "MARKET INTELLIGENCE…" is acquire not analytics,
+# "BACK OFFICE OPS, COMPLIANCE…" is backoffice not compliance, "CLIENT KYC…" is onboard. A stage
+# matching NO concept keeps its own name,
+# so genuinely distinct stages never over-merge. Per-subvertical (pinned) chains are NOT affected —
+# they keep their verbatim workbook stage names. Config, not code: editing re-merges live, and new /
+# future value chains auto-merge by the same vocabulary.
+merge_concepts:
+  - { kw: "PROSPECT",            concept: acquire }
+  - { kw: "LEAD GENERATION",     concept: acquire }
+  - { kw: "FIELD-OF-MEMBERSHIP", concept: acquire }
+  - { kw: "NICHE",               concept: acquire }
+  - { kw: "BRAND",               concept: acquire }
+  - { kw: "MARKET",              concept: acquire }
+  - { kw: "KYC",                 concept: onboard }
+  - { kw: "KYB",                 concept: onboard }
+  - { kw: "ONBOARD",             concept: onboard }
+  - { kw: "ELIGIBILITY",         concept: onboard }
+  - { kw: "ACCOUNT OPENING",     concept: onboard }
+  - { kw: "ORIGINAT",            concept: originate }
+  - { kw: "UNDERWRIT",           concept: originate }
+  - { kw: "QUOTE",               concept: originate }
+  - { kw: "BIND",                concept: originate }
+  - { kw: "CREDIT INVESTIGATION", concept: originate }
+  - { kw: "FACILITY SETUP",      concept: originate }
+  - { kw: "DISBURS",             concept: originate }
+  - { kw: "FUND",                concept: originate }
+  - { kw: "CROSS-SELL",          concept: grow }
+  - { kw: "CROSS-FUND",          concept: grow }
+  - { kw: "WALLET",              concept: grow }
+  - { kw: "LOYALTY",             concept: grow }
+  - { kw: "RETENTION",           concept: grow }
+  - { kw: "RENEWAL",             concept: grow }
+  - { kw: "ACCOUNT ROUNDING",    concept: grow }
+  - { kw: "REFERRAL",            concept: grow }
+  - { kw: "PORTFOLIO MGMT",      concept: portfolio }
+  - { kw: "PORTFOLIO REVIEW",    concept: portfolio }
+  - { kw: "PORTFOLIO ANALYTICS", concept: portfolio }
+  - { kw: "COVENANT",            concept: portfolio }
+  - { kw: "PERFORMANCE",         concept: portfolio }
+  - { kw: "SERVIC",              concept: service }
+  - { kw: "ENGAGE",              concept: service }
+  - { kw: "RELATIONSHIP",        concept: service }
+  - { kw: "COVERAGE",            concept: service }
+  - { kw: "ADVIC",               concept: service }
+  - { kw: "ADVISOR",             concept: service }
+  - { kw: "PATRON",              concept: service }
+  - { kw: "POLICYHOLDER",        concept: service }
+  - { kw: "PLANNING",            concept: service }
+  - { kw: "AML",                 concept: risk }
+  - { kw: "FRAUD",               concept: risk }
+  - { kw: "SURVEILL",            concept: risk }
+  - { kw: "RISK",                concept: risk }
+  - { kw: "COMPLIANCE",          concept: compliance }
+  - { kw: "REGULAT",             concept: compliance }
+  - { kw: "ACTUARIAL",           concept: compliance }
+  - { kw: "SCORECARD",           concept: compliance }
+  - { kw: "BACK OFFICE",         concept: backoffice }
+  - { kw: "SHARED SERVICE",      concept: backoffice }
+  - { kw: "CUSO",                concept: backoffice }
+  - { kw: "AUTOMATION",          concept: backoffice }
+  - { kw: "OPS",                 concept: backoffice }
+  - { kw: "INTELLIGENCE",        concept: analytics }
+  - { kw: "ANALYTICS",           concept: analytics }
+  - { kw: "REPORTING",           concept: analytics }
+  - { kw: "RESEARCH",            concept: analytics }
+  - { kw: "TECHNOLOGY",          concept: platform }
+  - { kw: "PLATFORM",            concept: platform }
+  - { kw: "DATA",                concept: platform }
+
+# The clean canonical label shown for each merged concept in the consolidated 'All SV' chain (a
+# stage that matched no concept keeps its own most-common real name instead). Edit freely.
+concept_labels:
+  acquire:    "Market & acquire"
+  onboard:    "Onboarding & KYC"
+  originate:  "Originate & underwrite"
+  service:    "Service & engage"
+  grow:       "Cross-sell & grow"
+  portfolio:  "Portfolio & monitoring"
+  risk:       "Risk & fraud"
+  compliance: "Compliance & regulatory"
+  backoffice: "Back-office & operations"
+  analytics:  "Analytics & insight"
+  platform:   "Platform & data"

@@ -104,17 +104,23 @@ def test_v5_without_vc_mapping_inherits_v7_chains(client: TestClient) -> None:
 
 @needs_db
 def test_v5_all_sv_consolidates_inherited_real_stages(client: TestClient) -> None:
-    """A mapping-less v5 'All SV' consolidates the REAL named stages INHERITED from v7 (not a
-    derived/L1 chain) — one chain, no subvert tag, P1C1.1.1 reads MARKET + BACK OFFICE OPS."""
+    """A mapping-less v5 'All SV' consolidates the stages INHERITED from v7 into ONE chain, MERGING
+    near-duplicate per-subvertical stages by semantic concept into clean canonical stages — so the
+    dozen onboarding variants ("KYC, ONBOARD & ACTIVATE", "CLIENT KYC…", "MEMBER ONBOARDING…")
+    collapse to a single "Onboarding & KYC" stage."""
     allv = client.get("/api/catalogue/v5/value-chain").json()
     assert allv["source"] == "catalogue_vc_mapping_inherited" and allv["inherited_from"] == "v7"
     assert allv["sv"] == "all" and allv["resolved_sv"] == "" and len(allv["chains"]) == 1
     all_names = [c["name"] for c in allv["clusters"]]
-    assert "MARKET" in all_names  # real stage names, inherited from v7
+    assert "Market & acquire" in all_names  # the merged-concept canonical label
+    # every subvertical's KYC/onboarding stage merges to EXACTLY ONE consolidated stage
+    onboarding = [n for n in all_names if "KYC" in n or "Onboard" in n]
+    assert onboarding == ["Onboarding & KYC"]
+    assert len(all_names) == len(set(all_names))  # no duplicate stages in the consolidated chain
     p_stages = [
         c["name"] for c in allv["clusters"] if any(s["id"] == "P1C1.1.1" for s in c["subcaps"])
     ]
-    assert p_stages == ["MARKET", "BACK OFFICE OPS, COMPLIANCE & PLATFORM"]
+    assert set(p_stages) == {"Market & acquire", "Back-office & operations"}
     assert allv["subverticals"]  # the picker still lists every subvertical
 
 
