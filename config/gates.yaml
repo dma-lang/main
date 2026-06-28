@@ -58,6 +58,11 @@ matching:
   auto_confirm_at: 0.86          # >= confirm
   review_band_low: 0.70          # [0.70, 0.86) -> route to review
   # < 0.70 -> unmapped, keep nearest-neighbour proposal, never drop
+  # QA on the nearest-neighbour matcher (avoid matching the wrong story): a DENSE (embedding) cosine
+  # at/above this corroborates a match to confirm-grade ("deep learning"); a cross-pillar match is
+  # flagged for review, never auto-confirmed.
+  dense_corroboration_min_cosine: 0.82
+  require_pillar_for_confirm: true
 
 # Knowledge-graph Layer B proposal thresholds (pending_edge; gated + human-approved before commit).
 knowledge_graph:

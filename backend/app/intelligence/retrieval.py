@@ -57,23 +57,40 @@ async def _dense(conn: AsyncConnection, schema: str, query: str, k: int) -> list
 
 
 async def retrieve(
-    conn: AsyncConnection, schema: str, query: str, k: int = 5
+    conn: AsyncConnection, schema: str, query: str, k: int = 5, use_dense: bool = False
 ) -> list[dict[str, Any]]:
-    """Top-k subcaps for ``query`` — lexical ∪ dense, reranked by a combined lexical+cosine score.
-    Empty result => not grounded. Falls back to pure lexical when the version has no embeddings."""
+    """Top-k subcaps for ``query``. Lexical by default; ``use_dense`` merges the DENSE embedding
+    cosine half and reranks on a combined score, so the match is by MEANING (the story matcher
+    opts in; lexical-calibrated callers — evidence / vendor scans — stay lexical). EVERY row carries
+    ``rank`` (lexical ts_rank), ``cosine`` (dense), ``pillar`` and ``score`` (the rerank key), all 0
+    when absent. Empty result => not grounded."""
     lexical = await _lexical(conn, schema, query, k)
-    dense = await _dense(conn, schema, query, k)
-    if not dense:
-        return lexical  # no embeddings (or embed unavailable) -> unchanged lexical behaviour
+    dense = await _dense(conn, schema, query, k) if use_dense else []
+
+    def _row(r: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "subcap_id": r["subcap_id"],
+            "name": r["name"],
+            "description": r["description"],
+            "pillar": r["pillar"],
+            "rank": float(r.get("rank") or 0.0),
+            "cosine": float(r.get("cosine") or 0.0),
+        }
+
     merged: dict[str, dict[str, Any]] = {}
     for r in lexical:
-        merged[r["subcap_id"]] = {**r, "lex": float(r.get("rank") or 0.0), "cos": 0.0}
+        merged[r["subcap_id"]] = _row(r)
     for r in dense:
         row = merged.get(r["subcap_id"])
         if row is not None:
-            row["cos"] = float(r["cosine"])
+            row["cosine"] = float(r["cosine"])
         else:
-            merged[r["subcap_id"]] = {**r, "lex": 0.0, "cos": float(r["cosine"])}
-    out = list(merged.values())
-    out.sort(key=lambda x: 0.5 * x["cos"] + 0.5 * min(1.0, x["lex"]), reverse=True)
-    return out[:k]
+            merged[r["subcap_id"]] = _row(r)
+    has_dense = bool(dense)
+    for row in merged.values():
+        # combined rerank: cosine (0..1) + the unbounded ts_rank bounded into [0,1]; with no
+        # embeddings every cosine is 0, so the order collapses to the pure lexical rank.
+        row["score"] = (
+            0.5 * row["cosine"] + 0.5 * min(1.0, row["rank"]) if has_dense else row["rank"]
+        )
+    return sorted(merged.values(), key=lambda x: x["score"], reverse=True)[:k]

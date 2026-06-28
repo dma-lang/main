@@ -57,6 +57,17 @@ def matching_bands() -> tuple[float, float]:
     return confirm_at, review_low
 
 
+def matching_qa() -> tuple[float, bool]:
+    """QA for the carry-forward nearest-neighbour matcher (avoid wrong matches): (the dense cosine
+    that corroborates a match to confirm-grade, require-pillar-alignment-to-confirm)."""
+    section = load_gate_config().get("matching") or {}
+    dense_cos = float(section.get("dense_corroboration_min_cosine", 0.82))
+    require_pillar = bool(section.get("require_pillar_for_confirm", True))
+    if not 0 < dense_cos <= 1:
+        raise ValueError("gates.yaml: dense_corroboration_min_cosine must be in (0, 1]")
+    return dense_cos, require_pillar
+
+
 @dataclass(frozen=True)
 class TrendConfig:
     """Trend signal weights + emergence cutoff + cluster floors (config/gates.yaml: trends.*)."""

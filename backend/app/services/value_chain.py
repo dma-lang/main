@@ -268,6 +268,20 @@ def stage_concept(stage_name: str, cfg: dict[str, Any] | None = None) -> str:
     return ("c:" + best_concept) if best_concept is not None else ("n:" + cleaned.lower())
 
 
+def descriptive_stage_name(name: str, cfg: dict[str, Any] | None = None) -> str:
+    """Ensure a value-chain stage has a DESCRIPTIVE (multi-word) display name: a one-word workbook
+    stage ("MARKET", "TECHNOLOGY", "COMPLIANCE", "ENGAGE") is shown as its concept's descriptive
+    label ("Market & acquire", …); multi-word names are kept verbatim."""
+    cleaned = clean_stage_name(name)
+    if len(cleaned.split()) > 1:
+        return cleaned
+    cfg = cfg or load_rollup_config()
+    key = stage_concept(cleaned, cfg)
+    if key.startswith("c:"):
+        return str(cfg.get("concept_labels", {}).get(key[2:], cleaned))
+    return cleaned
+
+
 def build_rollup(
     stages: list[dict[str, Any]],
     story_by_subcap: dict[str, set[str]],

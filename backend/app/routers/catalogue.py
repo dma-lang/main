@@ -1198,6 +1198,7 @@ async def value_chain(
         INDIRECT_STAGE,
         clean_stage_name,
         derive_value_chain,
+        descriptive_stage_name,
         load_rollup_config,
         stage_concept,
     )
@@ -1351,7 +1352,7 @@ async def value_chain(
                 clusters.append(
                     {
                         "code": g["code"],
-                        "name": g["name"],
+                        "name": descriptive_stage_name(g["name"], vc_cfg),
                         "position": pos,
                         "pillar": next(iter(pset)) if len(pset) == 1 else None,
                         "count": len(subs),

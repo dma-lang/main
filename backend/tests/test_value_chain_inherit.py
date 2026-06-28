@@ -96,6 +96,7 @@ def test_v5_without_vc_mapping_inherits_v7_chains(client: TestClient) -> None:
     assert len(vc["chains"]) == 1 and vc["chains"][0]["sv"] == "CL"
     names = [c["name"] for c in vc["clusters"]]
     assert names and all(not n.startswith("VCC-") for n in names)  # real names, not codes
+    assert all(len(n.split()) > 1 for n in names)  # descriptive (multi-word) titles, never one word
     # the chain is the real CL pipeline (a market-intelligence-style lead stage), not L1 clusters
     assert any("MARKET" in n.upper() or "BUSINESS DEVELOPMENT" in n.upper() for n in names)
     # verbose "Indirect: …" stages are merged into one clean stage, never shown raw

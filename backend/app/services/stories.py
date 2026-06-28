@@ -187,15 +187,19 @@ _NN_CAP = 2000  # bound the per-run NN work (§15 bounded-everything); the rest 
 async def _nearest_neighbour_pass(
     conn: Any, schema: str, stories: list[dict[str, Any]], carries: list[dict[str, Any]]
 ) -> None:
-    """Banded lexical nearest-neighbour for carries the id rules could not place: retrieve over
-    the TARGET version's own catalogue with the story's subcap/cluster names, map the rank onto
-    the configured matching bands (>= confirm auto-confirms, the middle band routes to review,
-    sub-floor stays unmapped) — same scale the SOW matcher uses, recalibrated together (R4)."""
+    """Banded nearest-neighbour for carries the id rules could not place: retrieve over the TARGET
+    version's catalogue with the story's subcap/cluster names — HYBRID lexical + DENSE (embedding
+    cosine, once services/embeddings populates the version) so the candidate is chosen on meaning,
+    not only word overlap. QA so a wrong story is never confirmed: the match must be in the story's
+    OWN pillar to auto-confirm (a cross-pillar best routes to review), and a strong dense cosine
+    corroborates a match to confirm-grade. >= confirm auto-confirms, the middle band -> review,
+    sub-floor stays unmapped (never dropped)."""
     from app.intelligence import gates, retrieval
     from app.services.sow import _similarity
 
     floor, strong = gates.evidence_thresholds()
     confirm_at, review_low = gates.matching_bands()
+    dense_strong, require_pillar = gates.matching_qa()
     misses = [i for i, c in enumerate(carries) if c["status"] == "unmapped"]
     for i in misses[:_NN_CAP]:
         srow = stories[i]
@@ -204,13 +208,22 @@ async def _nearest_neighbour_pass(
         ).strip()
         if not query:
             continue
-        matches = await retrieval.retrieve(conn, schema, query, k=1)
+        matches = await retrieval.retrieve(conn, schema, query, k=8, use_dense=True)
         if not matches:
             continue
-        rank = float(matches[0]["rank"])
-        if rank < floor:
-            continue  # noise — never mapped (G5)
+        # QA: a story belongs in its pillar — a cross-pillar match is almost always wrong; prefer
+        # the best pillar-aligned candidate, and a cross-pillar best can only reach 'review'.
+        spillar = str(srow.get("p") or "")
+        aligned = [m for m in matches if not spillar or m["pillar"] == spillar]
+        top = aligned[0] if aligned else matches[0]
+        rank, cos = float(top["rank"]), float(top["cosine"])
+        if rank < floor and cos < dense_strong:
+            continue  # noise on BOTH the lexical and the semantic signal — never mapped (G5)
         sim = _similarity(rank, floor, strong)
+        if cos >= dense_strong:
+            sim = max(sim, 0.97)  # strong dense ('deep learning') corroboration -> confirm-grade
+        if require_pillar and not aligned:
+            sim = min(sim, confirm_at - 1e-3)  # QA: a cross-pillar match is never auto-confirmed
         if sim >= confirm_at:
             status = "confirmed"
         elif sim >= review_low:
@@ -218,7 +231,7 @@ async def _nearest_neighbour_pass(
         else:
             continue
         carries[i].update(
-            carried_to_subcap=str(matches[0]["subcap_id"]),
+            carried_to_subcap=str(top["subcap_id"]),
             similarity=sim,
             status=status,
             via="nearest_neighbour",
@@ -238,6 +251,15 @@ async def carry_forward(
     stories = _load_seed()
 
     synthetic = _load_synthetic()
+    # F6: ensure the target version's subcap embeddings exist so the matcher uses DENSE (semantic)
+    # retrieval, not just lexical — idempotent + best-effort (hermetic = no spend; live = metered,
+    # builds once). A failure degrades cleanly to lexical; matching never crashes on an embed error.
+    try:
+        from app.services import embeddings as _embeddings
+
+        await _embeddings.build_embeddings(target_version)
+    except Exception:  # noqa: BLE001 - degrade to lexical-only retrieval, never block carry-forward
+        pass
     async with engine.begin() as conn:
         # RECONSTRUCT this version's carries (idempotent re-carry; no stale links survive a remap)
         await conn.execute(

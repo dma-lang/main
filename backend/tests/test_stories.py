@@ -112,6 +112,37 @@ def test_nearest_neighbour_via_recorded(carried: dict[str, Any]) -> None:
     assert nn["n"] == 750
     assert float(nn["lo"]) >= 0.70  # gated: only confirm/review bands carry a subcap
 
+    # QA (avoid wrong matches): every NN match the matcher CONFIRMED lands in the story's OWN pillar
+    # — a cross-pillar (likely-wrong) match is never auto-confirmed, only flagged to review.
+    async def _qa() -> tuple[int, int]:
+        db.init_engine()
+        engine = db.get_engine()
+        assert engine is not None
+        async with engine.connect() as conn:
+            row = (
+                (
+                    await conn.execute(
+                        text(
+                            "SELECT count(*) AS total, count(*) FILTER "
+                            "(WHERE s.pillar_id = left(c.carried_to_subcap, 2)) AS aligned "
+                            "FROM control.story_subcap_carry c "
+                            "JOIN control.story s ON s.story_key = c.story_key "
+                            "WHERE c.target_version = 'v7' AND c.via = 'nearest_neighbour' "
+                            "AND c.status = 'confirmed' AND NOT s.is_synthetic "
+                            "AND s.pillar_id IS NOT NULL"
+                        )
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        await db.dispose_engine()
+        assert row is not None
+        return int(row["total"]), int(row["aligned"])
+
+    total, aligned = asyncio.run(_qa())
+    assert total > 0 and aligned == total  # 100% pillar-aligned -> no wrong-pillar story confirmed
+
 
 @needs_db
 def test_carry_idempotent(carried: dict[str, Any]) -> None:
