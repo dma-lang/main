@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.value_chain import bucket_for, build_rollup, load_rollup_config
+from app.services.value_chain import bucket_for, build_rollup, load_rollup_config, stage_concept
 
 
 def test_config_has_eight_canonical_stages() -> None:
@@ -86,3 +86,42 @@ def test_build_rollup_confidence_split_and_empty_default() -> None:
     conf = {"s1": "HIGH", "s2": "HIGH", "s3": "LOW"}
     roll1 = {b["code"]: b for b in build_rollup(_stages(), story, {}, conf)}
     assert roll1["VCC-01"]["confidence"] == {"HIGH": 2, "MEDIUM": 0, "LOW": 1}
+
+
+def test_stage_concept_merges_by_concept_regardless_of_wording() -> None:
+    """Conceptually-identical stages merge no matter the naming; multi-concept names resolve by the
+    earliest keyword; priority concepts override position; distinct stages stay separate."""
+    cfg = load_rollup_config()
+
+    def c(name: str) -> str:
+        return stage_concept(name, cfg)
+
+    onboard = [
+        "KYC, ONBOARD & ACTIVATE",
+        "CLIENT KYC, FACILITY SETUP & ACCESS",
+        "MEMBER ONBOARDING & ELIGIBILITY",
+        "INSTITUTIONAL/INTERMEDIARY ONBOARDING",
+        "ACCOUNT OPENING & ACTIVATION",
+    ]
+    assert {c(n) for n in onboard} == {"c:onboard"}  # a dozen variants -> one concept
+    # variants that share a concept word merge; qualifier-prefixed resilience merges (priority)
+    assert c("WHOLESALE & DIRECT DISTRIBUTION") == c("INSTITUTIONAL DISTRIBUTION & RFP RESPONSE")
+    assert c("TECH RESILIENCE") == c("TECHNOLOGY RESILIENCE") == c("PORTFOLIO RESILIENCE & DR")
+    # earliest-keyword disambiguation of multi-concept names
+    assert c("BACK OFFICE OPS, COMPLIANCE & PLATFORM") == "c:backoffice"
+    assert c("COMPLIANCE & REGULATORY OPS") == "c:compliance"
+    assert c("MARKET INTELLIGENCE & VERTICAL TARGETING") == "c:acquire"
+    assert c("MULTI-CARRIER QUOTING & BINDING") == "c:originate"  # not vendor
+    assert c("Indirect linkages").startswith("n:")  # genuinely distinct -> never force-merged
+
+
+def test_concept_taxonomy_is_titled_and_ordered_mece() -> None:
+    """Every concept used has a descriptive label AND a lifecycle-order slot — so the consolidated
+    'All SV' chain is MECE: every stage titled, the set ordered front-to-back."""
+    cfg = load_rollup_config()
+    used = {str(e["concept"]) for e in cfg["merge_concepts"]}
+    labels = cfg["concept_labels"]
+    order = set(cfg["concept_order"])
+    assert used <= set(labels), f"concepts missing a descriptive label: {used - set(labels)}"
+    assert used <= order, f"concepts missing a lifecycle-order slot: {used - order}"
+    assert all(labels[c] and labels[c][0].isupper() for c in used)  # descriptive, capitalised

@@ -116,11 +116,17 @@ def test_v5_all_sv_consolidates_inherited_real_stages(client: TestClient) -> Non
     # every subvertical's KYC/onboarding stage merges to EXACTLY ONE consolidated stage
     onboarding = [n for n in all_names if "KYC" in n or "Onboard" in n]
     assert onboarding == ["Onboarding & KYC"]
-    assert len(all_names) == len(set(all_names))  # no duplicate stages in the consolidated chain
-    p_stages = [
+    assert len(all_names) == len(set(all_names))  # MECE: no duplicate (mutually-exclusive) stages
+    # collectively exhaustive: the core lifecycle concepts are present, ordered front-to-back
+    core = ["Market & acquire", "Onboarding & KYC", "Originate & underwrite", "Service & engage"]
+    assert all(s in all_names for s in core)
+    assert all_names.index("Market & acquire") < all_names.index("Onboarding & KYC")
+    assert all_names.index("Onboarding & KYC") < all_names.index("Service & engage")
+    # P1C1.1.1 (a strategy subcap) appears under each concept a subvertical maps it to
+    p_stages = {
         c["name"] for c in allv["clusters"] if any(s["id"] == "P1C1.1.1" for s in c["subcaps"])
-    ]
-    assert set(p_stages) == {"Market & acquire", "Back-office & operations"}
+    }
+    assert "Market & acquire" in p_stages
     assert allv["subverticals"]  # the picker still lists every subvertical
 
 

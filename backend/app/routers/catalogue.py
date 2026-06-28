@@ -1297,68 +1297,44 @@ async def value_chain(
                 )
                 sv_out, resolved = sv, sv
             else:
-                # consolidate ALL subverticals into ONE chain: group every subvertical's stages by
-                # semantic CONCEPT (config-driven) so near-duplicate stages (e.g. each subvertical's
-                # KYC/onboarding stage) merge into ONE consolidated stage with its most-common
-                # real name. A stage matching no concept keeps its own name (never over-merged), so
-                # genuinely distinct stages stay separate; every subcap lands in exactly one stage.
+                # consolidate ALL subverticals into a MECE lifecycle chain: group every stage by
+                # semantic CONCEPT so it is collectively exhaustive (every concept present is one
+                # stage) and mutually exclusive (one clean, titled stage per concept, ordered by the
+                # config concept_order). A subcap counts once per concept it maps to across
+                # subverticals; a stage matching no concept keeps its own most-common real name.
                 vc_cfg = load_rollup_config()
                 labels = vc_cfg.get("concept_labels", {})
-                canonical_sv = subverticals[0]
+                corder = {c: i for i, c in enumerate(vc_cfg.get("concept_order", []))}
                 groups: dict[str, dict[str, Any]] = {}
                 name_freq: dict[str, Counter[str]] = {}
-                spine_keys: set[str] = set()
-                covered: set[str] = set()
-                spine_max_ord = 0
-
-                def _add(r: Any) -> None:
+                for r in rows:
                     cn = clean_stage_name(str(r["name"]))
                     key = stage_concept(cn, vc_cfg)
-                    g = groups.setdefault(key, {"code": str(r["code"]), "ord": 9999, "subcaps": {}})
+                    g = groups.setdefault(key, {"code": str(r["code"]), "subcaps": {}})
                     if str(r["code"]) < g["code"]:
                         g["code"] = str(r["code"])
-                    if r["ord"] is not None and r["ord"] < g["ord"]:
-                        g["ord"] = r["ord"]
                     g["subcaps"][str(r["subcap_id"])] = {
                         "id": str(r["subcap_id"]),
                         "name": str(r["subcap_name"]),
                         "pillar": r["pillar"],
                     }
                     name_freq.setdefault(key, Counter())[cn] += 1
-
-                # spine = the most-delivered subvertical's chain, its stages MERGED by concept (its
-                # own near-dup stages collapse); canonical subcaps keep every stage they belong to.
-                for r in rows:
-                    if str(r["sv"]) != canonical_sv:
-                        continue
-                    _add(r)
-                    spine_keys.add(stage_concept(clean_stage_name(str(r["name"])), vc_cfg))
-                    covered.add(str(r["subcap_id"]))
-                    if r["ord"] is not None:
-                        spine_max_ord = max(spine_max_ord, int(r["ord"]))
-                # fold each OTHER subvertical's not-yet-covered subcap into its concept; a concept
-                # the spine lacks appends as its own stage. Each non-canonical subcap lands once.
-                for r in rows:
-                    sid = str(r["subcap_id"])
-                    if sid in covered or str(r["sv"]) == canonical_sv:
-                        continue
-                    _add(r)
-                    covered.add(sid)
                 # display: a clean canonical label for a matched concept (c:…), else its most-common
                 # real name (so genuinely-distinct unmatched stages stay verbatim)
                 for key, g in groups.items():
                     items = name_freq[key].items()
                     common = sorted(items, key=lambda kv: (-kv[1], len(kv[0]), kv[0]))[0][0]
                     g["name"] = labels.get(key[2:], common) if key.startswith("c:") else common
-                # concepts the spine lacks sort AFTER the spine chain (Indirect last)
-                base = spine_max_ord + 1
-                for key, g in groups.items():
-                    if key not in spine_keys:
-                        g["ord"] = base + (10000 if g["name"] == INDIRECT_STAGE else 0)
-                ordered = sorted(
-                    groups.values(),
-                    key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
-                )
+
+                def _order_key(kv: tuple[str, dict[str, Any]]) -> tuple[Any, ...]:
+                    key, g = kv
+                    if g["name"] == INDIRECT_STAGE:
+                        return (2, 0, g["name"])  # "Indirect linkages" always last
+                    if key.startswith("c:"):
+                        return (0, corder.get(key[2:], 999), g["name"])
+                    return (1, 0, g["name"])  # a verbatim stage, after the canonical concepts
+
+                ordered = [g for _, g in sorted(groups.items(), key=_order_key)]
                 sv_out, resolved = "all", ""
             clusters: list[dict[str, Any]] = []
             for pos, g in enumerate(ordered, 1):

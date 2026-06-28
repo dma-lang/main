@@ -113,79 +113,179 @@ bucket_keywords:
 # they keep their verbatim workbook stage names. Config, not code: editing re-merges live, and new /
 # future value chains auto-merge by the same vocabulary.
 merge_concepts:
-  - { kw: "PROSPECT",            concept: acquire }
-  - { kw: "LEAD GENERATION",     concept: acquire }
-  - { kw: "FIELD-OF-MEMBERSHIP", concept: acquire }
-  - { kw: "NICHE",               concept: acquire }
-  - { kw: "BRAND",               concept: acquire }
-  - { kw: "MARKET",              concept: acquire }
-  - { kw: "KYC",                 concept: onboard }
-  - { kw: "KYB",                 concept: onboard }
-  - { kw: "ONBOARD",             concept: onboard }
-  - { kw: "ELIGIBILITY",         concept: onboard }
-  - { kw: "ACCOUNT OPENING",     concept: onboard }
-  - { kw: "ORIGINAT",            concept: originate }
-  - { kw: "UNDERWRIT",           concept: originate }
-  - { kw: "QUOTE",               concept: originate }
-  - { kw: "BIND",                concept: originate }
+  # acquire — market, prospect, lead, campaign
+  - { kw: "PROSPECT",             concept: acquire }
+  - { kw: "CAMPAIGN",             concept: acquire }
+  - { kw: "ATTRACT",              concept: acquire }
+  - { kw: "OPPORTUNITY",          concept: acquire }
+  - { kw: "LEAD",                 concept: acquire }
+  - { kw: "FIELD-OF-MEMBERSHIP",  concept: acquire }
+  - { kw: "NICHE",                concept: acquire }
+  - { kw: "BRAND",                concept: acquire }
+  - { kw: "MARKET",               concept: acquire }
+  # distribute — sales channels, wholesale, RFP, appointment
+  - { kw: "DISTRIBUTION",         concept: distribute }
+  - { kw: "WHOLESALE",            concept: distribute }
+  - { kw: "APPOINTMENT",          concept: distribute }
+  # onboard — KYC / onboarding / eligibility / account opening
+  - { kw: "KYC",                  concept: onboard }
+  - { kw: "KYB",                  concept: onboard }
+  - { kw: "ONBOARD",              concept: onboard }
+  - { kw: "ELIGIBILITY",          concept: onboard }
+  - { kw: "ACCOUNT OPENING",      concept: onboard }
+  # originate — underwrite, quote, issue, lend, fund
+  - { kw: "ORIGINAT",             concept: originate }
+  - { kw: "UNDERWRIT",            concept: originate }
+  - { kw: "QUOTE",                concept: originate }
+  - { kw: "BIND",                 concept: originate }
+  - { kw: "ISSUANCE",             concept: originate }
+  - { kw: "LENDING",              concept: originate }
   - { kw: "CREDIT INVESTIGATION", concept: originate }
-  - { kw: "FACILITY SETUP",      concept: originate }
-  - { kw: "DISBURS",             concept: originate }
-  - { kw: "FUND",                concept: originate }
-  - { kw: "CROSS-SELL",          concept: grow }
-  - { kw: "CROSS-FUND",          concept: grow }
-  - { kw: "WALLET",              concept: grow }
-  - { kw: "LOYALTY",             concept: grow }
-  - { kw: "RETENTION",           concept: grow }
-  - { kw: "RENEWAL",             concept: grow }
-  - { kw: "ACCOUNT ROUNDING",    concept: grow }
-  - { kw: "REFERRAL",            concept: grow }
-  - { kw: "PORTFOLIO MGMT",      concept: portfolio }
-  - { kw: "PORTFOLIO REVIEW",    concept: portfolio }
-  - { kw: "PORTFOLIO ANALYTICS", concept: portfolio }
-  - { kw: "COVENANT",            concept: portfolio }
-  - { kw: "PERFORMANCE",         concept: portfolio }
-  - { kw: "SERVIC",              concept: service }
-  - { kw: "ENGAGE",              concept: service }
-  - { kw: "RELATIONSHIP",        concept: service }
-  - { kw: "COVERAGE",            concept: service }
-  - { kw: "ADVIC",               concept: service }
-  - { kw: "ADVISOR",             concept: service }
-  - { kw: "PATRON",              concept: service }
-  - { kw: "POLICYHOLDER",        concept: service }
-  - { kw: "PLANNING",            concept: service }
-  - { kw: "AML",                 concept: risk }
-  - { kw: "FRAUD",               concept: risk }
-  - { kw: "SURVEILL",            concept: risk }
-  - { kw: "RISK",                concept: risk }
-  - { kw: "COMPLIANCE",          concept: compliance }
-  - { kw: "REGULAT",             concept: compliance }
-  - { kw: "ACTUARIAL",           concept: compliance }
-  - { kw: "SCORECARD",           concept: compliance }
-  - { kw: "BACK OFFICE",         concept: backoffice }
-  - { kw: "SHARED SERVICE",      concept: backoffice }
-  - { kw: "CUSO",                concept: backoffice }
-  - { kw: "AUTOMATION",          concept: backoffice }
-  - { kw: "OPS",                 concept: backoffice }
-  - { kw: "INTELLIGENCE",        concept: analytics }
-  - { kw: "ANALYTICS",           concept: analytics }
-  - { kw: "REPORTING",           concept: analytics }
-  - { kw: "RESEARCH",            concept: analytics }
-  - { kw: "TECHNOLOGY",          concept: platform }
-  - { kw: "PLATFORM",            concept: platform }
-  - { kw: "DATA",                concept: platform }
+  - { kw: "CREDIT ANALYSIS",      concept: originate }
+  - { kw: "FACILITY SETUP",       concept: originate }
+  - { kw: "DISBURS",              concept: originate }
+  - { kw: "FUND",                 concept: originate }
+  # transact — payments, settlement, custody, claims, premiums, commissions
+  - { kw: "PAYMENT",              concept: transact }
+  - { kw: "SETTLE",               concept: transact }
+  - { kw: "CUSTODY",              concept: transact }
+  - { kw: "FNOL",                 concept: transact }
+  - { kw: "CLAIMS",               concept: transact }
+  - { kw: "PREMIUM",              concept: transact }
+  - { kw: "DEPOSIT",              concept: transact }
+  - { kw: "TREASURY",             concept: transact }
+  - { kw: "COMMISSION",           concept: transact }
+  - { kw: "COMPENSATION",         concept: transact }
+  # service — servicing, support, care, advice, relationship, advocacy
+  - { kw: "SERVIC",               concept: service }
+  - { kw: "SUPPORT",              concept: service }
+  - { kw: "CARE",                 concept: service }
+  - { kw: "RESOLUTION",           concept: service }
+  - { kw: "ADVOCACY",             concept: service }
+  - { kw: "ENGAGE",               concept: service }
+  - { kw: "RELATIONSHIP",         concept: service }
+  - { kw: "COVERAGE",             concept: service }
+  - { kw: "ADVIC",                concept: service }
+  - { kw: "PATRON",               concept: service }
+  - { kw: "POLICYHOLDER",         concept: service }
+  - { kw: "PLANNING",             concept: service }
+  # grow — cross-sell, wallet, loyalty, retention, renewal, referral
+  - { kw: "CROSS-SELL",           concept: grow }
+  - { kw: "CROSS-FUND",           concept: grow }
+  - { kw: "WALLET",               concept: grow }
+  - { kw: "LOYALTY",              concept: grow }
+  - { kw: "RETENTION",            concept: grow }
+  - { kw: "RENEWAL",              concept: grow }
+  - { kw: "ACCOUNT ROUNDING",     concept: grow }
+  - { kw: "REFERRAL",             concept: grow }
+  # portfolio — portfolio mgmt/review, covenant, performance
+  - { kw: "PORTFOLIO MGMT",       concept: portfolio }
+  - { kw: "PORTFOLIO REVIEW",     concept: portfolio }
+  - { kw: "PORTFOLIO ANALYTICS",  concept: portfolio }
+  - { kw: "COVENANT",             concept: portfolio }
+  - { kw: "PERFORMANCE",          concept: portfolio }
+  # risk — AML, fraud, surveillance, risk
+  - { kw: "AML",                  concept: risk }
+  - { kw: "FRAUD",                concept: risk }
+  - { kw: "SURVEILL",             concept: risk }
+  - { kw: "RISK",                 concept: risk }
+  # compliance — regulatory, audit, exam, conduct, protection, oversight
+  - { kw: "COMPLIANCE",           concept: compliance }
+  - { kw: "REGULAT",              concept: compliance }
+  - { kw: "ACTUARIAL",            concept: compliance }
+  - { kw: "SCORECARD",            concept: compliance }
+  - { kw: "AUDIT",                concept: compliance }
+  - { kw: "EXAM",                 concept: compliance }
+  - { kw: "CONDUCT",              concept: compliance }
+  - { kw: "FIDUCIARY",            concept: compliance }
+  - { kw: "OVERSIGHT",            concept: compliance }
+  - { kw: "PROTECTION",           concept: compliance }
+  - { kw: "CFPB",                 concept: compliance }
+  # vendor — third-party / TPRM (kept ahead of backoffice OPS so "… / VENDOR MGMT" is vendor)
+  - { kw: "VENDOR",               concept: vendor }
+  - { kw: "TPRM",                 concept: vendor }
+  - { kw: "COUNTERPARTY",         concept: vendor }
+  - { kw: "REINSURER",            concept: vendor }
+  - { kw: "CUSTODIAN",            concept: vendor }
+  # security — cyber / infosec
+  - { kw: "CYBER",                concept: security }
+  - { kw: "INFOSEC",              concept: security }
+  # resilience — BCP / DR / resilience
+  - { kw: "RESILIENCE",           concept: resilience }
+  - { kw: "BCP",                  concept: resilience }
+  # backoffice — back office, shared services, automation, ops
+  - { kw: "BACK OFFICE",          concept: backoffice }
+  - { kw: "SHARED SERVICE",       concept: backoffice }
+  - { kw: "CUSO",                 concept: backoffice }
+  - { kw: "AUTOMATION",           concept: backoffice }
+  - { kw: "OPS",                  concept: backoffice }
+  # training — training / education / enablement
+  - { kw: "TRAINING",             concept: training }
+  - { kw: "MEMBER ED",            concept: training }
+  - { kw: "ADOPTION",             concept: training }
+  # strategy — product strategy, M&A
+  - { kw: "PRODUCT",              concept: strategy }
+  - { kw: "STRATEGY",             concept: strategy }
+  - { kw: "PERPETUATION",         concept: strategy }
+  - { kw: "M&A",                  concept: strategy }
+  # analytics — intelligence, reporting, research
+  - { kw: "INTELLIGENCE",         concept: analytics }
+  - { kw: "ANALYTICS",            concept: analytics }
+  - { kw: "REPORTING",            concept: analytics }
+  - { kw: "RESEARCH",             concept: analytics }
+  # platform — technology, platform, data, governance
+  - { kw: "TECHNOLOGY",           concept: platform }
+  - { kw: "PLATFORM",             concept: platform }
+  - { kw: "DATA",                 concept: platform }
+  - { kw: "GOVERN",               concept: platform }
+
+# A few concepts are UNAMBIGUOUS wherever their keyword appears, even when a qualifier word precedes
+# them (e.g. "TECHNOLOGY RESILIENCE"): these WIN regardless of position, so "TECHNOLOGY RESILIENCE"
+# and "TECH RESILIENCE" both merge to resilience rather than splitting into platform.
+priority_concepts:
+  - resilience
+
+# MECE lifecycle ORDER of the merged concepts in the consolidated 'All SV' chain — front-to-back, so
+# the pipeline/radial read as an ordered value chain. A concept not listed sorts after these; any
+# stage that matched no concept follows; "Indirect linkages" always sorts last.
+concept_order:
+  - strategy
+  - acquire
+  - distribute
+  - onboard
+  - originate
+  - transact
+  - service
+  - grow
+  - portfolio
+  - risk
+  - compliance
+  - vendor
+  - security
+  - resilience
+  - backoffice
+  - training
+  - analytics
+  - platform
 
 # The clean canonical label shown for each merged concept in the consolidated 'All SV' chain (a
 # stage that matched no concept keeps its own most-common real name instead). Edit freely.
 concept_labels:
   acquire:    "Market & acquire"
+  distribute: "Distribution & sales"
   onboard:    "Onboarding & KYC"
   originate:  "Originate & underwrite"
+  transact:   "Transact & settle"
   service:    "Service & engage"
   grow:       "Cross-sell & grow"
   portfolio:  "Portfolio & monitoring"
   risk:       "Risk & fraud"
   compliance: "Compliance & regulatory"
+  vendor:     "Vendor & third-party"
+  security:   "Security & cyber"
+  resilience: "Resilience & continuity"
   backoffice: "Back-office & operations"
+  training:   "Training & enablement"
+  strategy:   "Strategy & product"
   analytics:  "Analytics & insight"
   platform:   "Platform & data"

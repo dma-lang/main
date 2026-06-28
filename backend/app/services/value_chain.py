@@ -244,21 +244,27 @@ def bucket_for(stage_name: str, cfg: dict[str, Any] | None = None) -> str:
 def stage_concept(stage_name: str, cfg: dict[str, Any] | None = None) -> str:
     """A semantic CONCEPT key for a stage name (config ``merge_concepts``). The concept whose
     keyword appears EARLIEST in the cleaned UPPERCASE name wins (ties break by list order) — so
-    "BACK OFFICE OPS, COMPLIANCE…" is backoffice (not compliance) and "CLIENT KYC…" is onboard. Used
-    ONLY to MERGE near-duplicate stages across subverticals in the consolidated 'All SV' chain. A
-    stage matching no concept returns a UNIQUE key from its own cleaned name (``n:<name>``), so
-    genuinely distinct stages never over-merge."""
+    "BACK OFFICE OPS, COMPLIANCE…" is backoffice (not compliance) and "CLIENT KYC…" is onboard.
+    Concepts in ``priority_concepts`` are unambiguous wherever their keyword appears and win
+    regardless of position ("TECHNOLOGY RESILIENCE" -> resilience). Used ONLY to MERGE similar
+    stages across subverticals in the consolidated 'All SV' chain. A stage matching no concept
+    returns a UNIQUE key from its own cleaned name so distinct stages stay separate."""
     cfg = cfg or load_rollup_config()
     cleaned = clean_stage_name(stage_name)
     name = cleaned.upper()
-    best_pos, best_concept = len(name) + 1, None
+    priority = set(cfg.get("priority_concepts", []))
+    best_pos, best_concept = len(name) + 2, None
     for entry in cfg.get("merge_concepts", []):
         kw = str(entry.get("kw", "")).upper()
         if not kw:
             continue
         pos = name.find(kw)
-        if 0 <= pos < best_pos:  # earliest keyword position in the name wins
-            best_pos, best_concept = pos, str(entry.get("concept"))
+        if pos < 0:
+            continue
+        concept = str(entry.get("concept"))
+        eff = pos - 10000 if concept in priority else pos  # a priority concept wins over position
+        if eff < best_pos:
+            best_pos, best_concept = eff, concept
     return ("c:" + best_concept) if best_concept is not None else ("n:" + cleaned.lower())
 
 
