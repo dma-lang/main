@@ -307,6 +307,20 @@ _FILL_SCORE = (
 )
 
 
+def _norm_sv(sv: str) -> str:
+    """Canonicalise a read-time subvertical scope through the alias map (config/subvertical_aliases
+    .yaml) so a legacy ``PEN`` deep-link resolves to ``RIA`` — the code the data was actually
+    migrated to at ingest/provision (stories.py, provision.py). Without this a ``?sv=PEN`` filter
+    matches ZERO rows even though the delivery is all under RIA. ``all`` / empty / an
+    ``unscoped:<client>`` scope pass through untouched (the suffix is a Jira project_key, not an SV
+    code)."""
+    if not sv or sv == "all" or sv.startswith("unscoped:"):
+        return sv
+    from app.services.sv_aliases import normalize_sv_code
+
+    return normalize_sv_code(sv) or sv
+
+
 async def _sv_membership(
     conn: AsyncConnection, s: str, version_id: str, sv: str
 ) -> tuple[str, dict[str, Any]]:
@@ -383,6 +397,7 @@ async def list_subcaps(
     value chain (cat_<v>.subcap_vcc) — so the workbench tree count matches mission control instead
     of always showing all 851. A version without a VC mapping scopes by delivery (story_sv_code)
     instead, so the tree never collapses to zero."""
+    sv = _norm_sv(sv)
     v = await resolve_version(version)
     s = _schema(v)
     async with _engine().connect() as conn:
@@ -1203,6 +1218,7 @@ async def value_chain(
         stage_concept,
     )
 
+    sv = _norm_sv(sv)
     v = await resolve_version(version)
     s = _schema(v)
     p_active = bool(pillar and pillar != "all")
@@ -1481,6 +1497,7 @@ async def summary(
     sv: str = Query("all"),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> CatalogueSummary:
+    sv = _norm_sv(sv)
     v = await resolve_version(version)
     s = _schema(v)
     # COMPLETENESS = (total - decayed) / total. decay = subcaps with NO mapped story at all — Jira
@@ -1594,6 +1611,7 @@ async def heatmap(
     """Delivery-concentration heatmap for Mission control, grouped by `lens`, scoped by the active
     pillar/subvertical filters. Counts dedupe per story so a vendor with many platforms isn't
     double-counted."""
+    sv = _norm_sv(sv)
     v = await resolve_version(version)
     s = _schema(v)
     if lens not in _LENS_GROUP:
@@ -1612,7 +1630,18 @@ async def heatmap(
             params["pil"] = pillar
         if lens == "value-chain":
             # the value-chain lens scopes by the CHAIN's subvertical (in the join), not the story sv
-            params["vc_sv"] = sv
+            if sv.startswith("unscoped:"):
+                # an unscoped client has NO chain of its own, so scoping the chain by its name would
+                # match zero stages (silent-empty). Show ALL stages but count only this client's
+                # unscoped stories (scope by story, not by chain subvertical).
+                params["vc_sv"] = "all"
+                where.append(
+                    "st.project_key = :uclient AND (st.story_sv_code IS NULL "
+                    f"OR st.story_sv_code NOT IN ({_MODELLED_SV_SQL}))"
+                )
+                params["uclient"] = sv.split(":", 1)[1]
+            else:
+                params["vc_sv"] = sv
         elif sv.startswith("unscoped:"):
             # an AI-detected unscoped subvertical: scope to that client's stories outside the nine
             where.append(

@@ -45,6 +45,22 @@ def test_normalize_tier_rewrites_only_the_sv_suffix() -> None:
     assert normalize_tier(None) is None
 
 
+def test_read_time_sv_scope_normalizes_alias_but_preserves_scopes() -> None:
+    """A read-time sv filter (summary / list_subcaps / value-chain / heatmap) folds a legacy code
+    so a ?sv=PEN deep-link hits the RIA delivery it was migrated to — but ``all`` / empty / an
+    ``unscoped:<client>`` scope must pass through verbatim (they are not SV codes; uppercasing them
+    would break the ``sv == 'all'`` checks and mangle the Jira project_key after the colon)."""
+    from app.routers.catalogue import _norm_sv
+
+    reload_aliases()
+    assert _norm_sv("PEN") == "RIA"  # the read-side autocorrect (C1)
+    assert _norm_sv("pen") == "RIA"  # case-insensitive
+    assert _norm_sv("RIA") == "RIA"
+    assert _norm_sv("all") == "all"  # NOT 'ALL' — endpoints test `sv == 'all'`
+    assert _norm_sv("") == ""  # value-chain's empty default is preserved
+    assert _norm_sv("unscoped:Acme Corp") == "unscoped:Acme Corp"  # client suffix verbatim
+
+
 def test_story_ingest_and_carry_rows_normalize_the_sv() -> None:
     ing = stories._ingest_row(
         {"k": "X-1", "sc": "P3C1.8", "sv": "PEN", "psv": "pen", "tier": "T2-PEN"}, "v7"

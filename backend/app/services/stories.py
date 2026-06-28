@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ from sqlalchemy import text
 
 from app import db
 from app.services.sv_aliases import normalize_sv_code, normalize_tier
+
+logger = logging.getLogger(__name__)
 
 _BACKEND = Path(__file__).resolve().parents[2]  # app/services/stories.py -> backend
 _SEED = _BACKEND / "seed" / "stories.json.gz"
@@ -201,6 +204,16 @@ async def _nearest_neighbour_pass(
     confirm_at, review_low = gates.matching_bands()
     dense_strong, require_pillar = gates.matching_qa()
     misses = [i for i, c in enumerate(carries) if c["status"] == "unmapped"]
+    if len(misses) > _NN_CAP:
+        # bounded-everything (§15) means the residual beyond the cap is NOT scored this run; those
+        # rows stay 'unmapped' (never dropped), but the fact that the cap bit must be observable
+        # rather than look like "everything was attempted".
+        logger.warning(
+            "nearest-neighbour cap reached: %d unmapped, only the first %d scored (%d residual)",
+            len(misses),
+            _NN_CAP,
+            len(misses) - _NN_CAP,
+        )
     for i in misses[:_NN_CAP]:
         srow = stories[i]
         query = " ".join(
@@ -221,7 +234,11 @@ async def _nearest_neighbour_pass(
             continue  # noise on BOTH the lexical and the semantic signal — never mapped (G5)
         sim = _similarity(rank, floor, strong)
         if cos >= dense_strong:
-            sim = max(sim, 0.97)  # strong dense ('deep learning') corroboration -> confirm-grade
+            # strong dense ('deep learning') corroboration. WITH some lexical support (rank>=floor)
+            # it confirms; with NONE at all it can only reach 'review' — a pure-embedding match (a
+            # possible semantically-adjacent false friend) is human-verified, never auto-confirmed
+            # (QA: "avoid matching the wrong story"). Either way the match is kept, never dropped.
+            sim = max(sim, 0.97 if rank >= floor else review_low)
         if require_pillar and not aligned:
             sim = min(sim, confirm_at - 1e-3)  # QA: a cross-pillar match is never auto-confirmed
         if sim >= confirm_at:
@@ -258,8 +275,15 @@ async def carry_forward(
         from app.services import embeddings as _embeddings
 
         await _embeddings.build_embeddings(target_version)
-    except Exception:  # noqa: BLE001 - degrade to lexical-only retrieval, never block carry-forward
-        pass
+    except Exception as exc:  # noqa: BLE001 - degrade to lexical-only, never block carry-forward
+        # observability (safeguard 9: nothing silently degraded) — a persistent live-embedding
+        # outage means the "deep learning" dense half is dark and matching is lexical-only; surface
+        # it rather than swallowing, while still not blocking the carry.
+        logger.warning(
+            "embeddings unavailable for %s; matching degrades to lexical-only: %s",
+            target_version,
+            exc,
+        )
     async with engine.begin() as conn:
         # RECONSTRUCT this version's carries (idempotent re-carry; no stale links survive a remap)
         await conn.execute(
