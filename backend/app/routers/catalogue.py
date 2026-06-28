@@ -1290,11 +1290,21 @@ async def value_chain(
                     }
                 return out_segs
 
+            vc_cfg = load_rollup_config()
+            corder = {c: i for i, c in enumerate(vc_cfg.get("concept_order", []))}
             if sv_active:
-                ordered = sorted(
-                    _group(rows).values(),
-                    key=lambda x: (x["name"] == INDIRECT_STAGE, x["ord"], x["name"]),
-                )
+                # present the SV's OWN process flow logically: order stages by their concept's place
+                # in the lifecycle (config concept_order), then the workbook order within a concept
+                # (the raw workbook stage_order is not a front-to-back flow).
+                def _flow(x: dict[str, Any]) -> tuple[Any, ...]:
+                    if x["name"] == INDIRECT_STAGE:
+                        return (2, 999, x["ord"], x["name"])
+                    k = stage_concept(x["name"], vc_cfg)
+                    if k.startswith("c:"):
+                        return (0, corder.get(k[2:], 999), x["ord"], x["name"])
+                    return (1, 999, x["ord"], x["name"])
+
+                ordered = sorted(_group(rows).values(), key=_flow)
                 sv_out, resolved = sv, sv
             else:
                 # consolidate ALL subverticals into a MECE lifecycle chain: group every stage by
@@ -1302,9 +1312,7 @@ async def value_chain(
                 # stage) and mutually exclusive (one clean, titled stage per concept, ordered by the
                 # config concept_order). A subcap counts once per concept it maps to across
                 # subverticals; a stage matching no concept keeps its own most-common real name.
-                vc_cfg = load_rollup_config()
                 labels = vc_cfg.get("concept_labels", {})
-                corder = {c: i for i, c in enumerate(vc_cfg.get("concept_order", []))}
                 groups: dict[str, dict[str, Any]] = {}
                 name_freq: dict[str, Counter[str]] = {}
                 for r in rows:

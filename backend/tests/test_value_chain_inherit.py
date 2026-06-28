@@ -100,6 +100,19 @@ def test_v5_without_vc_mapping_inherits_v7_chains(client: TestClient) -> None:
     assert any("MARKET" in n.upper() or "BUSINESS DEVELOPMENT" in n.upper() for n in names)
     # verbose "Indirect: …" stages are merged into one clean stage, never shown raw
     assert not any(n.lower().startswith("indirect") and n != "Indirect linkages" for n in names)
+    # the chain reads as a LOGICAL process flow: stages ordered by lifecycle concept (acquire ->
+    # onboard -> ... -> platform), the workbook's jumbled raw stage_order overridden.
+    from app.services.value_chain import load_rollup_config, stage_concept
+
+    cfg = load_rollup_config()
+    order = {c: i for i, c in enumerate(cfg["concept_order"])}
+
+    def phase(n: str) -> int:
+        k = stage_concept(n, cfg)
+        return order.get(k[2:], 998) if k.startswith("c:") else 999  # verbatim/indirect last
+
+    phases = [phase(n) for n in names]
+    assert phases == sorted(phases)  # non-decreasing lifecycle order == logical front-to-back flow
 
 
 @needs_db
