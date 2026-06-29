@@ -1,0 +1,525 @@
+{
+ "offerings": [
+  {
+   "id": "OFF-FSC-CUSTOMER",
+   "name": "Financial Services Customer Platform",
+   "family": "activation",
+   "platforms": [
+    "Salesforce Financial Services Cloud"
+   ],
+   "summary": "Bankers, advisors, and service teams shouldn't need three systems to understand one client. Financial Services Customer Platform gives frontline teams a single place to see every relationship, product holding, service interaction, and open opportunity. Built on Salesforce Financial Services Cloud, it connects to core systems and surfaces the data insights teams need to act, not just observe. Advisors prepare faster and collaborate more easily across lines of business. Referral and cross-sell opportunities become visible where they matter. Service improves because the full picture is already th",
+   "outcomes": [
+    "Unified client and household relationship views",
+    "Improved advisor productivity",
+    "Stronger cross-sell and referral management",
+    "Faster service resolution",
+    "Higher CRM adoption among frontline staff"
+   ],
+   "capabilities": [
+    "Unified Client & Household ManagementConsolidated profiles showing accounts, relationships, and interactions.",
+    "Relationship MappingVisualization of households, businesses, and financial relationships.",
+    "Advisor Workflow AutomationAction plans, referrals, and service workflows embedded into daily advisor work.",
+    "Core System IntegrationConnections to core banking systems and product platforms.",
+    "Opportunity & Pipeline ManagementVisibility into cross-sell opportunities and advisor pipelines.",
+    "Advisor Analytics & Performance DashboardsEmbedded reporting and dashboards for pipeline health, referral performance, activity trends, and relationship growth.",
+    "Agentforce Advisor AssistanceAgentforce and Einstein-powered meeting prep, next-best-action, knowledge prompts, and guided advisor workflows with human review."
+   ],
+   "match_text": "Financial Services Customer Platform Bankers, advisors, and service teams shouldn't need three systems to understand one client. Financial Services Customer Platform gives frontline teams a single place to see every relationship, product holding, service interaction, and open opportunity. Built on Salesforce Financial Services Cloud, it connects to core systems and surfaces the data insights teams need to act, not just observe. Advisors prepare faster and collaborate more easily across lines of business. Referral and cross-sell opportunities become visible where they matter. Service improves because the full picture is already there. And CRM adoption grows because the platform works the way frontline teams do. Unified client and household relationship views Improved advisor productivity Stronger cross-sell and referral management Faster service resolution Higher CRM adoption among frontline staff Unified Client & Household ManagementConsolidated profiles showing accounts, relationships, and interactions. Relationship MappingVisualization of households, businesses, and financial relationships. Advisor Workflow AutomationAction plans, referrals, and service workflows embedded into daily advisor work. Core System IntegrationConnections to core banking systems and product platforms. Opportunity & Pipeline ManagementVisibility into cross-sell opportunities and advisor pipelines. Advisor Analytics & Performance DashboardsEmbedded reporting and dashboards for pipeline health, referral performance, activity trends, and relationship growth. Agentforce Advisor AssistanceAgentforce and Einstein-powered meeting prep, next-best-action, knowledge prompts, and guided advisor workflows with human review."
+  },
+  {
+   "id": "OFF-ENGAGE",
+   "name": "Personalized Customer Engagement",
+   "family": "activation",
+   "platforms": [
+    "Salesforce Marketing Cloud",
+    "Data Cloud"
+   ],
+   "summary": "Financial institutions have more customer data than ever. Turning it into relevant, well-timed outreach across channels is where most teams get stuck. Zennify helps banks and credit unions activate that data using Salesforce Marketing Cloud, Data Cloud, and CRM to deliver personalized, event-driven engagement across digital and frontline channels. Marketing teams build and launch campaigns faster. Real-time behavioral signals trigger outreach when it matters. Advisors and bankers see exactly how customers are engaging, so every interaction (digital or in-person) reinforces the next. And AI hel",
+   "outcomes": [
+    "Higher campaign conversion rates",
+    "Improved product attach rates",
+    "Reduced customer acquisition costs",
+    "Stronger retention and engagement",
+    "Faster campaign deployment cycles"
+   ],
+   "capabilities": [
+    "Customer Segmentation: Dynamic audiences based on financial behaviors, lifecycle stage, and product relationships, continuously updated as customer activity changes. Teams build segments that reflect deposit patterns, lending status, digital engagement, and product holdings, not just demographic attributes.",
+    "Journey Orchestration: Multi-channel journeys across email, SMS, mobile push, web, and branch touchpoints. Onboarding sequences, cross-sell campaigns, renewal nudges, and education flows all run from a single orchestration engine with branching logic, wait steps, and exit criteria. Journeys are built around banking milestones like account opening, first deposit, loan application, and maturity dates.",
+    "Real-Time Event Triggers: Engagement driven by customer and account activity, including significant deposit changes, application milestones, digital product research, or missed payments. Outreach happens in the moment instead of waiting for the next batch send.",
+    "Advisor and Banker Engagement Signals: Marketing insights surface directly in CRM, enabling frontline teams with next-best-product recommendations and conversation context. Bankers see what customers have received, clicked, and engaged with, so the next conversation picks up where the last touchpoint left off.",
+    "Campaign Performance Analytics: Full-funnel visibility into campaign performance, including ROI, cost per acquisition, product attach rates, and channel performance, with the visibility needed to optimize spend and prove impact.",
+    "Consent and Privacy Management: Integrated preference centers and compliance controls aligned to financial services regulatory requirements. Subscription management, unsubscribe handling, and audit-ready documentation are built into the foundation, not an afterthought.",
+    "Agentforce for Campaign Intelligence: AI-assisted audience discovery, content recommendations, send-time optimization, and journey performance analysis. Teams use AI to surface segments they might have missed, test variations faster, and continuously refine campaigns based on what the data shows is working."
+   ],
+   "match_text": "Personalized Customer Engagement Financial institutions have more customer data than ever. Turning it into relevant, well-timed outreach across channels is where most teams get stuck. Zennify helps banks and credit unions activate that data using Salesforce Marketing Cloud, Data Cloud, and CRM to deliver personalized, event-driven engagement across digital and frontline channels. Marketing teams build and launch campaigns faster. Real-time behavioral signals trigger outreach when it matters. Advisors and bankers see exactly how customers are engaging, so every interaction (digital or in-person) reinforces the next. And AI helps teams refine targeting, content, and timing with every cycle. Higher campaign conversion rates Improved product attach rates Reduced customer acquisition costs Stronger retention and engagement Faster campaign deployment cycles Customer Segmentation: Dynamic audiences based on financial behaviors, lifecycle stage, and product relationships, continuously updated as customer activity changes. Teams build segments that reflect deposit patterns, lending status, digital engagement, and product holdings, not just demographic attributes. Journey Orchestration: Multi-channel journeys across email, SMS, mobile push, web, and branch touchpoints. Onboarding sequences, cross-sell campaigns, renewal nudges, and education flows all run from a single orchestration engine with branching logic, wait steps, and exit criteria. Journeys are built around banking milestones like account opening, first deposit, loan application, and maturity dates. Real-Time Event Triggers: Engagement driven by customer and account activity, including significant deposit changes, application milestones, digital product research, or missed payments. Outreach happens in the moment instead of waiting for the next batch send. Advisor and Banker Engagement Signals: Marketing insights surface directly in CRM, enabling frontline teams with next-best-product recommendations and conversation context. Bankers see what customers have received, clicked, and engaged with, so the next conversation picks up where the last touchpoint left off. Campaign Performance Analytics: Full-funnel visibility into campaign performance, including ROI, cost per acquisition, product attach rates, and channel performance, with the visibility needed to optimize spend and prove impact. Consent and Privacy Management: Integrated preference centers and compliance controls aligned to financial services regulatory requirements. Subscription management, unsubscribe handling, and audit-ready documentation are built into the foundation, not an afterthought. Agentforce for Campaign Intelligence: AI-assisted audience discovery, content recommendations, send-time optimization, and journey performance analysis. Teams use AI to surface segments they might have missed, test variations faster, and continuously refine campaigns based on what the data shows is working."
+  },
+  {
+   "id": "OFF-ONBOARD",
+   "name": "Digital Account Opening & Onboarding",
+   "family": "activation",
+   "platforms": [
+    "Salesforce Financial Services Cloud"
+   ],
+   "summary": "Opening an account should take minutes, not days. For many financial institutions, the process still involves manual paperwork, disconnected systems, and compliance steps that slow everything down. Digital Account Opening replaces that friction with a streamlined experience built on Salesforce Financial Services Cloud. Applicants move through a guided digital flow while identity verification, compliance checks, document capture, and core system updates happen automatically behind the scenes. The platform works across digital and in-branch channels. Onboarding teams manage exceptions from a sin",
+   "outcomes": [
+    "Organizations achieve:",
+    "Higher account opening conversion rates",
+    "Faster time to funded account",
+    "Reduced onboarding operational cost",
+    "Stronger early customer engagement"
+   ],
+   "capabilities": [
+    "Digital Application Experiences: Mobile-first application flows that make it easy for customers to apply from any device. Forms pre-populate with known data, adapt based on product type, and support save-and-resume so applicants can pick up where they left off. Cross-channel continuity means a customer can start online and finish in a branch without re-entering information.",
+    "Identity Verification and Compliance: Integrated KYC, KYB, AML screening, and OFAC checks that run automatically as part of the application flow. Third-party verification providers plug into the process so identity, credit, and risk checks happen in real time without manual intervention. The platform tracks every verification step for audit and regulatory documentation.",
+    "Document Processing: Automated document capture, generation, and e-signature built into the application journey. Applicants upload supporting documents directly in the flow. Disclosure packets and consent forms generate automatically based on the product and jurisdiction. E-signature status syncs back to Salesforce so onboarding teams always know where things stand.",
+    "Real-Time Core Integration: Direct connections to core banking and fulfillment systems so accounts are created and funded without manual handoffs. Data flows between Salesforce, the core platform, and third-party providers through a designed integration architecture. Pre-fill from existing systems reduces applicant effort and improves data accuracy from the start.",
+    "Onboarding Journey Automation: Post-account-opening engagement journeys that activate new customers during the critical first 90 days. Welcome sequences, product education, direct deposit setup prompts, and card activation reminders adapt based on what the customer has and hasn't done, keeping engagement relevant without overwhelming new account holders.",
+    "Operational Workflow Management: A centralized workspace for onboarding teams to manage applications, exceptions, and escalations. Exception queues route incomplete or flagged applications to the right reviewer with full context. SLA tracking gives managers visibility into processing times, bottlenecks, and team performance so nothing falls through the cracks.",
+    "Onboarding Funnel Analytics: Dashboards that track the full application funnel from start to funded account. Teams measure abandonment rates, straight-through processing, exception volumes, time-to-open, and conversion by channel and product. These insights reveal where applicants drop off and where operational improvements will have the most impact.",
+    "Agentforce for Application Guidance and Exception Triage: AI that works on both sides of the onboarding process. On the customer-facing side, Agentforce agents help applicants navigate product options, answer questions about requirements, and complete applications with less friction. On the operations side, AI triages exceptions by analyzing application data, flagging the reason for review, recommending next steps, and routing to the right team member."
+   ],
+   "match_text": "Digital Account Opening & Onboarding Opening an account should take minutes, not days. For many financial institutions, the process still involves manual paperwork, disconnected systems, and compliance steps that slow everything down. Digital Account Opening replaces that friction with a streamlined experience built on Salesforce Financial Services Cloud. Applicants move through a guided digital flow while identity verification, compliance checks, document capture, and core system updates happen automatically behind the scenes. The platform works across digital and in-branch channels. Onboarding teams manage exceptions from a single workspace with full visibility into application status and SLA performance. And once an account is funded, automated onboarding journeys help new customers activate products, build engagement, and deepen the relationship from day one. Organizations achieve: Higher account opening conversion rates Faster time to funded account Reduced onboarding operational cost Stronger early customer engagement Digital Application Experiences: Mobile-first application flows that make it easy for customers to apply from any device. Forms pre-populate with known data, adapt based on product type, and support save-and-resume so applicants can pick up where they left off. Cross-channel continuity means a customer can start online and finish in a branch without re-entering information. Identity Verification and Compliance: Integrated KYC, KYB, AML screening, and OFAC checks that run automatically as part of the application flow. Third-party verification providers plug into the process so identity, credit, and risk checks happen in real time without manual intervention. The platform tracks every verification step for audit and regulatory documentation. Document Processing: Automated document capture, generation, and e-signature built into the application journey. Applicants upload supporting documents directly in the flow. Disclosure packets and consent forms generate automatically based on the product and jurisdiction. E-signature status syncs back to Salesforce so onboarding teams always know where things stand. Real-Time Core Integration: Direct connections to core banking and fulfillment systems so accounts are created and funded without manual handoffs. Data flows between Salesforce, the core platform, and third-party providers through a designed integration architecture. Pre-fill from existing systems reduces applicant effort and improves data accuracy from the start. Onboarding Journey Automation: Post-account-opening engagement journeys that activate new customers during the critical first 90 days. Welcome sequences, product education, direct deposit setup prompts, and card activation reminders adapt based on what the customer has and hasn't done, keeping engagement relevant without overwhelming new account holders. Operational Workflow Management: A centralized workspace for onboarding teams to manage applications, exceptions, and escalations. Exception queues route incomplete or flagged applications to the right reviewer with full context. SLA tracking gives managers visibility into processing times, bottlenecks, and team performance so nothing falls through the cracks. Onboarding Funnel Analytics: Dashboards that track the full application funnel from start to funded account. Teams measure abandonment rates, straight-through processing, exception volumes, time-to-open, and conversion by channel and product. These insights reveal where applicants drop off and where operational improvements will have the most impact. Agentforce for Application Guidance and Exception Triage: AI that works on both sides of the onboarding process. On the customer-facing side, Agentforce agents help applicants navigate product options, answer questions about requirements, and complete applications with less friction. On the operations side, AI triages exceptions by analyzing application data, flagging the reason for review, recommending next steps, and routing to the right team member."
+  },
+  {
+   "id": "OFF-LENDING",
+   "name": "Digital Lending Platform",
+   "family": "activation",
+   "platforms": [
+    "Salesforce",
+    "nCino"
+   ],
+   "summary": "Digital Lending Platform modernizes the lending lifecycle from application through underwriting, closing, and servicing integration. The solution combines digital borrower experiences, automated decisioning, and workflow orchestration to accelerate lending operations while maintaining strong risk management and regulatory compliance.",
+   "outcomes": [
+    "Faster loan approvals",
+    "Increased straight-through processing",
+    "Lower operational cost per loan",
+    "Stronger credit portfolio oversight"
+   ],
+   "capabilities": [
+    "Digital Loan OriginationOnline and assisted application experiences.",
+    "Automated UnderwritingRules engines and AI-assisted credit decisioning.",
+    "Loan Product ConfigurationFlexible product, pricing, and policy management.",
+    "Workflow & Case ManagementAutomated tasks across underwriting and closing.",
+    "Portfolio Analytics & Lending DashboardsOperational reporting across pipeline, approval rates, funding times, portfolio performance, and exception trends.",
+    "Regulatory ComplianceAudit-ready lending decisions and documentation.",
+    "Agentforce and Banking Advisor for Underwriter & Loan Officer AssistanceAgentforce or Banking Advisor-assisted deal summaries, document review support, exception routing, and knowledge guidance within governed workflows."
+   ],
+   "match_text": "Digital Lending Platform Digital Lending Platform modernizes the lending lifecycle from application through underwriting, closing, and servicing integration. The solution combines digital borrower experiences, automated decisioning, and workflow orchestration to accelerate lending operations while maintaining strong risk management and regulatory compliance. Faster loan approvals Increased straight-through processing Lower operational cost per loan Stronger credit portfolio oversight Digital Loan OriginationOnline and assisted application experiences. Automated UnderwritingRules engines and AI-assisted credit decisioning. Loan Product ConfigurationFlexible product, pricing, and policy management. Workflow & Case ManagementAutomated tasks across underwriting and closing. Portfolio Analytics & Lending DashboardsOperational reporting across pipeline, approval rates, funding times, portfolio performance, and exception trends. Regulatory ComplianceAudit-ready lending decisions and documentation. Agentforce and Banking Advisor for Underwriter & Loan Officer AssistanceAgentforce or Banking Advisor-assisted deal summaries, document review support, exception routing, and knowledge guidance within governed workflows."
+  },
+  {
+   "id": "OFF-CONTACT",
+   "name": "Contact Center Modernization",
+   "family": "activation",
+   "platforms": [
+    "Salesforce Service Cloud"
+   ],
+   "summary": "Every service interaction is a test of trust. When agents lack context, customers feel it. Contact Center Modernization brings voice, chat, messaging, and digital channels together on Salesforce Service Cloud, giving agents a single workspace with the customer context and AI-powered tools they need to resolve issues quickly and consistently. Service leaders gain real-time visibility into handle times, resolution rates, quality scores, and channel performance so they can continuously improve operations.",
+   "outcomes": [
+    "Improved first-contact resolution",
+    "Reduced average handle time",
+    "Lower cost per interaction",
+    "Improved customer satisfaction"
+   ],
+   "capabilities": [
+    "Omnichannel Routing: Unified routing across voice, chat, email, SMS, and messaging. Conversations reach the right agent based on skill, availability, and customer context, with full interaction history preserved across channel transitions.",
+    "Agent Desktop: A single workspace with customer profile, account details, interaction history, and real-time core banking data in one view. Telephony screen-pop identifies the caller before the agent picks up, and dynamic layouts adapt to the inquiry type.",
+    "Self-Service Automation: Chatbots and voice bots that resolve routine requests like balance inquiries, card activations, and address changes without agent involvement. When a request needs a human, the conversation transfers with full context so the customer never starts over.",
+    "Knowledge Management: A centralized knowledge base that agents and self-service channels draw from. Articles surface automatically through AI recommendations during live interactions, with version control and lifecycle management to keep content current.",
+    "Service Analytics and Quality Dashboards: Real-time dashboards for handle time, first-contact resolution, CSAT, containment rates, queue depth, and agent performance. Conversation intelligence adds insight into interaction quality, not just speed.",
+    "Agentforce for Service Automation: AI that works across the full service interaction. Agentforce autonomously resolves routine requests like fee reversals and card cancellations without human involvement. For complex cases, it summarizes the conversation, surfaces relevant knowledge, recommends next steps, and drafts responses so agents resolve issues faster."
+   ],
+   "match_text": "Contact Center Modernization Every service interaction is a test of trust. When agents lack context, customers feel it. Contact Center Modernization brings voice, chat, messaging, and digital channels together on Salesforce Service Cloud, giving agents a single workspace with the customer context and AI-powered tools they need to resolve issues quickly and consistently. Service leaders gain real-time visibility into handle times, resolution rates, quality scores, and channel performance so they can continuously improve operations. Improved first-contact resolution Reduced average handle time Lower cost per interaction Improved customer satisfaction Omnichannel Routing: Unified routing across voice, chat, email, SMS, and messaging. Conversations reach the right agent based on skill, availability, and customer context, with full interaction history preserved across channel transitions. Agent Desktop: A single workspace with customer profile, account details, interaction history, and real-time core banking data in one view. Telephony screen-pop identifies the caller before the agent picks up, and dynamic layouts adapt to the inquiry type. Self-Service Automation: Chatbots and voice bots that resolve routine requests like balance inquiries, card activations, and address changes without agent involvement. When a request needs a human, the conversation transfers with full context so the customer never starts over. Knowledge Management: A centralized knowledge base that agents and self-service channels draw from. Articles surface automatically through AI recommendations during live interactions, with version control and lifecycle management to keep content current. Service Analytics and Quality Dashboards: Real-time dashboards for handle time, first-contact resolution, CSAT, containment rates, queue depth, and agent performance. Conversation intelligence adds insight into interaction quality, not just speed. Agentforce for Service Automation: AI that works across the full service interaction. Agentforce autonomously resolves routine requests like fee reversals and card cancellations without human involvement. For complex cases, it summarizes the conversation, surfaces relevant knowledge, recommends next steps, and drafts responses so agents resolve issues faster."
+  },
+  {
+   "id": "OFF-PLATFORM-GOV",
+   "name": "Salesforce Platform Optimization & Governance",
+   "family": "activation",
+   "platforms": [
+    "Salesforce"
+   ],
+   "summary": "Salesforce Platform Optimization & Governance improves system performance, reduces technical debt, and establishes governance frameworks for sustainable platform growth. Organizations gain a healthier platform environment that supports faster innovation and reduces operational risk.",
+   "outcomes": [
+    "Improved system performance",
+    "Reduced platform maintenance costs",
+    "Faster release cycles",
+    "Stronger user adoption"
+   ],
+   "capabilities": [
+    "Platform Health AssessmentAnalysis of metadata, performance, integrations, and usage patterns.",
+    "Configuration OptimizationCleanup of unused objects, fields, and automation.",
+    "Process Re-engineeringStreamlined workflows aligned with business processes.",
+    "DevOps & Release ManagementCI/CD pipelines and automated testing frameworks.",
+    "Performance, Adoption & Governance DashboardsReporting on release quality, platform usage, incident trends, adoption, and operational efficiency.",
+    "Governance Framework",
+    "Platform design standards and change management processes.",
+    "Agentforce Readiness & Responsible AI ControlsAssessment and implementation guardrails for Agentforce, Einstein, prompt governance, and safe operational rollout."
+   ],
+   "match_text": "Salesforce Platform Optimization & Governance Salesforce Platform Optimization & Governance improves system performance, reduces technical debt, and establishes governance frameworks for sustainable platform growth. Organizations gain a healthier platform environment that supports faster innovation and reduces operational risk. Improved system performance Reduced platform maintenance costs Faster release cycles Stronger user adoption Platform Health AssessmentAnalysis of metadata, performance, integrations, and usage patterns. Configuration OptimizationCleanup of unused objects, fields, and automation. Process Re-engineeringStreamlined workflows aligned with business processes. DevOps & Release ManagementCI/CD pipelines and automated testing frameworks. Performance, Adoption & Governance DashboardsReporting on release quality, platform usage, incident trends, adoption, and operational efficiency. Governance Framework Platform design standards and change management processes. Agentforce Readiness & Responsible AI ControlsAssessment and implementation guardrails for Agentforce, Einstein, prompt governance, and safe operational rollout."
+  },
+  {
+   "id": "OFF-AGENTIC",
+   "name": "Agentic Workforce",
+   "family": "activation",
+   "platforms": [
+    "Salesforce Agentforce",
+    "Databricks",
+    "Anthropic"
+   ],
+   "summary": "Financial institutions are under pressure to do more with less, and AI is no longer a future initiative. Agentic Workforce puts AI agents to work across your organization, handling real tasks for real teams in production. It gives advisors, bankers, service teams, and operations staff AI that works alongside them -- summarizing relationships, triaging requests, recommending next actions, and resolving routine work autonomously. Agents are configured for your processes, tested with your teams, deployed to production, and monitored for performance. Every engagement includes trust layer controls,",
+   "outcomes": [
+    "Faster service resolution through AI-assisted and autonomous case handling",
+    "Improved advisor productivity with AI-powered meeting prep and next-best-action",
+    "Reduced operational cost through automated routine tasks",
+    "Governed AI deployment with trust layer controls, escalation protocols, and audit trails",
+    "A clear path from initial use cases to enterprise-scale AI operations"
+   ],
+   "capabilities": [
+    "AI strategy & use case discovery: Structured workshops to identify the highest-impact AI use cases across the organization, prioritize by effort and value, and define agent roles, boundaries, and success criteria. The output is a concrete deployment roadmap, not a strategy deck.",
+    "AI platform foundation & trust layer: Platform enablement across Salesforce Agentforce, Databricks, Anthropic, or a composited architecture -- including data provisioning, agent configuration, trust layer setup with data masking, and audit, analytics, and feedback tracking. This is the infrastructure that makes agents safe to operate in regulated environments.",
+    "Assistive agent deployment: AI agents that support human decision-making by summarizing client relationships, preparing meeting briefs, surfacing knowledge articles during service interactions, and recommending next-best actions. Agents are embedded in existing team workflows so adoption happens as part of the process, not as a separate tool.",
+    "Autonomous agent deployment: Agents that resolve defined tasks end-to-end without human involvement. Fee reversals, card activations, routine service requests, document collection, and application triage all run within defined boundaries with escalation triggers for edge cases.",
+    "Custom agent development: Purpose-built agents with custom topics, actions, prompt templates, and flows tailored to the institution's specific processes. Includes integration with external systems through API callouts so agents can retrieve product eligibility, initiate transactions, or trigger actions in core banking and servicing platforms.",
+    "AI governance & guardrails: Topic boundary definition, inappropriate request classification, escalation protocols, prompt management standards, and response monitoring. For Enterprise engagements, this extends to model risk management, AI fairness and explainability frameworks, and agent control plane configuration.",
+    "RAG & knowledge architecture: For advanced deployments, semantic search and retrieval architecture that connects agents to institutional knowledge bases, policy documents, and product information. Agents answer questions grounded in verified source material rather than general training data.",
+    "Agent analytics & performance: Dashboards tracking agent usage, resolution rates, escalation frequency, user adoption, and response quality. Teams measure AI impact alongside traditional operational metrics and continuously refine agent behavior based on what the data shows."
+   ],
+   "match_text": "Agentic Workforce Financial institutions are under pressure to do more with less, and AI is no longer a future initiative. Agentic Workforce puts AI agents to work across your organization, handling real tasks for real teams in production. It gives advisors, bankers, service teams, and operations staff AI that works alongside them -- summarizing relationships, triaging requests, recommending next actions, and resolving routine work autonomously. Agents are configured for your processes, tested with your teams, deployed to production, and monitored for performance. Every engagement includes trust layer controls, governance guardrails, and compliance considerations that regulated institutions require. Whether we're building on Salesforce Agentforce, Databricks, Anthropic, or a combination of platforms, agents are deployed where they deliver the most value for your teams. Whether you're deploying your first agent for a single team or building an enterprise-wide digital workforce across service, sales, lending, and operations, Agentic Workforce scales with you. Faster service resolution through AI-assisted and autonomous case handling Improved advisor productivity with AI-powered meeting prep and next-best-action Reduced operational cost through automated routine tasks Governed AI deployment with trust layer controls, escalation protocols, and audit trails A clear path from initial use cases to enterprise-scale AI operations AI strategy & use case discovery: Structured workshops to identify the highest-impact AI use cases across the organization, prioritize by effort and value, and define agent roles, boundaries, and success criteria. The output is a concrete deployment roadmap, not a strategy deck. AI platform foundation & trust layer: Platform enablement across Salesforce Agentforce, Databricks, Anthropic, or a composited architecture -- including data provisioning, agent configuration, trust layer setup with data masking, and audit, analytics, and feedback tracking. This is the infrastructure that makes agents safe to operate in regulated environments. Assistive agent deployment: AI agents that support human decision-making by summarizing client relationships, preparing meeting briefs, surfacing knowledge articles during service interactions, and recommending next-best actions. Agents are embedded in existing team workflows so adoption happens as part of the process, not as a separate tool. Autonomous agent deployment: Agents that resolve defined tasks end-to-end without human involvement. Fee reversals, card activations, routine service requests, document collection, and application triage all run within defined boundaries with escalation triggers for edge cases. Custom agent development: Purpose-built agents with custom topics, actions, prompt templates, and flows tailored to the institution's specific processes. Includes integration with external systems through API callouts so agents can retrieve product eligibility, initiate transactions, or trigger actions in core banking and servicing platforms. AI governance & guardrails: Topic boundary definition, inappropriate request classification, escalation protocols, prompt management standards, and response monitoring. For Enterprise engagements, this extends to model risk management, AI fairness and explainability frameworks, and agent control plane configuration. RAG & knowledge architecture: For advanced deployments, semantic search and retrieval architecture that connects agents to institutional knowledge bases, policy documents, and product information. Agents answer questions grounded in verified source material rather than general training data. Agent analytics & performance: Dashboards tracking agent usage, resolution rates, escalation frequency, user adoption, and response quality. Teams measure AI impact alongside traditional operational metrics and continuously refine agent behavior based on what the data shows."
+  },
+  {
+   "id": "OFF-DP-CUSTOMER36",
+   "name": "Customer 360 Golden Record",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Unified identity, profile, product holdings, household mapping. Vertical variants: Member 360, Borrower 360, Advisor 360.",
+   "category": "Know Your Customer",
+   "capabilities": [
+    "Unified identity, profile, product holdings, household mapping. Vertical variants: Member 360, Borrower 360, Advisor 360."
+   ],
+   "match_text": "Customer 360 Golden Record Unified identity, profile, product holdings, household mapping. Vertical variants: Member 360, Borrower 360, Advisor 360. Know Your Customer"
+  },
+  {
+   "id": "OFF-DP-COREBANKIN",
+   "name": "Core Banking Data Integration",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Governed, reusable, data pipelines and canonical data models derived from core banking (Symitar, Jack Henry, FIS, Fiserv) into the data platform.",
+   "category": "Know Your Customer",
+   "capabilities": [
+    "Governed, reusable, data pipelines and canonical data models derived from core banking (Symitar, Jack Henry, FIS, Fiserv) into the data platform."
+   ],
+   "match_text": "Core Banking Data Integration Governed, reusable, data pipelines and canonical data models derived from core banking (Symitar, Jack Henry, FIS, Fiserv) into the data platform. Know Your Customer"
+  },
+  {
+   "id": "OFF-DP-COREINSURA",
+   "name": "Core Insurance Data Integration",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Governed, reusable, data pipelines and canonical models derived from insurance system core (Applied Epic) into the data platform.",
+   "category": "Know Your Customer",
+   "capabilities": [
+    "Governed, reusable, data pipelines and canonical models derived from insurance system core (Applied Epic) into the data platform."
+   ],
+   "match_text": "Core Insurance Data Integration Governed, reusable, data pipelines and canonical models derived from insurance system core (Applied Epic) into the data platform. Know Your Customer"
+  },
+  {
+   "id": "OFF-DP-COREWEALTH",
+   "name": "Core Wealth Data Integration",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Governed, reusable, data pipelines and canonical models derived from wealth system core (Fidelity, Custodian, Dealer) into the data platform.",
+   "category": "Know Your Customer",
+   "capabilities": [
+    "Governed, reusable, data pipelines and canonical models derived from wealth system core (Fidelity, Custodian, Dealer) into the data platform."
+   ],
+   "match_text": "Core Wealth Data Integration Governed, reusable, data pipelines and canonical models derived from wealth system core (Fidelity, Custodian, Dealer) into the data platform. Know Your Customer"
+  },
+  {
+   "id": "OFF-DP-PREDICTIVE",
+   "name": "Predictive Intelligence Suite",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Propensity scoring, x-sell, churn prediction, and next-best-action models. One product, multiple analytical outputs.",
+   "category": "Grow Your Business",
+   "capabilities": [
+    "Propensity scoring, x-sell, churn prediction, and next-best-action models. One product, multiple analytical outputs."
+   ],
+   "match_text": "Predictive Intelligence Suite Propensity scoring, x-sell, churn prediction, and next-best-action models. One product, multiple analytical outputs. Grow Your Business"
+  },
+  {
+   "id": "OFF-DP-AUDIENCEIN",
+   "name": "Audience Intelligence & Segmentation",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Marketing segmentation library, dynamic audience management, segment activation across channels.",
+   "category": "Grow Your Business",
+   "capabilities": [
+    "Marketing segmentation library, dynamic audience management, segment activation across channels."
+   ],
+   "match_text": "Audience Intelligence & Segmentation Marketing segmentation library, dynamic audience management, segment activation across channels. Grow Your Business"
+  },
+  {
+   "id": "OFF-DP-BEHAVIORAL",
+   "name": "Behavioral Signal Engine",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Real-time event capture and orchestration, behavioral triggers, engagement signal processing.",
+   "category": "Grow Your Business",
+   "capabilities": [
+    "Real-time event capture and orchestration, behavioral triggers, engagement signal processing."
+   ],
+   "match_text": "Behavioral Signal Engine Real-time event capture and orchestration, behavioral triggers, engagement signal processing. Grow Your Business"
+  },
+  {
+   "id": "OFF-DP-CAMPAIGNPE",
+   "name": "Campaign Performance Analytics",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Full-funnel marketing analytics, multi-touch attribution, ROI measurement.",
+   "category": "Understand Performance",
+   "capabilities": [
+    "Full-funnel marketing analytics, multi-touch attribution, ROI measurement."
+   ],
+   "match_text": "Campaign Performance Analytics Full-funnel marketing analytics, multi-touch attribution, ROI measurement. Understand Performance"
+  },
+  {
+   "id": "OFF-DP-OMNICHANNE",
+   "name": "Omnichannel Journey Analytics",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Cross-channel journey tracking, conversion analytics, experience optimization.",
+   "category": "Understand Performance",
+   "capabilities": [
+    "Cross-channel journey tracking, conversion analytics, experience optimization."
+   ],
+   "match_text": "Omnichannel Journey Analytics Cross-channel journey tracking, conversion analytics, experience optimization. Understand Performance"
+  },
+  {
+   "id": "OFF-DP-ADVISORRMA",
+   "name": "Advisor & RM Analytics",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Advisor productivity, pipeline health, referral performance, relationship activity tracking.",
+   "category": "Understand Performance",
+   "capabilities": [
+    "Advisor productivity, pipeline health, referral performance, relationship activity tracking."
+   ],
+   "match_text": "Advisor & RM Analytics Advisor productivity, pipeline health, referral performance, relationship activity tracking. Understand Performance"
+  },
+  {
+   "id": "OFF-DP-APPLICATIO",
+   "name": "Application Funnel Analytics",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Account opening/onboarding funnel, abandonment rates, STP rates, conversion by channel.",
+   "category": "Understand Performance",
+   "capabilities": [
+    "Account opening/onboarding funnel, abandonment rates, STP rates, conversion by channel."
+   ],
+   "match_text": "Application Funnel Analytics Account opening/onboarding funnel, abandonment rates, STP rates, conversion by channel. Understand Performance"
+  },
+  {
+   "id": "OFF-DP-AGENTCONTA",
+   "name": "Agent & Contact Center Analytics",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Handle time, FCR, CSAT, quality management, conversation intelligence.",
+   "category": "Understand Performance",
+   "capabilities": [
+    "Handle time, FCR, CSAT, quality management, conversation intelligence."
+   ],
+   "match_text": "Agent & Contact Center Analytics Handle time, FCR, CSAT, quality management, conversation intelligence. Understand Performance"
+  },
+  {
+   "id": "OFF-DP-LOANPORTFO",
+   "name": "Loan Portfolio Analytics",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Credit risk early warning, vintage performance, roll rates, portfolio health.",
+   "category": "Understand Performance",
+   "capabilities": [
+    "Credit risk early warning, vintage performance, roll rates, portfolio health."
+   ],
+   "match_text": "Loan Portfolio Analytics Credit risk early warning, vintage performance, roll rates, portfolio health. Understand Performance"
+  },
+  {
+   "id": "OFF-DP-FRAUDDETEC",
+   "name": "Fraud Detection & Anomaly Intelligence",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Transaction monitoring, suspicious behavior detection, investigation queue management.",
+   "category": "Protect Your Business",
+   "capabilities": [
+    "Transaction monitoring, suspicious behavior detection, investigation queue management."
+   ],
+   "match_text": "Fraud Detection & Anomaly Intelligence Transaction monitoring, suspicious behavior detection, investigation queue management. Protect Your Business"
+  },
+  {
+   "id": "OFF-DP-CREDITRISK",
+   "name": "Credit Risk Scoring",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Credit decisioning models, risk rating, loss forecasting.",
+   "category": "Protect Your Business",
+   "capabilities": [
+    "Credit decisioning models, risk rating, loss forecasting."
+   ],
+   "match_text": "Credit Risk Scoring Credit decisioning models, risk rating, loss forecasting. Protect Your Business"
+  },
+  {
+   "id": "OFF-DP-DOCUMENTIN",
+   "name": "Document Intelligence",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Extraction, classification, OCR, metadata enrichment for unstructured document intelligence",
+   "category": "Power Your AI",
+   "capabilities": [
+    "Extraction, classification, OCR, metadata enrichment for unstructured document intelligence"
+   ],
+   "match_text": "Document Intelligence Extraction, classification, OCR, metadata enrichment for unstructured document intelligence Power Your AI"
+  },
+  {
+   "id": "OFF-DP-CONVERSATI",
+   "name": "Conversation Intelligence",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Call transcription, sentiment analysis, topic extraction.",
+   "category": "Power Your AI",
+   "capabilities": [
+    "Call transcription, sentiment analysis, topic extraction."
+   ],
+   "match_text": "Conversation Intelligence Call transcription, sentiment analysis, topic extraction. Power Your AI"
+  },
+  {
+   "id": "OFF-DP-KNOWLEDGEI",
+   "name": "Knowledge Intelligence",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "RAG-ready knowledge base curation, embedding, search optimization.",
+   "category": "Power Your AI",
+   "capabilities": [
+    "RAG-ready knowledge base curation, embedding, search optimization."
+   ],
+   "match_text": "Knowledge Intelligence RAG-ready knowledge base curation, embedding, search optimization. Power Your AI"
+  },
+  {
+   "id": "OFF-DP-CLOUDDATAP",
+   "name": "Cloud Data Platform Foundation & Setup",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Secure cloud environment provisioning across Azure, AWS, or GCP- Landing zone architecture, networking, identity and access management, environment strategy, and cost controls configured to support scalable lakehouse deployment.",
+   "category": "Foundation",
+   "capabilities": [
+    "Secure cloud environment provisioning across Azure, AWS, or GCP- Landing zone architecture, networking, identity and access management, environment strategy, and cost controls configured to support scalable lakehouse deployment."
+   ],
+   "match_text": "Cloud Data Platform Foundation & Setup Secure cloud environment provisioning across Azure, AWS, or GCP- Landing zone architecture, networking, identity and access management, environment strategy, and cost controls configured to support scalable lakehouse deployment. Foundation"
+  },
+  {
+   "id": "OFF-DP-DATAPLATFO",
+   "name": "Data Platform Foundation and Setup",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Lakehouse setup (Databricks Unity Catalog, Snowflake, Data Cloud), medallion architecture design.",
+   "category": "Foundation",
+   "capabilities": [
+    "Lakehouse setup (Databricks Unity Catalog, Snowflake, Data Cloud), medallion architecture design."
+   ],
+   "match_text": "Data Platform Foundation and Setup Lakehouse setup (Databricks Unity Catalog, Snowflake, Data Cloud), medallion architecture design. Foundation"
+  },
+  {
+   "id": "OFF-DP-ENTERPRISE",
+   "name": "Enterprise Data Governance  Implementation & Enablement",
+   "family": "data_product",
+   "platforms": [
+    "Databricks",
+    "Snowflake",
+    "Salesforce Data Cloud"
+   ],
+   "summary": "Enterprise-wide governance setup and activation- framework, catalog, lineage, data quality, and stewardship",
+   "category": "Foundation",
+   "capabilities": [
+    "Enterprise-wide governance setup and activation- framework, catalog, lineage, data quality, and stewardship"
+   ],
+   "match_text": "Enterprise Data Governance Implementation & Enablement Enterprise-wide governance setup and activation- framework, catalog, lineage, data quality, and stewardship Foundation"
+  }
+ ]
+}

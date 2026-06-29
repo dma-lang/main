@@ -324,6 +324,18 @@ async def carry_forward(
         # mapping onto the resolved subcaps (the SAME rule enrichment uses), via='inherited_v7'.
         inherit_stats = await _corpus_inherit_pass(conn, schema, target_version)
 
+    # F6 deep-learning matching: ground the productized-offering catalogue into this version's
+    # subcaps BY MEANING (hybrid retrieval per named capability), replacing the deterministic seed
+    # with scored, doc-grounded offering->subcap matches so offering coverage / gaps populate out of
+    # the box. Best-effort + hermetic-safe (no spend); a failure leaves existing offerings intact,
+    # never blocking the carry.
+    try:
+        from app.services import offerings_match as _off
+
+        await _off.match_offerings(target_version)
+    except Exception as exc:  # noqa: BLE001 - never block carry-forward on the offerings matcher
+        logger.warning("offerings matcher unavailable for %s: %s", target_version, exc)
+
     confirmed = sum(1 for c in carries if c["status"] == "confirmed")
     unmapped = sum(1 for c in carries if c["status"] == "unmapped")
     distinct = len({c["carried_to_subcap"] for c in carries if c["carried_to_subcap"]})

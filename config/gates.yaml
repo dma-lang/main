@@ -91,3 +91,12 @@ trends:
   dedupe_cosine: 0.95
   min_cluster: 4
   min_sources: 3
+
+# Productized-offering -> subcap semantic matching (services/offerings_match). The matcher grounds
+# the GTM offerings doc into the catalogue by MEANING (hybrid dense + lexical retrieval per named
+# capability); only matches at/above the score floor are kept, bounded per offering. These matches
+# are the trust-enveloped basis for offering coverage / gaps. Config, not code.
+offerings:
+  match_floor: 0.12             # combined hybrid-score floor — below this a subcap is NOT matched
+  top_k_per_capability: 8       # candidate subcaps retrieved per named capability
+  max_subcaps_per_offering: 30  # bound the matches kept per offering (resilience: bounded everything)

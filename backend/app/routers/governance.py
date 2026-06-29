@@ -276,6 +276,19 @@ async def build_embeddings(
     return await embeddings_svc.build_embeddings(version)
 
 
+@router.post("/admin/offerings/match/{version}")
+async def match_offerings(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Rebuild the productized-offering -> subcap matches for the version BY MEANING (F6): each
+    offering's named capabilities are hybrid-matched (dense embedding cosine + lexical) across the
+    catalogue, gated + bounded, replacing the deterministic seed with scored, doc-grounded matches.
+    Hermetic = no spend; live spend is governed by the G8 cost envelope."""
+    from app.services import offerings_match as offerings_svc
+
+    return await offerings_svc.match_offerings(version)
+
+
 @router.post("/change-flags/{flag_id}/approve")
 async def approve_flag(
     flag_id: UUID, user: dict[str, Any] = Depends(get_current_user)

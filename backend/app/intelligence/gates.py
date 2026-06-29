@@ -155,6 +155,19 @@ def unscoped_subverticals_config() -> tuple[int, float]:
     return min_stories, overlap_max
 
 
+def offerings_match_config() -> tuple[float, int, int]:
+    """(match_floor, top_k_per_capability, max_subcaps_per_offering) for the productized-offering ->
+    subcap semantic matcher (services/offerings_match). The floor gates a capability->subcap match
+    by combined hybrid score; the caps bound the work. Config, not code."""
+    section = load_gate_config().get("offerings") or {}
+    floor = float(section.get("match_floor", 0.12))
+    top_k = int(section.get("top_k_per_capability", 8))
+    max_per = int(section.get("max_subcaps_per_offering", 30))
+    if not 0 <= floor <= 1 or top_k < 1 or max_per < 1:
+        raise ValueError("gates.yaml: invalid offerings match thresholds")
+    return floor, top_k, max_per
+
+
 def knowledge_graph_config() -> tuple[int, int, int]:
     """(shares_platform_min, shares_feature_min, max_proposals) for the deterministic KG Layer-B
     structural builder: how many distinct L3 platforms two cross-capability subcaps must share to
