@@ -169,6 +169,8 @@ class ConnectionSibling(BaseModel):
     name: str
     pillar: str
     shared_platforms: int
+    relation: str = "cluster"  # "cluster" (same L1 capability) | "semantic" (embedding-near)
+    score: float = 0.0  # semantic: cosine; cluster: 0
 
 
 class ConnectionSignal(BaseModel):
@@ -880,10 +882,10 @@ async def subcap_connections(
         "ORDER BY e.published_at DESC NULLS LAST LIMIT 6"
     )
     async with _engine().connect() as conn:
-        # siblings = same-capability subcaps ranked by shared platforms; inherit the reference's
-        # platform links when this version has none of its own.
+        # CLUSTER siblings = same-capability subcaps ranked by shared platforms; inherit the
+        # reference's platform links when this version has none of its own.
         ench_s = await _enrichment_schema(conn, s, "subcap_platform")
-        sql = text(
+        cluster_sql = text(
             "SELECT s2.subcap_id AS id, s2.name, left(s2.subcap_id, 2) AS pillar, "
             f"(SELECT count(DISTINCT sp2.l3_id) FROM {ench_s}.subcap_platform sp2 "
             f"WHERE sp2.subcap_id = s2.subcap_id AND sp2.l3_id IN "
@@ -891,14 +893,51 @@ async def subcap_connections(
             "AS shared_platforms "
             f"FROM {s}.subcap s2 WHERE s2.capability_id = "
             f"(SELECT capability_id FROM {s}.subcap WHERE subcap_id = :sid) "
-            "AND s2.subcap_id <> :sid ORDER BY shared_platforms DESC, s2.subcap_id LIMIT 8"
+            "AND s2.subcap_id <> :sid ORDER BY shared_platforms DESC, s2.subcap_id LIMIT 6"
         )
-        rows = (await conn.execute(sql, {"sid": subcap_id})).mappings().all()
+        # SEMANTIC siblings = nearest by MEANING in the embedding space, CROSS-capability — so a
+        # platform-sparse / singleton-cluster subcap is never an island (deep integration). Degrades
+        # to cluster-only when the version has no embeddings (q.embedding NULL -> no rows).
+        semantic_sql = text(
+            "SELECT s2.subcap_id AS id, s2.name, left(s2.subcap_id, 2) AS pillar, "
+            "1 - (s2.embedding <=> q.embedding) AS score "
+            f"FROM {s}.subcap s2, (SELECT embedding FROM {s}.subcap WHERE subcap_id = :sid) q "
+            "WHERE q.embedding IS NOT NULL AND s2.embedding IS NOT NULL AND s2.subcap_id <> :sid "
+            f"AND s2.capability_id <> "
+            f"(SELECT capability_id FROM {s}.subcap WHERE subcap_id = :sid) "
+            "ORDER BY s2.embedding <=> q.embedding ASC LIMIT 6"
+        )
+        cluster = (await conn.execute(cluster_sql, {"sid": subcap_id})).mappings().all()
+        semantic = (await conn.execute(semantic_sql, {"sid": subcap_id})).mappings().all()
         sigs = (
             (await conn.execute(sig_sql, {"ver": v.version_id, "sid": subcap_id})).mappings().all()
         )
+    seen = {str(r["id"]) for r in cluster}
+    siblings = [
+        ConnectionSibling(
+            id=str(r["id"]),
+            name=str(r["name"]),
+            pillar=str(r["pillar"]),
+            shared_platforms=int(r["shared_platforms"]),
+            relation="cluster",
+        )
+        for r in cluster
+    ]
+    for r in semantic:
+        if str(r["id"]) in seen:
+            continue
+        siblings.append(
+            ConnectionSibling(
+                id=str(r["id"]),
+                name=str(r["name"]),
+                pillar=str(r["pillar"]),
+                shared_platforms=0,
+                relation="semantic",
+                score=round(float(r["score"]), 3),
+            )
+        )
     return SubcapConnections(
-        siblings=[ConnectionSibling.model_validate(dict(r)) for r in rows],
+        siblings=siblings,
         signals=[ConnectionSignal.model_validate(dict(r)) for r in sigs],
     )
 
@@ -1571,8 +1610,10 @@ _LENS_GROUP: dict[str, tuple[str, str, str]] = {
     "pillar": ("sc.subcap_id", "sc.name", ""),  # rows = most-delivered subcaps
     "maturity": (_MATURITY_TIER, _MATURITY_TIER, ""),
     "subvertical": (
-        "coalesce(st.story_sv_code,'(unscoped)')",
-        "coalesce(st.story_sv_code,'(unscoped)')",
+        # MODELLED subverticals only (restricted in _heatmap_scope); labelled code · name in the
+        # builder. No "(unscoped)" row — the NULL-sv / outside-the-nine delivery is the detector's.
+        "st.story_sv_code",
+        "st.story_sv_code",
         "",
     ),
     "vendor": (
@@ -1602,6 +1643,26 @@ _LENS_GROUP: dict[str, tuple[str, str, str]] = {
     ),
 }
 _BAND_AXIS = ["1.0–1.7", "1.7–2.3", "2.3–3.0", "3.0–3.7", "3.7–4.3", "4.3–5.0"]
+
+# The nine MODELLED subverticals -> display names (the subvertical lens labels each ``code · name``,
+# prototype parity). Unscoped delivery (story_sv_code NULL / outside these) is NOT a lens row — that
+# is the detector's job (gated candidate subverticals in Notifications), never a "(unscoped)" row.
+_SV_NAMES = {
+    "RB": "Retail Banking",
+    "CU": "Credit Unions",
+    "CL": "Commercial Lending",
+    "CIB": "Corporate & Investment Banking",
+    "FC": "Farm Credit / Ag Lending",
+    "AM": "Asset & Wealth Management",
+    "RIA": "RIA / Broker-Dealer",
+    "IC": "Insurance Carriers",
+    "IB": "Insurance Brokerages",
+}
+
+
+def _sv_label(code: str) -> str:
+    name = _SV_NAMES.get(code)
+    return f"{code} · {name}" if name else code
 
 
 async def _heatmap_scope(
@@ -1644,6 +1705,10 @@ async def _heatmap_scope(
     elif sv != "all":
         where.append("st.story_sv_code = :sv")
         params["sv"] = sv
+    if lens == "subvertical" and not sv.startswith("unscoped:"):
+        # the subvertical lens shows ONLY the nine modelled SVs (no NULL/unscoped "(unscoped)" row);
+        # unscoped delivery is surfaced as gated candidate subverticals by the detector instead.
+        where.append(f"st.story_sv_code IN ({_MODELLED_SV_SQL})")
     return key_expr, label_expr, join, where, params
 
 
@@ -1696,7 +1761,7 @@ async def heatmap(
         out.append(
             HeatmapRow(
                 key=str(r["key"]),
-                label=str(r["label"]),
+                label=_sv_label(str(r["key"])) if lens == "subvertical" else str(r["label"]),
                 subtitle=sub,
                 total=int(r["total"]),
                 cells=cs,

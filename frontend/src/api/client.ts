@@ -494,6 +494,8 @@ export interface ConnectionSibling {
   name: string;
   pillar: string;
   shared_platforms: number;
+  relation: string; // "cluster" (same capability) | "semantic" (embedding-near, cross-capability)
+  score: number; // semantic cosine; 0 for cluster
 }
 
 export interface ConnectionSignal {

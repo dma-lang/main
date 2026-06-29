@@ -605,7 +605,7 @@ function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
   return (
     <div className="fade-in">
       <div className="eyebrow" style={{ marginBottom: 8 }}>
-        Related subcaps · same capability, by shared platforms (Layer A)
+        Related subcaps · same capability (Layer A) + nearest by meaning (semantic)
       </div>
       <div style={{ display: 'grid', gap: 6, marginBottom: 16 }}>
         {sibs.length ? (
@@ -625,9 +625,19 @@ function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
                     {x.name}
                   </span>
                 </div>
-                <span className="chip soft" style={{ fontSize: 9.5, flex: 'none' }}>
-                  {x.shared_platforms} shared platform{x.shared_platforms === 1 ? '' : 's'}
-                </span>
+                {x.relation === 'semantic' ? (
+                  <span
+                    className="chip teal"
+                    style={{ fontSize: 9.5, flex: 'none' }}
+                    title="nearest by meaning in the embedding space (cross-capability)"
+                  >
+                    semantic {x.score.toFixed(2)}
+                  </span>
+                ) : (
+                  <span className="chip soft" style={{ fontSize: 9.5, flex: 'none' }}>
+                    {x.shared_platforms} shared platform{x.shared_platforms === 1 ? '' : 's'}
+                  </span>
+                )}
               </div>
             </div>
           ))
