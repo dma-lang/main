@@ -1855,6 +1855,9 @@ class UnscopedCandidate(BaseModel):
     top_capabilities: list[dict[str, Any]] = []
     overlap_sv: str | None = None
     overlap: float = 0.0
+    distinct: bool | None = None  # deep cross-check: genuinely distinct from the nine modelled SVs?
+    distinct_closest_sv: str | None = None  # the modelled SV its footprint is closest to
+    distinct_similarity: float | None = None  # Jaccard over delivered subcaps vs that closest SV
     claim_label: str | None = None
     source_tier: str | None = None
     ers: float | None = None
@@ -1976,6 +1979,9 @@ async def unscoped_subverticals(
                 top_capabilities=list(sc.get("top_capabilities", [])),
                 overlap_sv=sc.get("overlap_sv"),
                 overlap=float(sc.get("overlap", 0.0)),
+                distinct=sc.get("distinct"),
+                distinct_closest_sv=sc.get("distinct_closest_sv"),
+                distinct_similarity=sc.get("distinct_similarity"),
                 claim_label=sc.get("claim_label"),
                 source_tier=sc.get("source_tier"),
                 ers=sc.get("ers"),

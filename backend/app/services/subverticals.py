@@ -56,6 +56,8 @@ async def detect_unscoped_subverticals(
     engine = db.require_engine()
     async with engine.begin() as conn:
         clusters = await _client_clusters(conn)
+        profiles = await _modelled_sv_subcaps(conn)  # for the distinctness cross-check
+        max_j = gates.subvertical_distinctness_max()
         created = proposed = overlapped = filtered = already = 0
         for cl in clusters:
             if cl["stories"] < min_stories:
@@ -69,7 +71,8 @@ async def detect_unscoped_subverticals(
             if await _flag_exists(conn, cl["client"]):
                 already += 1  # idempotent: this client was proposed in a prior run
                 continue
-            await _create_subvertical_flag(conn, v.version_id, cl, dom_sv, overlap)
+            dist = _distinctness(cl["subcaps"], profiles, max_j)  # deep cross-check vs the nine
+            await _create_subvertical_flag(conn, v.version_id, cl, dom_sv, overlap, dist)
             created += 1
             proposed += 1
     return {
@@ -91,6 +94,47 @@ def _dominant_classified(classified: dict[str, int]) -> tuple[str | None, int]:
     return sv, classified[sv]
 
 
+async def _modelled_sv_subcaps(conn: AsyncConnection) -> dict[str, set[str]]:
+    """Each MODELLED subvertical's delivered-subcap footprint (real Jira) — the reference profiles a
+    candidate is cross-checked against for genuine distinctness."""
+    rows = (
+        await conn.execute(
+            text(
+                "SELECT s.story_sv_code AS sv, "
+                "array_remove(array_agg(DISTINCT s.sub_cap_id), NULL) AS subcaps "
+                "FROM control.story s WHERE NOT s.is_synthetic "
+                "AND s.story_sv_code = ANY(:known) GROUP BY s.story_sv_code"
+            ),
+            {"known": list(_KNOWN_SV)},
+        )
+    ).mappings()
+    return {str(r["sv"]): {str(x) for x in (r["subcaps"] or [])} for r in rows}
+
+
+def _distinctness(
+    candidate: set[str], profiles: dict[str, set[str]], max_jaccard: float
+) -> dict[str, Any]:
+    """DEEP cross-check (not just the semantic name): how close the candidate's delivered-subcap
+    footprint is to each modelled subvertical (Jaccard over delivered subcaps). Returns the closest
+    modelled SV + similarity + whether the candidate is genuinely DISTINCT (below the merge bar). A
+    high overlap means the 'new' subvertical is really an existing one's untagged delivery — it
+    should fold there, not be proposed as new."""
+    best_sv: str | None = None
+    best_j = 0.0
+    for sv, prof in profiles.items():
+        if not prof or not candidate:
+            continue
+        union = len(candidate | prof)
+        j = len(candidate & prof) / union if union else 0.0
+        if j > best_j:
+            best_sv, best_j = sv, j
+    return {
+        "closest_sv": best_sv,
+        "similarity": round(best_j, 3),
+        "distinct": best_j < max_jaccard,
+    }
+
+
 async def _client_clusters(conn: AsyncConnection) -> list[dict[str, Any]]:
     """One cluster per client (project_key) with unscoped real delivery: volume, pillars, latest
     activity, top capabilities, distinct delivered subcaps, sample summaries, and the client's
@@ -105,6 +149,7 @@ async def _client_clusters(conn: AsyncConnection) -> list[dict[str, Any]]:
                 text(
                     "SELECT s.project_key AS client, count(*) AS stories, "
                     "count(DISTINCT s.sub_cap_id) AS subcap_n, "
+                    "array_remove(array_agg(DISTINCT s.sub_cap_id), NULL) AS subcaps, "
                     "array_remove(array_agg(DISTINCT s.pillar_id), NULL) AS pillars, "
                     "max(s.created_at) AS latest "
                     f"FROM control.story s WHERE {unscoped} "
@@ -165,6 +210,7 @@ async def _client_clusters(conn: AsyncConnection) -> list[dict[str, Any]]:
             "client": r["client"],
             "stories": int(r["stories"]),
             "subcap_n": int(r["subcap_n"]),
+            "subcaps": {str(x) for x in (r["subcaps"] or [])},
             "pillars": sorted(str(p) for p in (r["pillars"] or [])),
             "latest": r["latest"],
             "top_capabilities": caps[r["client"]],
@@ -254,6 +300,8 @@ async def candidates_for(
     engine = db.require_engine()
     out: list[dict[str, Any]] = []
     async with engine.connect() as conn:
+        profiles = await _modelled_sv_subcaps(conn)
+        max_j = gates.subvertical_distinctness_max()
         for cl in await _client_clusters(conn):
             if cl["stories"] < min_stories:
                 continue
@@ -261,6 +309,7 @@ async def candidates_for(
             overlap = dom / (dom + cl["stories"]) if dom else 0.0
             if overlap >= overlap_max:
                 continue
+            dist = _distinctness(cl["subcaps"], profiles, max_j)
             inf, ers, _ = await _infer(cl, dom_sv, overlap)
             out.append(
                 {
@@ -273,6 +322,9 @@ async def candidates_for(
                     "samples": cl["samples"],
                     "overlap_sv": dom_sv,
                     "overlap": round(overlap, 3),
+                    "distinct": dist["distinct"],
+                    "distinct_closest_sv": dist["closest_sv"],
+                    "distinct_similarity": dist["similarity"],
                     "claim_label": inf.claim_label,
                     "source_tier": "T1",
                     "ers": ers,
@@ -287,6 +339,7 @@ async def _create_subvertical_flag(
     cl: dict[str, Any],
     overlap_sv: str | None,
     overlap: float,
+    dist: dict[str, Any],
 ) -> None:
     client = cl["client"]
     stories = cl["stories"]
@@ -308,13 +361,25 @@ async def _create_subvertical_flag(
         if overlap_sv
         else "This client delivers nothing under any of the nine modelled subverticals."
     )
+    closest = dist["closest_sv"] or "none"
+    distinct_note = (
+        f"Capability cross-check (deeper than the name): the client's delivered-subcap footprint "
+        f"is {dist['similarity']:.0%} similar (Jaccard) to its closest modelled subvertical "
+        f"({closest}) — "
+        + (
+            "below the merge bar, so it is genuinely DISTINCT and a real candidate."
+            if dist["distinct"]
+            else f"at/above the merge bar, so it is likely {closest}'s untagged delivery, "
+            "not new — review to fold it there rather than model a near-duplicate."
+        )
+    )
     title = f"Possible new subvertical from unscoped delivery: {inf.name}"
     body = (
         f"Client {client} has {stories} real Jira stories outside the nine modelled subverticals "
         f"(synthetic excluded), spanning pillars {', '.join(cl['pillars'])}. {overlap_note} "
-        f"Proposed (provisional) subvertical: {inf.name} [{inf.code}]. {inf.rationale} "
-        "Approve to accept this as a new candidate subvertical to model, or reject to keep the "
-        "delivery unscoped / map it to an existing subvertical. Nothing is applied automatically."
+        f"{distinct_note} Proposed (provisional) subvertical: {inf.name} [{inf.code}]. "
+        f"{inf.rationale} Approve to model it as a new candidate subvertical, or reject to keep "
+        "the delivery unscoped / fold it into an existing one. Nothing is auto-applied."
     )
     summary = (
         f"Unscoped-subvertical proposal: {inf.name} [{inf.code}] from client {client} "
@@ -353,10 +418,15 @@ async def _create_subvertical_flag(
             None,
         ),
         ("weigh", overlap_note, None),
+        ("weigh", distinct_note, None),
         (
             "conclude",
             f"Inferred provisional subvertical {inf.name} [{inf.code}] ({inf.claim_label}); "
-            "route to a pillar lead to confirm, rename, or map to an existing subvertical.",
+            + (
+                "genuinely distinct — route to a pillar lead to confirm/rename."
+                if dist["distinct"]
+                else f"NOT distinct from {closest} — review to fold there, not model as new."
+            ),
             None,
         ),
     ]
@@ -401,6 +471,9 @@ async def _create_subvertical_flag(
         "samples": cl["samples"],
         "overlap_sv": overlap_sv,
         "overlap": round(overlap, 3),
+        "distinct": dist["distinct"],
+        "distinct_closest_sv": dist["closest_sv"],
+        "distinct_similarity": dist["similarity"],
         "model": inf.model,
         "cost": inf.cost_usd,
     }

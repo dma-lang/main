@@ -79,6 +79,9 @@ knowledge_graph:
 unscoped_subverticals:
   min_stories: 25                # real-Jira volume floor for a client to be a candidate (filters noise)
   overlap_max: 0.5              # client already >= this fraction an existing SV -> not a NEW subvertical
+  # DEEP cross-check (beyond the semantic name): a candidate's delivered-subcap footprint must be
+  # < this Jaccard against EVERY modelled subvertical, else it's an existing SV's untagged delivery.
+  distinctness_max_jaccard: 0.5
 
 # Trend detection signal weights + emergence cutoff (trends are earned, not counted).
 trends:

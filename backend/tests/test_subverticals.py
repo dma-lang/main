@@ -99,6 +99,12 @@ def test_unscoped_subvertical_discovery_lifecycle(client: TestClient) -> None:
     assert pf["source_tier"] == "T1" and (pf["ers"] or 0) > 0  # trust envelope
     assert pf["chain_id"] and pf["code"] and pf["name"]
     assert pf["top_capabilities"] and pf["overlap_sv"] and pf["overlap"] < 0.5
+    # DEEP cross-check (beyond the semantic name): PF's delivered-subcap FOOTPRINT is structurally
+    # compared to all nine modelled subverticals — it is genuinely DISTINCT (Jaccard to its closest
+    # modelled SV is below the merge bar), so a real new subvertical, not an existing one's untagged
+    # delivery.
+    assert pf["distinct"] is True
+    assert pf["distinct_closest_sv"] and 0 <= pf["distinct_similarity"] < 0.5
     assert pf["severity"] == "BLOCKING"  # volume-stratified (1,000+ stories)
 
     # it surfaces in the Notifications inbox with a reasoning backlink + a PASSING gate run

@@ -155,6 +155,19 @@ def unscoped_subverticals_config() -> tuple[int, float]:
     return min_stories, overlap_max
 
 
+def subvertical_distinctness_max() -> float:
+    """The Jaccard ceiling (over delivered subcaps) above which a candidate unscoped subvertical is
+    judged NOT genuinely new — its capability footprint is really an existing modelled subvertical's
+    untagged delivery. A DEEP cross-check beyond the semantic name: a candidate must be both
+    sufficiently large (min_stories) AND structurally DISTINCT from all nine modelled subverticals.
+    Config, recalibrated without a deploy."""
+    section = load_gate_config().get("unscoped_subverticals") or {}
+    val = float(section.get("distinctness_max_jaccard", 0.5))
+    if not 0 < val <= 1:
+        raise ValueError("gates.yaml: invalid distinctness_max_jaccard")
+    return val
+
+
 def offerings_match_config() -> tuple[float, int, int]:
     """(match_floor, top_k_per_capability, max_subcaps_per_offering) for the productized-offering ->
     subcap semantic matcher (services/offerings_match). The floor gates a capability->subcap match

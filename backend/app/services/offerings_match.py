@@ -52,6 +52,9 @@ async def match_offerings(version: str = "v7") -> dict[str, Any]:
     v = await resolve_version(version)
     schema = f"cat_{v.version_id}"
     floor, top_k, max_per = gates.offerings_match_config()
+    # DEEP cross-check threshold: a semantic-only hit (no lexical overlap) is kept only when its
+    # embedding cosine clears this strong bar — otherwise it must be lexically corroborated.
+    dense_strong, _require_pillar = gates.matching_qa()
     # F6: the version's subcap embeddings power the DENSE half; best-effort (hermetic = stub, no
     # spend). A failure degrades to lexical-only — the matcher still runs, just on word overlap.
     try:
@@ -99,6 +102,14 @@ async def match_offerings(version: str = "v7") -> dict[str, Any]:
                     sid = str(m["subcap_id"])
                     score = float(m["score"])
                     if sid not in ids or score < floor:
+                        continue
+                    # DEEP cross-check (not just semantics): a match must be CORROBORATED — either
+                    # the capability's terms actually appear in the subcap (lexical rank > 0) or the
+                    # embedding signal is strong on its own (cosine >= dense_strong). A moderate
+                    # cosine with zero lexical overlap is a pure-embedding false friend — dropped.
+                    lex = float(m.get("rank") or 0.0)
+                    cos = float(m.get("cosine") or 0.0)
+                    if lex <= 0.0 and cos < dense_strong:
                         continue
                     if sid not in best or score > best[sid][0]:
                         best[sid] = (score, q[:90])
