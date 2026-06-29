@@ -12,7 +12,8 @@ it consumes the same two contracts live mode produces.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
 
 from app.intelligence.gemini import Gemini
 from app.settings import get_settings
@@ -285,11 +286,34 @@ _FIXTURE: tuple[tuple[RawNewsItem, NewsEnrichment], ...] = (
 _RECORDED: dict[str, NewsEnrichment] = {raw.headline: enr for raw, enr in _FIXTURE}
 
 
+def _rebased_to_now(items: list[RawNewsItem]) -> list[RawNewsItem]:
+    """Anchor the recorded fixture to the current scan date. The fixture's ``published`` dates are
+    absolute (recorded when it was authored); detection (D2) reasons over a ROLLING 8-week window
+    ending now, with the velocity signal rewarding a recent burst. Left as-is, the whole fixture
+    slides out of the recent half as real time passes (the multi-source AI-model-risk burst stops
+    being "recent" → velocity collapses → the earned trend silently drops below threshold). Shift
+    every item by the SAME delta so the newest recorded item lands on today: each inter-item gap is
+    preserved (clustering / persistence unchanged in shape), only the window position is corrected,
+    and detection stays deterministic and time-robust. Forward-only — a still-fresh fixture (or a
+    clock set in the past) is left exactly as recorded."""
+    newest = max(date.fromisoformat(raw.published) for raw in items)
+    delta = (datetime.now(UTC).date() - newest).days
+    if delta <= 0:
+        return items
+
+    def _shift(raw: RawNewsItem) -> RawNewsItem:
+        shifted = date.fromisoformat(raw.published) + timedelta(days=delta)
+        return replace(raw, published=shifted.isoformat())
+
+    return [_shift(raw) for raw in items]
+
+
 async def fetch_items() -> list[RawNewsItem]:
-    """Stage 1. Hermetic: the recorded fixture; live: the weekly grounded-search Batch fetch
-    through the one Gemini wrapper (raises until Stage 4 wires Vertex — never silent spend)."""
+    """Stage 1. Hermetic: the recorded fixture (rebased to the scan date so the rolling-window
+    detection stays time-robust); live: the weekly grounded-search Batch fetch through the one
+    Gemini wrapper (raises until Stage 4 wires Vertex — never silent spend)."""
     if get_settings().is_hermetic:
-        return [raw for raw, _ in _FIXTURE]
+        return _rebased_to_now([raw for raw, _ in _FIXTURE])
     return await Gemini().fetch_news()
 
 
