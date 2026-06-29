@@ -2202,3 +2202,150 @@ async def lifecycle(
         gaps=delivered - covered,
         top=[LifecycleSubcap.model_validate(dict(r)) for r in rows],
     )
+
+
+class OfferingRow(BaseModel):
+    id: str
+    name: str
+    family: str
+    summary: str
+    platforms: list[str]
+    n_subcaps: int
+    stories: int
+    pillars: dict[str, int]
+
+
+class OfferingMatch(BaseModel):
+    id: str
+    name: str
+    pillar: str
+    stories: int
+    score: float
+    capability: str
+
+
+class OfferingDetail(BaseModel):
+    id: str
+    name: str
+    family: str
+    summary: str
+    platforms: list[str]
+    outcomes: list[str]
+    capabilities: list[str]
+    n_subcaps: int
+    stories: int
+    pillars: dict[str, int]
+    subcaps: list[OfferingMatch]
+
+
+def _offering_capability(rationale: str | None) -> str:
+    """The matching capability recorded by the semantic matcher (``… · capability: <cap>``)."""
+    if rationale and "capability:" in rationale:
+        return rationale.split("capability:", 1)[1].strip()
+    return ""
+
+
+@router.get("/{version}/offerings")
+async def list_offerings(
+    version: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> list[OfferingRow]:
+    """The productized offerings matched into this catalogue by the semantic matcher — each with its
+    matched-subcap count, delivered-story coverage and pillar spread. Offering metadata (family /
+    summary / platforms) comes from the bundled GTM seed; matches + delivery from the version."""
+    from app.services.offerings_match import load_offerings
+
+    v = await resolve_version(version)
+    s = _schema(v)
+    seed = {o["id"]: o for o in load_offerings()}
+    tally = ", ".join(
+        f"count(*) FILTER (WHERE left(os.subcap_id, 2) = 'P{p}') AS p{p}" for p in range(1, 5)
+    )
+    sql = text(
+        "SELECT os.offering_id AS id, o.name, count(DISTINCT os.subcap_id) AS n_subcaps, "
+        f"coalesce(sum(d.stories), 0)::int AS stories, {tally} "
+        f"FROM {s}.offering_subcap os JOIN {s}.offering o ON o.offering_id = os.offering_id "
+        "LEFT JOIN (SELECT subcap_id, count(*) AS stories FROM control.story_catalogue_link "
+        "WHERE version_id = :ver GROUP BY subcap_id) d ON d.subcap_id = os.subcap_id "
+        "GROUP BY os.offering_id, o.name ORDER BY n_subcaps DESC, o.name"
+    )
+    async with _engine().connect() as conn:
+        rows = (await conn.execute(sql, {"ver": v.version_id})).mappings().all()
+    out: list[OfferingRow] = []
+    for r in rows:
+        sd = seed.get(str(r["id"]), {})
+        out.append(
+            OfferingRow(
+                id=str(r["id"]),
+                name=str(r["name"]),
+                family=str(sd.get("family", "")),
+                summary=str(sd.get("summary", "")),
+                platforms=list(sd.get("platforms", [])),
+                n_subcaps=int(r["n_subcaps"]),
+                stories=int(r["stories"]),
+                pillars={f"P{p}": int(r[f"p{p}"]) for p in range(1, 5)},
+            )
+        )
+    return out
+
+
+@router.get("/{version}/offerings/{offering_id}")
+async def offering_detail(
+    version: str, offering_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> OfferingDetail:
+    """One offering's full drilldown: its GTM capabilities / outcomes / platforms (seed) + the
+    subcaps the matcher mapped to it BY MEANING — each with its score, the matching capability (the
+    trust basis) and delivered-story count, pillar-tallied. Powers the offering drawer everywhere an
+    offering chip appears."""
+    from app.services.offerings_match import load_offerings
+
+    v = await resolve_version(version)
+    s = _schema(v)
+    seed = next((o for o in load_offerings() if o["id"] == offering_id), {})
+    sql = text(
+        "SELECT os.subcap_id AS id, sc.name, left(os.subcap_id, 2) AS pillar, "
+        "coalesce(d.stories, 0)::int AS stories, coalesce(os.maturity_lift::float, 0) AS score, "
+        "os.mapping_rationale AS rat "
+        f"FROM {s}.offering_subcap os JOIN {s}.subcap sc ON sc.subcap_id = os.subcap_id "
+        "LEFT JOIN (SELECT subcap_id, count(*) AS stories FROM control.story_catalogue_link "
+        "WHERE version_id = :ver GROUP BY subcap_id) d ON d.subcap_id = os.subcap_id "
+        "WHERE os.offering_id = :oid ORDER BY os.maturity_lift::float DESC NULLS LAST, os.subcap_id"
+    )
+    async with _engine().connect() as conn:
+        name = (
+            await conn.execute(
+                text(f"SELECT name FROM {s}.offering WHERE offering_id = :oid"),
+                {"oid": offering_id},
+            )
+        ).scalar()
+        if name is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail=f"offering '{offering_id}' not found"
+            )
+        rows = (await conn.execute(sql, {"ver": v.version_id, "oid": offering_id})).mappings().all()
+    subs = [
+        OfferingMatch(
+            id=str(r["id"]),
+            name=str(r["name"]),
+            pillar=str(r["pillar"]),
+            stories=int(r["stories"]),
+            score=round(float(r["score"]), 3),
+            capability=_offering_capability(r["rat"]),
+        )
+        for r in rows
+    ]
+    pillars = {f"P{p}": 0 for p in range(1, 5)}
+    for sub in subs:
+        pillars[sub.pillar] = pillars.get(sub.pillar, 0) + 1
+    return OfferingDetail(
+        id=offering_id,
+        name=str(name),
+        family=str(seed.get("family", "")),
+        summary=str(seed.get("summary", "")),
+        platforms=list(seed.get("platforms", [])),
+        outcomes=list(seed.get("outcomes", [])),
+        capabilities=list(seed.get("capabilities", [])),
+        n_subcaps=len(subs),
+        stories=sum(x.stories for x in subs),
+        pillars=pillars,
+        subcaps=subs,
+    )

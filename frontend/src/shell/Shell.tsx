@@ -7,6 +7,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { CommitModal, type CommitPayload } from '../components/CommitModal';
 import { ConsultantLoop, type LoopPayload } from '../components/ConsultantLoop';
 import { ReasoningModal } from '../components/ReasoningModal';
+import { OfferingDrawer } from '../components/OfferingDrawer';
 import { SubcapPeek } from '../components/SubcapPeek';
 import { Icon } from '../lib/icons';
 import { syncFiltersToUrl, useUi } from '../state/store';
@@ -40,6 +41,7 @@ export function Shell() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [reasoningId, setReasoningId] = useState<string | null>(null);
   const [peekId, setPeekId] = useState<string | null>(null);
+  const [offeringId, setOfferingId] = useState<string | null>(null);
   const [loopCtx, setLoopCtx] = useState<LoopPayload | null>(null);
   const [commitCtx, setCommitCtx] = useState<CommitPayload | null>(null);
   const loc = useLocation();
@@ -74,6 +76,9 @@ export function Shell() {
   });
   useCiaEvent<unknown>('cia-peek', (d) => {
     if (typeof d === 'string' && d) setPeekId(d);
+  });
+  useCiaEvent<unknown>('cia-offering', (d) => {
+    if (typeof d === 'string' && d) setOfferingId(d);
   });
   useCiaEvent<unknown>('cia-loop', (d) => {
     if (d && typeof d === 'object') setLoopCtx(d as LoopPayload);
@@ -119,6 +124,9 @@ export function Shell() {
       </div>
       {reasoningId && <ReasoningModal chainId={reasoningId} onClose={() => setReasoningId(null)} />}
       {peekId && <SubcapPeek id={peekId} onClose={() => setPeekId(null)} />}
+      {offeringId && (
+        <OfferingDrawer version={ui.version} id={offeringId} onClose={() => setOfferingId(null)} />
+      )}
       {loopCtx && <ConsultantLoop payload={loopCtx} onClose={() => setLoopCtx(null)} />}
       {commitCtx && <CommitModal payload={commitCtx} onClose={() => setCommitCtx(null)} />}
     </div>

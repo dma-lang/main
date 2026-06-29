@@ -12,6 +12,7 @@ import {
   type DiffResp,
   type HeatmapResp,
   type HeatmapDrillResp,
+  type OfferingDetail,
   type UnscopedSubverticalsResp,
   type MappingResp,
   type SowDetail,
@@ -101,6 +102,15 @@ export const useHeatmapDrill = (
     queryKey: ['heatmap-drill', version, lens, key, pillar, sv],
     queryFn: () => api.heatmapDrill(version, lens, key as string, pillar, sv),
     enabled: !!version && !!key && lens !== 'pillar',
+  });
+
+// One productized offering's drilldown — its capabilities + the subcaps the semantic matcher mapped
+// to it (scored, peekable). Fetched only when an offering chip is opened (id set).
+export const useOfferingDetail = (version: string, id: string | null) =>
+  useQuery<OfferingDetail>({
+    queryKey: ['offering-detail', version, id],
+    queryFn: () => api.offeringDetail(version, id as string),
+    enabled: !!version && !!id,
   });
 
 export const useUnscopedSubverticals = (version: string) =>

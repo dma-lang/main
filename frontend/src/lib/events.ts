@@ -25,6 +25,11 @@ export const openPeek = (id: string): void => {
   window.dispatchEvent(new CustomEvent('cia-peek', { detail: id }));
 };
 
+// Open the productized-offering drilldown drawer (matched subcaps + capabilities) for an offering id.
+export const openOffering = (id: string): void => {
+  window.dispatchEvent(new CustomEvent('cia-offering', { detail: id }));
+};
+
 export const openLoop = (payload: unknown): void => {
   window.dispatchEvent(new CustomEvent('cia-loop', { detail: payload }));
 };

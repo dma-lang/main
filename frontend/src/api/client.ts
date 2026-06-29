@@ -83,6 +83,40 @@ export interface HeatmapDrillResp {
   total_stories: number;
 }
 
+export interface OfferingRow {
+  id: string;
+  name: string;
+  family: string;
+  summary: string;
+  platforms: string[];
+  n_subcaps: number;
+  stories: number;
+  pillars: Record<string, number>;
+}
+
+export interface OfferingMatch {
+  id: string;
+  name: string;
+  pillar: string;
+  stories: number;
+  score: number;
+  capability: string;
+}
+
+export interface OfferingDetail {
+  id: string;
+  name: string;
+  family: string;
+  summary: string;
+  platforms: string[];
+  outcomes: string[];
+  capabilities: string[];
+  n_subcaps: number;
+  stories: number;
+  pillars: Record<string, number>;
+  subcaps: OfferingMatch[];
+}
+
 // AI-identified candidate subverticals we have NOT scoped (gated proposals from the unscoped-Jira
 // detector) — rendered as the ORANGE heatmap + drilldown on mission control.
 export interface UnscopedCandidate {
@@ -1175,6 +1209,10 @@ export const api = {
     const qs = new URLSearchParams({ lens, key, pillar, sv });
     return http<HeatmapDrillResp>(`/api/catalogue/${v}/heatmap/drill?${qs.toString()}`);
   },
+  offerings: (v: string): Promise<OfferingRow[]> =>
+    http<OfferingRow[]>(`/api/catalogue/${v}/offerings`),
+  offeringDetail: (v: string, id: string): Promise<OfferingDetail> =>
+    http<OfferingDetail>(`/api/catalogue/${v}/offerings/${encodeURIComponent(id)}`),
   unscopedSubverticals: (v: string): Promise<UnscopedSubverticalsResp> =>
     http<UnscopedSubverticalsResp>(`/api/catalogue/${v}/unscoped-subverticals`),
   subcaps: (v: string, sv = 'all'): Promise<SubcapNode[]> =>

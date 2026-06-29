@@ -16,7 +16,7 @@ import {
 } from '../api/queries';
 import { DeliveryDrillPanel } from '../components/DeliveryDrillPanel';
 import { Bar, Claim, Empty, LifeChip, Mag, PillarDot, Tier } from '../components/primitives';
-import { go, openReasoning, toast } from '../lib/events';
+import { go, openOffering, openReasoning, toast } from '../lib/events';
 import { clamp, LIFE_COLORS, PILLAR_COLORS, PILLAR_SHORT } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
 import { useUi } from '../state/store';
@@ -148,7 +148,13 @@ function OverviewTab({
           {(enr?.offerings ?? []).length ? (
             <div className="row wrap gap6">
               {(enr?.offerings ?? []).map((o) => (
-                <span key={o.offering_id} className="chip teal" title={o.category ?? ''}>
+                <span
+                  key={o.offering_id}
+                  className="chip teal"
+                  style={{ cursor: 'pointer' }}
+                  title={'Open ' + o.name + ' — matched subcaps & capabilities'}
+                  onClick={() => openOffering(o.offering_id)}
+                >
                   <Icon n="package" s={11} /> {o.name}
                 </span>
               ))}

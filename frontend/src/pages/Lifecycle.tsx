@@ -4,7 +4,7 @@
 // subcaps into a new offering is a gated consultant-loop suggestion (F8) — shown as a HYPOTHESIS.
 import { useLifecycle } from '../api/queries';
 import { Bar, Claim, Empty, Page, PillarDot } from '../components/primitives';
-import { go } from '../lib/events';
+import { go, openOffering } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
@@ -69,7 +69,15 @@ export function Lifecycle() {
                       </div>
                     </div>
                     {s.offering_id ? (
-                      <span className="chip teal" style={{ flex: 'none' }} title={s.offering_name ?? ''}>
+                      <span
+                        className="chip teal"
+                        style={{ flex: 'none', cursor: 'pointer' }}
+                        title={'Open ' + (s.offering_name ?? s.offering_id) + ' — matched subcaps'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (s.offering_id) openOffering(s.offering_id);
+                        }}
+                      >
                         <Icon n="package" s={11} /> {s.offering_id.replace('OFF-', '')}
                       </span>
                     ) : (
