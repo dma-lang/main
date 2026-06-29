@@ -1349,6 +1349,18 @@ async def value_chain(
 
             vc_cfg = load_rollup_config()
             corder = {c: i for i, c in enumerate(vc_cfg.get("concept_order", []))}
+            # stage_concept scans ~320 keywords per call; with ~13k subcap_vcc rows but only ~230
+            # DISTINCT stage names, memoise (clean + concept) per distinct raw name — ~60x fewer.
+            _stage_cache: dict[str, tuple[str, str]] = {}
+
+            def _stage_key(raw: str) -> tuple[str, str]:
+                hit = _stage_cache.get(raw)
+                if hit is None:
+                    cn = clean_stage_name(raw)
+                    hit = (cn, stage_concept(cn, vc_cfg))
+                    _stage_cache[raw] = hit
+                return hit
+
             if sv_active:
                 # present the SV's OWN process flow logically: order stages by their concept's place
                 # in the lifecycle (config concept_order), then the workbook order within a concept
@@ -1356,7 +1368,7 @@ async def value_chain(
                 def _flow(x: dict[str, Any]) -> tuple[Any, ...]:
                     if x["name"] == INDIRECT_STAGE:
                         return (2, 999, x["ord"], x["name"])
-                    k = stage_concept(x["name"], vc_cfg)
+                    k = _stage_key(x["name"])[1]
                     if k.startswith("c:"):
                         return (0, corder.get(k[2:], 999), x["ord"], x["name"])
                     return (1, 999, x["ord"], x["name"])
@@ -1373,8 +1385,7 @@ async def value_chain(
                 groups: dict[str, dict[str, Any]] = {}
                 name_freq: dict[str, Counter[str]] = {}
                 for r in rows:
-                    cn = clean_stage_name(str(r["name"]))
-                    key = stage_concept(cn, vc_cfg)
+                    cn, key = _stage_key(str(r["name"]))
                     g = groups.setdefault(key, {"code": str(r["code"]), "subcaps": {}})
                     if str(r["code"]) < g["code"]:
                         g["code"] = str(r["code"])
