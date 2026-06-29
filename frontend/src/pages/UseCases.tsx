@@ -168,13 +168,8 @@ export function UseCases() {
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PER));
 
-  const archOpts = useMemo(
-    () => [
-      { v: 'all', l: 'All use-case types' },
-      ...(data?.archetypes ?? []).map((a) => ({ v: a.archetype, l: `${a.archetype} (${a.count})` })),
-    ],
-    [data?.archetypes],
-  );
+  // the "All use-case types" dropdown is removed — the most-delivered archetype leaderboard below
+  // IS the type filter (click a bar to filter, click again to clear).
   const board = useMemo(() => (data?.archetypes ?? []).slice(0, 6), [data?.archetypes]);
   const boardMax = Math.max(1, ...board.map((a) => a.n_stories));
 
@@ -217,7 +212,6 @@ export function UseCases() {
             ))}
           </div>
           <Dropdown value={cat} icon="filter" options={catOpts} onChange={setCat} />
-          <Dropdown value={arch} options={archOpts} onChange={setArch} />
           <div className="searchbox" style={{ flex: 1, minWidth: 200 }}>
             <Icon n="search" s={15} />
             <input placeholder="Search use-case text…" value={qInput} onChange={(e) => setQInput(e.target.value)} />
