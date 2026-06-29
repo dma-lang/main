@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app import db
 from app.deps import get_current_user
+from app.services import sv_aliases as _sv_aliases
 from app.versioning import Version, resolve_version
 
 router = APIRouter(prefix="/api/catalogue", tags=["catalogue"])
@@ -1561,10 +1562,14 @@ class HeatmapResp(BaseModel):
 # label, so the value-chain lens merges variants and shows clean names (the canonical writer is
 # services/value_chain.clean_stage_name, applied at provision).
 _VC_CLEAN = r"regexp_replace(vcl.name, '\s*\([^()]*\)\s*$', '')"
+# Fold a legacy SV suffix in the tier at READ time (config alias map) so the Tier-coverage lens
+# shows e.g. T2-RIA — not a stale T2-PEN — even on a version (v5) provisioned before the fold; two
+# raw tiers then merge into one row under GROUP BY. Same intent as _VC_CLEAN for stage names.
+_MATURITY_TIER = _sv_aliases.legacy_suffix_fold_sql("coalesce(sc.tier,'untiered')")
 _LENS_GROUP: dict[str, tuple[str, str, str]] = {
     # lens -> (group-key expr, label expr, extra FROM/JOIN)
     "pillar": ("sc.subcap_id", "sc.name", ""),  # rows = most-delivered subcaps
-    "maturity": ("coalesce(sc.tier,'untiered')", "coalesce(sc.tier,'untiered')", ""),
+    "maturity": (_MATURITY_TIER, _MATURITY_TIER, ""),
     "subvertical": (
         "coalesce(st.story_sv_code,'(unscoped)')",
         "coalesce(st.story_sv_code,'(unscoped)')",

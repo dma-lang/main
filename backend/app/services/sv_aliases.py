@@ -72,3 +72,15 @@ def normalize_tier(tier: str | None) -> str | None:
     if not m:
         return tier
     return f"{m.group(1)}-{normalize_sv_code(m.group(2))}"
+
+
+def legacy_suffix_fold_sql(col: str) -> str:
+    """A SQL expression folding a legacy SV suffix in a ``<level>-<SV>`` value (e.g. ``T2-PEN`` ->
+    ``T2-RIA``) at READ time — the SQL twin of ``normalize_tier``, derived from the same alias map,
+    so a catalogue provisioned BEFORE the fold shipped still DISPLAYS the canonical tier (mirrors
+    the value-chain lens read-time clean) without a re-provision. No alias -> ``col`` unchanged."""
+    expr = col
+    for legacy, canon in _aliases().items():
+        le, ce = legacy.replace("'", "''"), canon.replace("'", "''")
+        expr = f"regexp_replace({expr}, '-{le}$', '-{ce}')"
+    return expr

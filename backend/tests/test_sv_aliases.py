@@ -61,6 +61,16 @@ def test_read_time_sv_scope_normalizes_alias_but_preserves_scopes() -> None:
     assert _norm_sv("unscoped:Acme Corp") == "unscoped:Acme Corp"  # client suffix verbatim
 
 
+def test_legacy_suffix_fold_sql_folds_the_alias_at_read_time() -> None:
+    """The read-time SQL fold (Tier-coverage lens) is the SQL twin of normalize_tier — so a stale
+    catalogue (e.g. v5 provisioned before the fold) still DISPLAYS T2-RIA, not T2-PEN, and the two
+    merge under GROUP BY. No alias in play -> the column is returned unchanged."""
+    from app.services.sv_aliases import legacy_suffix_fold_sql
+
+    reload_aliases()
+    assert legacy_suffix_fold_sql("sc.tier") == "regexp_replace(sc.tier, '-PEN$', '-RIA')"
+
+
 def test_story_ingest_and_carry_rows_normalize_the_sv() -> None:
     ing = stories._ingest_row(
         {"k": "X-1", "sc": "P3C1.8", "sv": "PEN", "psv": "pen", "tier": "T2-PEN"}, "v7"
