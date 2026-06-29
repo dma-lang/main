@@ -1604,6 +1604,49 @@ _LENS_GROUP: dict[str, tuple[str, str, str]] = {
 _BAND_AXIS = ["1.0–1.7", "1.7–2.3", "2.3–3.0", "3.0–3.7", "3.7–4.3", "4.3–5.0"]
 
 
+async def _heatmap_scope(
+    conn: AsyncConnection, s: str, lens: str, pillar: str, sv: str, version_id: str
+) -> tuple[str, str, str, list[str], dict[str, Any]]:
+    """Shared scope for the concentration heatmap AND its drill: ``(key_expr, label_expr, join,
+    where, params)`` for the active lens + pillar/sv filters. The heatmap GROUPs by ``key``; the
+    drill adds ``key_expr = :key`` and groups by subcap — both off the SAME join, so the drilldown
+    reconciles with the cell it was opened from."""
+    key_expr, label_expr, join_tmpl = _LENS_GROUP[lens]
+    # value-chain + vendor read enrichment (subcap_vcc / subcap_platform); a version without its own
+    # inherits the reference's so the lens renders automatically, never empty.
+    lens_table = {"value-chain": "subcap_vcc", "vendor": "subcap_platform"}
+    ench_s = await _enrichment_schema(conn, s, lens_table[lens]) if lens in lens_table else s
+    join = join_tmpl.format(s=ench_s)
+    where = ["l.version_id = :ver"]
+    params: dict[str, Any] = {"ver": version_id}
+    if pillar != "all":
+        where.append("left(sc.subcap_id, 2) = :pil")
+        params["pil"] = pillar
+    if lens == "value-chain":
+        # the value-chain lens scopes by the CHAIN's subvertical (in the join), not the story sv
+        if sv.startswith("unscoped:"):
+            # an unscoped client has NO chain of its own -> show ALL stages, count only its stories
+            params["vc_sv"] = "all"
+            where.append(
+                "st.project_key = :uclient AND (st.story_sv_code IS NULL "
+                f"OR st.story_sv_code NOT IN ({_MODELLED_SV_SQL}))"
+            )
+            params["uclient"] = sv.split(":", 1)[1]
+        else:
+            params["vc_sv"] = sv
+    elif sv.startswith("unscoped:"):
+        # an AI-detected unscoped subvertical: scope to that client's stories outside the nine
+        where.append(
+            "st.project_key = :uclient AND (st.story_sv_code IS NULL "
+            f"OR st.story_sv_code NOT IN ({_MODELLED_SV_SQL}))"
+        )
+        params["uclient"] = sv.split(":", 1)[1]
+    elif sv != "all":
+        where.append("st.story_sv_code = :sv")
+        params["sv"] = sv
+    return key_expr, label_expr, join, where, params
+
+
 @router.get("/{version}/heatmap")
 async def heatmap(
     version: str,
@@ -1621,42 +1664,11 @@ async def heatmap(
     s = _schema(v)
     if lens not in _LENS_GROUP:
         lens = "pillar"
-    key_expr, label_expr, join_tmpl = _LENS_GROUP[lens]
-    # the value-chain + vendor lenses read enrichment (subcap_vcc / subcap_platform); a version
-    # without its own inherits the reference's so the heatmap renders automatically, never empty.
-    _lens_table = {"value-chain": "subcap_vcc", "vendor": "subcap_platform"}
     async with _engine().connect() as conn:
-        ench_s = await _enrichment_schema(conn, s, _lens_table[lens]) if lens in _lens_table else s
-        join = join_tmpl.format(s=ench_s)
-        where = ["l.version_id = :ver"]
-        params: dict[str, Any] = {"ver": v.version_id, "lim": limit}
-        if pillar != "all":
-            where.append("left(sc.subcap_id, 2) = :pil")
-            params["pil"] = pillar
-        if lens == "value-chain":
-            # the value-chain lens scopes by the CHAIN's subvertical (in the join), not the story sv
-            if sv.startswith("unscoped:"):
-                # an unscoped client has NO chain of its own, so scoping the chain by its name would
-                # match zero stages (silent-empty). Show ALL stages but count only this client's
-                # unscoped stories (scope by story, not by chain subvertical).
-                params["vc_sv"] = "all"
-                where.append(
-                    "st.project_key = :uclient AND (st.story_sv_code IS NULL "
-                    f"OR st.story_sv_code NOT IN ({_MODELLED_SV_SQL}))"
-                )
-                params["uclient"] = sv.split(":", 1)[1]
-            else:
-                params["vc_sv"] = sv
-        elif sv.startswith("unscoped:"):
-            # an AI-detected unscoped subvertical: scope to that client's stories outside the nine
-            where.append(
-                "st.project_key = :uclient AND (st.story_sv_code IS NULL "
-                f"OR st.story_sv_code NOT IN ({_MODELLED_SV_SQL}))"
-            )
-            params["uclient"] = sv.split(":", 1)[1]
-        elif sv != "all":
-            where.append("st.story_sv_code = :sv")
-            params["sv"] = sv
+        key_expr, label_expr, join, where, params = await _heatmap_scope(
+            conn, s, lens, pillar, sv, v.version_id
+        )
+        params["lim"] = limit
         band = "least(6, greatest(1, width_bucket(st.composite_score, 1, 5, 6)))"
         cells = ", ".join(
             f"count(DISTINCT st.story_key) FILTER (WHERE {band} = {k}) AS c{k}" for k in range(1, 7)
@@ -1692,6 +1704,72 @@ async def heatmap(
             )
         )
     return HeatmapResp(lens=lens, axis=_BAND_AXIS, rows=out, max=gmax)
+
+
+class HeatmapDrillSubcap(BaseModel):
+    id: str
+    name: str
+    pillar: str
+    stories: int
+
+
+class HeatmapDrillResp(BaseModel):
+    lens: str
+    key: str
+    subcaps: list[HeatmapDrillSubcap]
+    total_subcaps: int
+    total_stories: int
+
+
+@router.get("/{version}/heatmap/drill")
+async def heatmap_drill(
+    version: str,
+    lens: str = Query("pillar"),
+    key: str = Query(...),
+    pillar: str = Query("all"),
+    sv: str = Query("all"),
+    limit: int = Query(50, ge=1, le=200),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> HeatmapDrillResp:
+    """The subcaps behind ONE heatmap lens-group row — Mission control's drill drawer. Same scope +
+    join as the heatmap, plus ``key_expr = :key``, grouped by subcap and delivery-ranked, so the
+    drilldown reconciles with the row it was opened from. The pillar lens needs no drill (its rows
+    ARE subcaps -> peek), so it returns empty."""
+    sv = _norm_sv(sv)
+    v = await resolve_version(version)
+    s = _schema(v)
+    if lens not in _LENS_GROUP or lens == "pillar":
+        return HeatmapDrillResp(lens=lens, key=key, subcaps=[], total_subcaps=0, total_stories=0)
+    async with _engine().connect() as conn:
+        key_expr, _label, join, where, params = await _heatmap_scope(
+            conn, s, lens, pillar, sv, v.version_id
+        )
+        where.append(f"{key_expr} = :key")
+        params["key"] = key
+        params["lim"] = limit
+        sql = text(
+            "SELECT sc.subcap_id AS id, sc.name, left(sc.subcap_id, 2) AS pillar, "
+            "count(DISTINCT st.story_key) AS stories "
+            "FROM control.story_catalogue_link l "
+            "JOIN control.story st ON st.story_key = l.story_key "
+            f"JOIN {s}.subcap sc ON sc.subcap_id = l.subcap_id{join} "
+            f"WHERE {' AND '.join(where)} "
+            "GROUP BY sc.subcap_id, sc.name ORDER BY stories DESC, sc.subcap_id LIMIT :lim"
+        )
+        rows = (await conn.execute(sql, params)).mappings().all()
+    subs = [
+        HeatmapDrillSubcap(
+            id=str(r["id"]), name=str(r["name"]), pillar=str(r["pillar"]), stories=int(r["stories"])
+        )
+        for r in rows
+    ]
+    return HeatmapDrillResp(
+        lens=lens,
+        key=key,
+        subcaps=subs,
+        total_subcaps=len(subs),
+        total_stories=sum(x.stories for x in subs),
+    )
 
 
 # the nine modelled subverticals — anything else (or NULL) is unscoped delivery

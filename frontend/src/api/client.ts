@@ -68,6 +68,21 @@ export interface HeatmapResp {
   max: number;
 }
 
+export interface HeatmapDrillSubcap {
+  id: string;
+  name: string;
+  pillar: string;
+  stories: number;
+}
+
+export interface HeatmapDrillResp {
+  lens: string;
+  key: string;
+  subcaps: HeatmapDrillSubcap[];
+  total_subcaps: number;
+  total_stories: number;
+}
+
 // AI-identified candidate subverticals we have NOT scoped (gated proposals from the unscoped-Jira
 // detector) — rendered as the ORANGE heatmap + drilldown on mission control.
 export interface UnscopedCandidate {
@@ -1149,6 +1164,16 @@ export const api = {
   heatmap: (v: string, lens: string, pillar: string, sv: string): Promise<HeatmapResp> => {
     const qs = new URLSearchParams({ lens, pillar, sv });
     return http<HeatmapResp>(`/api/catalogue/${v}/heatmap?${qs.toString()}`);
+  },
+  heatmapDrill: (
+    v: string,
+    lens: string,
+    key: string,
+    pillar: string,
+    sv: string,
+  ): Promise<HeatmapDrillResp> => {
+    const qs = new URLSearchParams({ lens, key, pillar, sv });
+    return http<HeatmapDrillResp>(`/api/catalogue/${v}/heatmap/drill?${qs.toString()}`);
   },
   unscopedSubverticals: (v: string): Promise<UnscopedSubverticalsResp> =>
     http<UnscopedSubverticalsResp>(`/api/catalogue/${v}/unscoped-subverticals`),

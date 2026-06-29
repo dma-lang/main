@@ -11,6 +11,7 @@ import {
   type ClientRow,
   type DiffResp,
   type HeatmapResp,
+  type HeatmapDrillResp,
   type UnscopedSubverticalsResp,
   type MappingResp,
   type SowDetail,
@@ -85,6 +86,21 @@ export const useHeatmap = (version: string, lens: string, pillar: string, sv: st
     queryKey: ['heatmap', version, lens, pillar, sv],
     queryFn: () => api.heatmap(version, lens, pillar, sv),
     enabled: !!version,
+  });
+
+// The subcaps behind a heatmap lens-group row — Mission control's drill drawer. Only fetched once a
+// non-pillar row is clicked (key set); pillar rows peek their subcap directly so no drill is needed.
+export const useHeatmapDrill = (
+  version: string,
+  lens: string,
+  key: string | null,
+  pillar: string,
+  sv: string,
+) =>
+  useQuery<HeatmapDrillResp>({
+    queryKey: ['heatmap-drill', version, lens, key, pillar, sv],
+    queryFn: () => api.heatmapDrill(version, lens, key as string, pillar, sv),
+    enabled: !!version && !!key && lens !== 'pillar',
   });
 
 export const useUnscopedSubverticals = (version: string) =>
