@@ -119,3 +119,21 @@ def test_match_offerings_is_idempotent(v7_matched: None) -> None:
     assert first["offerings"] == second["offerings"]
     assert first["matched_pairs"] == second["matched_pairs"]  # deterministic rebuild, no drift
     assert second["matched_pairs"] > 0 and second["covered_subcaps"] > 0
+
+
+@needs_db
+def test_offering_endpoints_serve_scored_matches(v7_matched: None) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    with TestClient(create_app()) as c:
+        lst = c.get("/api/catalogue/v7/offerings").json()
+        assert len(lst) >= 25  # every productized offering is listed
+        oid = next(o["id"] for o in lst if o["n_subcaps"] > 0)
+        det = c.get(f"/api/catalogue/v7/offerings/{oid}").json()
+        assert det["id"] == oid and det["n_subcaps"] > 0
+        # the drilldown carries scored matches + the matching-capability trust basis
+        assert all(s["score"] > 0 for s in det["subcaps"])
+        assert det["capabilities"]  # GTM capabilities surfaced from the seed
+        assert c.get("/api/catalogue/v7/offerings/OFF-DOESNOTEXIST").status_code == 404
