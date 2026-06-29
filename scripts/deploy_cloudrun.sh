@@ -12,7 +12,10 @@
 #   * network steps retry with exponential backoff (build pulls, pushes, gcloud calls)
 #   * base-image pulls fall back to the GCR mirror when Docker Hub rate-limits (429)
 #   * the image is deployed BY DIGEST (immutable), never by tag
-#   * the migration Job runs TO COMPLETION before any traffic moves (never on app startup)
+#   * the one-shot Job runs TO COMPLETION before any traffic moves (never on app startup): it
+#     migrates the control plane AND re-provisions + re-carries the data plane (app.refresh), so a
+#     deploy never leaves the live app serving stale catalogue / delivery numbers. The refresh is
+#     marker-guarded — re-running the SAME image is a no-op (no rebuild, no embedding spend)
 #   * the new revision starts with --no-traffic; it gets traffic only after /healthz passes
 #   * on ANY failure after the revision exists, traffic stays/returns on the previous revision
 #     (auto-rollback) and the script exits nonzero
@@ -88,13 +91,21 @@ DIGEST="$(gcloud artifacts docker images describe "$IMAGE_TAG" --format='value(i
 IMAGE_DIGEST="${IMAGE_BASE}@${DIGEST}"
 log "image by digest: ${IMAGE_DIGEST}"
 
-# ---------------------------------------------------------------- 3. migrate TO COMPLETION
-log "running one-shot migration job (advisory-locked, at-head no-op) BEFORE any traffic moves"
-retry "migrate job image update" 3 gcloud run jobs update "$MIGRATE_JOB" \
-  --region "$REGION" --image "$IMAGE_DIGEST" --quiet
-retry "migrate job execute" 2 gcloud run jobs execute "$MIGRATE_JOB" \
+# ---------------------------------------------------------------- 3. migrate + refresh TO COMPLETION
+# The one-shot job runs app.refresh: alembic upgrade head (advisory-locked, at-head no-op) THEN
+# re-provision + re-carry every provisioned cat_<v>, so the data plane matches the just-built image
+# BEFORE traffic moves. REFRESH_BUILD_ID=<digest> makes a re-run of the same image skip the rebuild
+# (idempotent, no embedding spend); a genuinely new image refreshes exactly once. Bump the task
+# timeout because the refresh does more than a bare migration (re-carry + offerings + embeddings).
+log "migrate + data-plane refresh job (advisory-locked; re-provision + re-carry) BEFORE any traffic moves"
+retry "deploy job converge" 3 gcloud run jobs update "$MIGRATE_JOB" \
+  --region "$REGION" --image "$IMAGE_DIGEST" \
+  --command uv --args run,python,-m,app.refresh \
+  --update-env-vars "REFRESH_BUILD_ID=${IMAGE_DIGEST}" \
+  --task-timeout=1800 --quiet
+retry "deploy job execute" 2 gcloud run jobs execute "$MIGRATE_JOB" \
   --region "$REGION" --wait --quiet
-log "migration complete"
+log "migration + data-plane refresh complete"
 
 # ---------------------------------------------------------------- 4. deploy with NO traffic
 PREV_REVISION="$(gcloud run services describe "$SERVICE" --region "$REGION" \

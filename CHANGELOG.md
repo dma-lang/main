@@ -7,6 +7,19 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added (operations)
+- **The deploy self-refreshes the data plane (`app.refresh`).** A deploy ships new code/seeds, but
+  the live `cat_<v>` catalogue and carried Jira delivery were built by the *previous* run — so the
+  app kept serving stale numbers after every deploy. The one-shot `cia-migrate` job now runs
+  `app.refresh`: `alembic upgrade head` (advisory-locked, at-head no-op) **then** re-provision +
+  re-carry every provisioned `cat_<v>`, to completion **before traffic moves** (never on app
+  startup). Each version's rebuild is one transaction (readers block briefly, never see a half-built
+  schema); a per-schema build marker (the schema `COMMENT`, set to the image digest) makes a re-run
+  of the **same** image a no-op — no destructive rebuild, no embedding spend — while a genuinely new
+  image refreshes exactly once. A version whose refresh fails rolls back to its prior state and the
+  job exits non-zero, so the deploy keeps traffic on the old revision. Knobs: `REFRESH_BUILD_ID`
+  (the marker), `REFRESH_FORCE=1` (ignore the marker), `REFRESH_BOOTSTRAP=v7,v5` (provision when
+  none exists yet). Wired into both `scripts/deploy_cloudrun.sh` and `scripts/doctor.sh`; no new
+  infra (the existing job is repointed). Covered by `tests/test_refresh.py`.
 - **`scripts/doctor.sh` — check → fix → verify, every run.** One operator command that makes the
   whole deploy self-healing: re-derives all values from the project (immune to Cloud Shell losing
   shell variables), enables missing APIs, verifies the Cloud SQL instance, creates the database
@@ -21,6 +34,14 @@ All notable changes to this project are documented here. The format is based on
   `--client-id` to set the OAuth client id. Documented as the recommended path in DEPLOYMENT A11.
 
 ### Fixed
+- **Trend detection is time-robust — the hermetic news fixture rebases to the scan date.** The
+  recorded news fixture carried absolute publish dates; trend detection (D2) reasons over a rolling
+  8-week window whose velocity signal rewards a recent burst, so as real time passed the whole
+  fixture slid out of the window's recent half and the earned multi-source AI-model-risk trend
+  silently fell below threshold (score 0.405 vs 0.45) — `detect=0`. `intelligence/news.fetch_items`
+  now anchors the newest fixture item to today and shifts the set by the same delta (every
+  inter-item gap preserved, forward-only), so detection stays deterministic and correct regardless
+  of the date. Live mode is unaffected (real grounded-search dates).
 - **The "unreachable" service was reachable all along — on its other URL.** A Cloud Run service
   carries two URL formats: the deterministic `<service>-<projectNumber>.<region>.run.app` (what
   `gcloud run deploy` prints) and the legacy hash `<service>-<hash>-<rc>.a.run.app` (what

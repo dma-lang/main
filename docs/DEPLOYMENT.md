@@ -9,7 +9,7 @@ recommended). Path B does the same setup by clicking in the Google Cloud Console
 | Piece | What it is |
 |---|---|
 | `cia` Cloud Run service | the app — backend + UI in one container, built from this repo |
-| `cia-migrate` Cloud Run job | creates/updates the database tables (run once) |
+| `cia-migrate` Cloud Run job | on each deploy: runs DB migrations **and** re-provisions + re-carries the catalogue/delivery data plane, so the live app never serves stale numbers |
 | `cia-pg` Cloud SQL instance | Postgres 16 — all the data lives here, survives everything |
 | 2 secrets | the database connection string + an export-signing key |
 | Google sign-in | plain Google Identity Services, restricted to `@zennify.com` (no Firebase) |
@@ -238,10 +238,13 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$R
 
 ## A9. Create the tables (run the migration job once)
 
-This reuses the exact image A7 just built and runs the database migration to completion. Safe to
-run again anytime — when there's nothing to do it says so and exits. (Note the flag difference:
-**services** use `--add-cloudsql-instances`, **jobs** use `--set-cloudsql-instances` — gcloud's
-flag families differ between the two.)
+This reuses the exact image A7 just built and runs `app.refresh` to completion: it migrates the
+database **and** re-provisions + re-carries the data plane. Safe to run again anytime — when there's
+nothing to do it says so and exits (`REFRESH_BUILD_ID` makes a same-image re-run skip the rebuild,
+so it costs nothing). On this **first** run there's no catalogue loaded yet, so the refresh half is
+a no-op — the migration creates the tables, and you load the data once in A10. (Note the flag
+difference: **services** use `--add-cloudsql-instances`, **jobs** use `--set-cloudsql-instances` —
+gcloud's flag families differ between the two.)
 
 ```bash
 IMAGE="$(gcloud run services describe cia --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
@@ -250,10 +253,11 @@ gcloud run jobs create cia-migrate \
   --region "$REGION" \
   --set-cloudsql-instances "$SQL_CONN" \
   --set-secrets "DATABASE_URL=cia-database-url:latest" \
+  --update-env-vars "REFRESH_BUILD_ID=$IMAGE" \
   --command uv \
-  --args run,python,-m,app.migrate \
+  --args run,python,-m,app.refresh \
   --max-retries 1 \
-  --task-timeout 600
+  --task-timeout 1800
 gcloud run jobs execute cia-migrate --region "$REGION" --wait
 ```
 
@@ -300,7 +304,9 @@ shows `"db":"ok"`.
 mode and **fixes it**, deploys, points the migrate job at the fresh image, executes it with a
 classify-and-heal retry loop (it reads the job's own logs: credential mismatch → resets the
 user+password+secret to agree; missing database → creates it; proxy race → retries), and only
-reports success when `/healthz` answers `{"status":"ok",…,"db":"ok"}`:
+reports success when `/healthz` answers `{"status":"ok",…,"db":"ok"}`. The job runs `app.refresh`,
+so **every deploy automatically re-provisions + re-carries the data plane** — you never have to
+re-load the catalogue after an update, and the live app never serves stale numbers:
 
 ```bash
 cd ~/cia && git pull --ff-only
@@ -316,14 +322,23 @@ git pull --ff-only
 gcloud run deploy cia --source . --region "$REGION"
 ```
 
-If the update added database tables (release notes will say so), refresh the job image and run it
-once:
+Then point the job at the fresh image and run it once. This **always** runs after a deploy now (not
+only when tables changed): `app.refresh` migrates **and** rebuilds the data plane so the new code's
+catalogue + delivery numbers go live. It's marker-guarded by the image digest — re-running the same
+image is a no-op (no rebuild, no embedding spend), and a new image refreshes exactly once:
 
 ```bash
 IMAGE="$(gcloud run services describe cia --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
-gcloud run jobs update cia-migrate --image "$IMAGE" --region "$REGION"
+gcloud run jobs update cia-migrate --image "$IMAGE" --region "$REGION" \
+  --update-env-vars "REFRESH_BUILD_ID=$IMAGE" \
+  --command uv --args run,python,-m,app.refresh --task-timeout 1800
 gcloud run jobs execute cia-migrate --region "$REGION" --wait
 ```
+
+> **Cost note (live mode).** A refresh that actually rebuilds re-embeds each version's
+> sub-capabilities (gemini-embedding-001, Batch-priced) — a few cents per version per *new* image,
+> metered on the cost meter and held by the G8 budget gate. The digest marker means a given image
+> only ever pays this once, no matter how many times the job is re-run.
 
 Roll back to a previous version: `gcloud run revisions list --service cia --region "$REGION"`,
 pick a green one, then
@@ -365,9 +380,11 @@ pick a green one, then
    (no changes) so the revision picks the roles up.
 7. **Cloud Run → Jobs → Create job** — image = the `cia` service's current image (copy the full
    image URL from the service's **Revisions** tab); name `cia-migrate`; region `us-central1`;
-   *Container* → **command** `uv`, **arguments** `run`, `python`, `-m`, `app.migrate` (one per
-   line); *Variables & secrets* → expose `DATABASE_URL` from `cia-database-url:latest`;
-   *Connections* → add Cloud SQL `cia-pg`. **Create**, then **Execute** and wait for *Succeeded*.
+   *Container* → **command** `uv`, **arguments** `run`, `python`, `-m`, `app.refresh` (one per
+   line) — this migrates **and** rebuilds the data plane on each run; set **Task timeout** `1800`;
+   *Variables & secrets* → add variable `REFRESH_BUILD_ID` = the same image URL, and expose
+   `DATABASE_URL` from `cia-database-url:latest`; *Connections* → add Cloud SQL `cia-pg`.
+   **Create**, then **Execute** and wait for *Succeeded*.
 8. **Load the data** — exactly **A10 above**.
 
 ---

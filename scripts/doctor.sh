@@ -238,15 +238,19 @@ else
 fi
 URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
 
-# ------------------------------------------------------------------ 7. migrate (classify+heal)
-step "7. migration job '${JOB}' (converge config, then execute with classify-and-heal)"
+# ------------------------------------------------------------------ 7. migrate + refresh (classify+heal)
+step "7. migrate + data-plane refresh job '${JOB}' (converge config, then execute with classify-and-heal)"
 IMAGE="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
 [ -n "$IMAGE" ] || die "could not resolve the service image"
+# app.refresh = alembic upgrade head THEN re-provision + re-carry every cat_<v>, so a deploy never
+# serves stale catalogue / delivery. REFRESH_BUILD_ID makes a same-image re-run a no-op (no rebuild,
+# no embedding spend); the longer task timeout covers the extra carry/offerings/embeddings work.
 JOB_ARGS=(--image "$IMAGE" --region "$REGION"
           --set-cloudsql-instances "$SQL_CONN"
           --set-secrets "DATABASE_URL=${DB_SECRET}:latest"
-          --command uv --args run,python,-m,app.migrate
-          --max-retries 1 --task-timeout 600)
+          --command uv --args run,python,-m,app.refresh
+          --update-env-vars "REFRESH_BUILD_ID=${IMAGE}"
+          --max-retries 1 --task-timeout 1800)
 if gcloud run jobs describe "$JOB" --region "$REGION" >/dev/null 2>&1; then
   gcloud run jobs update "$JOB" "${JOB_ARGS[@]}" --quiet && ok "job converged to fresh image + SQL attach"
 else
