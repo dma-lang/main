@@ -2000,12 +2000,13 @@ _PLATFORMS_SQL = (
     "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P2') AS p2, "
     "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P3') AS p3, "
     "count(DISTINCT sp.subcap_id) FILTER (WHERE left(sp.subcap_id, 2) = 'P4') AS p4, "
-    "coalesce(sum(stc.n), 0)::int AS stories "
+    # DISTINCT delivered stories on the platform's subcaps (a story on two of them counts once)
+    "count(DISTINCT scl.story_key)::int AS stories "
     "FROM {s}.l3_platform l "
     "LEFT JOIN {s}.vendor v ON v.vendor_id = l.vendor_id "
     "LEFT JOIN {s}.subcap_platform sp ON sp.l3_id = l.l3_id "
-    "LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
-    "WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = sp.subcap_id "
+    "LEFT JOIN control.story_catalogue_link scl "
+    "  ON scl.subcap_id = sp.subcap_id AND scl.version_id = :ver "
     "GROUP BY l.l3_id, l.name, v.name, l.category "
     "ORDER BY subcap_count DESC, l.l3_id"
 )
@@ -2080,16 +2081,17 @@ async def list_vendors(
         ench_s = await _enrichment_schema(conn, s, "l3_platform")
         sql = text(
             # dvs = distinct (vendor, subcap) pairs (dedupe a subcap across a vendor's platforms);
-            # vstory then sums this version's per-subcap delivery over that deduped set.
+            # vstory then counts this version's DISTINCT delivered stories over that deduped set (a
+            # story on two of the vendor's subcaps counts once).
             "WITH dvs AS ("
             "  SELECT DISTINCT coalesce(v.name, 'Unattributed') AS vendor, sp.subcap_id "
             f"  FROM {ench_s}.l3_platform l "
             f"  LEFT JOIN {ench_s}.vendor v ON v.vendor_id = l.vendor_id "
             f"  JOIN {ench_s}.subcap_platform sp ON sp.l3_id = l.l3_id"
             "), vstory AS ("
-            "  SELECT dvs.vendor, coalesce(sum(stc.n), 0)::int AS stories FROM dvs "
-            "  LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
-            "    WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = dvs.subcap_id "
+            "  SELECT dvs.vendor, count(DISTINCT scl.story_key)::int AS stories FROM dvs "
+            "  LEFT JOIN control.story_catalogue_link scl "
+            "    ON scl.subcap_id = dvs.subcap_id AND scl.version_id = :ver "
             "  GROUP BY dvs.vendor"
             ") "
             "SELECT coalesce(v.name, 'Unattributed') AS vendor, count(DISTINCT l.l3_id) AS plats, "
@@ -2343,14 +2345,17 @@ async def list_offerings(
     s = _schema(v)
     seed = {o["id"]: o for o in load_offerings()}
     tally = ", ".join(
-        f"count(*) FILTER (WHERE left(os.subcap_id, 2) = 'P{p}') AS p{p}" for p in range(1, 5)
+        f"count(DISTINCT os.subcap_id) FILTER (WHERE left(os.subcap_id, 2) = 'P{p}') AS p{p}"
+        for p in range(1, 5)
     )
     sql = text(
+        # stories = DISTINCT delivered stories on the offering's subcaps (a story on two of them is
+        # counted once); n_subcaps + the pillar tally dedupe the story-join multiplication.
         "SELECT os.offering_id AS id, o.name, count(DISTINCT os.subcap_id) AS n_subcaps, "
-        f"coalesce(sum(d.stories), 0)::int AS stories, {tally} "
+        f"count(DISTINCT scl.story_key)::int AS stories, {tally} "
         f"FROM {s}.offering_subcap os JOIN {s}.offering o ON o.offering_id = os.offering_id "
-        "LEFT JOIN (SELECT subcap_id, count(*) AS stories FROM control.story_catalogue_link "
-        "WHERE version_id = :ver GROUP BY subcap_id) d ON d.subcap_id = os.subcap_id "
+        "LEFT JOIN control.story_catalogue_link scl "
+        "  ON scl.subcap_id = os.subcap_id AND scl.version_id = :ver "
         "GROUP BY os.offering_id, o.name ORDER BY n_subcaps DESC, o.name"
     )
     async with _engine().connect() as conn:
@@ -2407,6 +2412,20 @@ async def offering_detail(
                 status.HTTP_404_NOT_FOUND, detail=f"offering '{offering_id}' not found"
             )
         rows = (await conn.execute(sql, {"ver": v.version_id, "oid": offering_id})).mappings().all()
+        # DISTINCT stories across the offering's subcaps (a story on two of them counts once) — the
+        # per-subcap `stories` below stay each subcap's own count.
+        distinct_stories = (
+            await conn.execute(
+                text(
+                    "SELECT count(DISTINCT scl.story_key) "
+                    f"FROM {s}.offering_subcap os "
+                    "JOIN control.story_catalogue_link scl "
+                    "  ON scl.subcap_id = os.subcap_id AND scl.version_id = :ver "
+                    "WHERE os.offering_id = :oid"
+                ),
+                {"ver": v.version_id, "oid": offering_id},
+            )
+        ).scalar() or 0
     subs = [
         OfferingMatch(
             id=str(r["id"]),
@@ -2430,7 +2449,7 @@ async def offering_detail(
         outcomes=list(seed.get("outcomes", [])),
         capabilities=list(seed.get("capabilities", [])),
         n_subcaps=len(subs),
-        stories=sum(x.stories for x in subs),
+        stories=int(distinct_stories),
         pillars=pillars,
         subcaps=subs,
     )
