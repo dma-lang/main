@@ -263,7 +263,7 @@ class UseCaseRow(BaseModel):
 class ArchetypeFacet(BaseModel):
     archetype: str
     count: int
-    n_stories: int = 0  # delivery footprint = summed stories of the archetype's use cases
+    n_stories: int = 0  # DISTINCT delivered stories on the archetype's subcaps (no double-count)
 
 
 class UseCasePage(BaseModel):
@@ -2167,14 +2167,25 @@ async def list_use_cases(
             "LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
             "WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = uc.subcap_id"
         )
+        # the archetype facet joins DIRECTLY to the story links so it can count DISTINCT stories per
+        # archetype — summing the per-subcap count across a subcap's use-cases would double-count.
+        facet_joins = (
+            f"FROM {ench_s}.use_case uc "
+            f"JOIN {ench_s}.subcap sc ON sc.subcap_id = uc.subcap_id "
+            f"JOIN {ench_s}.capability cap ON cap.capability_id = sc.capability_id "
+            f"JOIN {ench_s}.category cat ON cat.category_id = cap.category_id "
+            "LEFT JOIN control.story_catalogue_link scl "
+            "  ON scl.subcap_id = uc.subcap_id AND scl.version_id = :ver"
+        )
         return await _use_cases_page(
-            conn, joins, pillar, category, archetype, q, v.version_id, sort, page, size
+            conn, joins, facet_joins, pillar, category, archetype, q, v.version_id, sort, page, size
         )
 
 
 async def _use_cases_page(
     conn: AsyncConnection,
     joins: str,
+    facet_joins: str,
     pillar: str,
     category: str,
     archetype: str,
@@ -2213,9 +2224,12 @@ async def _use_cases_page(
     )
     count_sql = text("SELECT count(*) " + joins + where)
     facet_sql = text(
-        "SELECT uc.archetype, count(*) AS count, "
-        "coalesce(sum(coalesce(stc.n, 0)), 0)::int AS n_stories "
-        + joins
+        # count = use-cases of this archetype; n_stories = DISTINCT delivered stories on the subcaps
+        # that have such a use-case (a story on a subcap with several same-archetype use-cases is
+        # counted ONCE — no per-use-case double-count).
+        "SELECT uc.archetype, count(DISTINCT uc.use_case_id) AS count, "
+        "count(DISTINCT scl.story_key)::int AS n_stories "
+        + facet_joins
         + facet_where
         + " GROUP BY uc.archetype ORDER BY n_stories DESC, count DESC, uc.archetype"
     )
