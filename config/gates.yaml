@@ -73,6 +73,19 @@ knowledge_graph:
   shares_platform_min_shared: 2
   shares_feature_min_shared: 2
   max_proposals_per_scan: 200             # bound the run (resilience: bounded everything)
+  # Co-delivery association mining (R5; services/kg._co_delivery_pairs): two CROSS-capability subcaps
+  # delivered together across the 14,406-row Jira corpus far more than chance. lift = P(A&B)/(P(A)P(B))
+  # over client baskets (story.project_key); a pair is a candidate only with real co-delivery VOLUME
+  # AND a lift above chance, so a coincidental co-occurrence is filtered. This is the latent signal the
+  # flat catalogue + the structural layers cannot see.
+  co_delivery_min_lift: 1.5               # delivered together >= 1.5x chance (above coincidence)
+  co_delivery_min_projects: 3             # in >= 3 distinct client engagements (volume floor)
+  shares_offering_min_shared: 1           # >= 1 shared productized offering (curated -> 1 is meaningful)
+  # Novelty (the "what we may not be noticing" rank): an edge's strength discounted by how OBVIOUS the
+  # link already is — same pillar and an existing shared-platform link each reduce novelty, so a strong
+  # but structurally-hidden (cross-pillar, no shared platform) relationship rises to the top.
+  novelty_same_pillar_factor: 0.6         # within one pillar -> less surprising
+  novelty_structural_factor: 0.5          # the pair already shares a platform -> the link isn't hidden
 
 # Unscoped-subvertical discovery (clients delivering outside the 9 modelled subverticals).
 # A candidate is proposed only with real volume AND when the client is not already an existing SV.

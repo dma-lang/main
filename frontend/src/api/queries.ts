@@ -18,6 +18,7 @@ import {
   type SowDetail,
   type SowDoc,
   type KgResp,
+  type LatentEdge,
   type TimelineResp,
   type WhatIfResp,
   type ChangeFlagsResp,
@@ -132,6 +133,14 @@ export const useKg = (version: string, subcap: string | null) =>
     queryKey: ['kg', version, subcap],
     queryFn: () => api.kg(version, subcap ?? ''),
     enabled: !!version && !!subcap,
+  });
+
+// "Relationships you may be missing" — catalogue-wide co-delivery links the structure hides.
+export const useKgDiscover = (version: string, enabled: boolean) =>
+  useQuery<LatentEdge[]>({
+    queryKey: ['kg-discover', version],
+    queryFn: () => api.kgDiscover(version, 24),
+    enabled: !!version && enabled,
   });
 
 export const useWhatIf = (version: string, subcap: string, action: string, enabled: boolean) =>

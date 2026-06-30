@@ -1,12 +1,14 @@
-// Knowledge graph (B3 · admin) — the structural relationships the flat catalogue hides, wired to
+// Knowledge graph (B3 · admin) — the relationships the flat catalogue hides, wired to
 // GET /api/catalogue/{v}/kg?subcap=. Layer A (solid) is a DETERMINISTIC projection of the link
-// tables (platforms used, offerings mapped, sibling subcaps sharing a platform) — every edge traces
-// to a real row. Layer B (dashed) are AI-proposed pending_edges carrying a confidence score, never
-// rendered as fact and gated in Change flags. Click a node to label its edges; double-click to open.
+// tables. Layer B (dashed, coloured by relation) are AI-proposed/accepted edges carrying a unified
+// strength — structural co-occurrence, semantic similarity, shared offering, and the LATENT
+// co-delivery links mined from the Jira corpus. "Relationships you may be missing" ranks the most
+// novel hidden links (strong but cross-pillar). Every inferred edge is grounded + gated; nothing
+// renders as fact until approved in Change flags.
 import { useEffect, useMemo, useState } from 'react';
 
-import type { KgNode } from '../api/client';
-import { useKg, useSubcaps } from '../api/queries';
+import type { KgEdge, KgNode, LatentEdge } from '../api/client';
+import { useKg, useKgDiscover, useSubcaps } from '../api/queries';
 import { Dropdown, Empty, Page, Seg } from '../components/primitives';
 import { go, openPeek } from '../lib/events';
 import { Icon } from '../lib/icons';
@@ -19,11 +21,49 @@ const KIND_COLOR: Record<string, string> = {
   theme: 'var(--z-slate)',
 };
 
+// One colour per relation so the graph reads at a glance — co-delivery (the latent Jira signal) is
+// the visual headline; structural/semantic relations each get their own hue.
+const RELATION_COLOR: Record<string, string> = {
+  co_delivered: '#8b5cf6',
+  semantically_similar: 'var(--z-teal)',
+  shares_offering: 'var(--interactive)',
+  shares_platform: 'var(--z-blue)',
+  shares_feature: 'var(--z-slate)',
+  uses_platform: 'var(--border-medium)',
+  maps_to_offering: 'var(--border-medium)',
+};
+const RELATION_LABEL: Record<string, string> = {
+  co_delivered: 'co-delivered',
+  semantically_similar: 'semantic',
+  shares_offering: 'shared offering',
+  shares_platform: 'shared platform',
+  shares_feature: 'shared persona',
+};
+const edgeColor = (kind: string) => RELATION_COLOR[kind] ?? 'var(--border-medium)';
+
+function CrossBadge({ crosses }: { crosses?: string | null }) {
+  if (!crosses) return null;
+  const xp = crosses === 'cross_pillar';
+  return (
+    <span
+      className="chip"
+      style={{
+        fontSize: 9,
+        background: xp ? 'var(--state-warn-bg)' : 'var(--surface-sunken)',
+        color: xp ? 'var(--state-warn-text)' : 'var(--text-tertiary)',
+      }}
+    >
+      {xp ? 'cross-pillar' : 'cross-capability'}
+    </span>
+  );
+}
+
 export function KnowledgeGraph() {
   const ui = useUi();
   const isAdmin = useUi((s) => s.adminView);
   const subs = useSubcaps(ui.version);
   const [layer, setLayer] = useState('full');
+  const [strong, setStrong] = useState(false);
   const [center, setCenter] = useState('');
   const [sel, setSel] = useState<string | null>(null);
 
@@ -33,28 +73,66 @@ export function KnowledgeGraph() {
   }));
   const cur = center || options[0]?.v || '';
   const kg = useKg(ui.version, isAdmin ? cur : null);
+  const discover = useKgDiscover(ui.version, isAdmin);
   useEffect(() => setSel(null), [cur, layer]);
 
-  const showB = layer !== 'A';
-  const edges = kg.data?.edges ?? [];
-  const pending = showB ? kg.data?.pending ?? [] : [];
   const centerId = kg.data?.center ?? '';
-  const visibleNodes = useMemo(() => {
-    const vis = showB ? [...(kg.data?.edges ?? []), ...(kg.data?.pending ?? [])] : kg.data?.edges ?? [];
-    const connected = new Set<string>([kg.data?.center ?? '']);
-    vis.forEach((e) => {
+
+  // Build the rendered graph: Layer A always; Layer B (pending + accepted) at +AI/Full; the centre's
+  // LATENT co-delivery links (faint dashed, with synthesized nodes) at Full. A strength filter hides
+  // the weak edges. Memoised so the layout is stable across selection changes.
+  const graph = useMemo(() => {
+    const data = kg.data;
+    if (!data) return { nodes: [] as KgNode[], edges: [] as KgEdge[] };
+    const showB = layer !== 'A';
+    const showLatent = layer === 'full';
+    const baseEdges: KgEdge[] = [...data.edges, ...(showB ? data.pending : [])];
+    const baseIds = new Set(data.nodes.map((n) => n.id));
+    const latN: KgNode[] = [];
+    const latE: KgEdge[] = [];
+    if (showLatent) {
+      const seen = new Set<string>();
+      data.latent.forEach((l) => {
+        latE.push({
+          source: l.source,
+          target: l.target,
+          kind: l.kind,
+          layer: 'latent',
+          strength: l.strength,
+          score: l.strength,
+          basis: l.basis,
+          crosses: l.crosses,
+        });
+        (
+          [
+            [l.source, l.source_name],
+            [l.target, l.target_name],
+          ] as const
+        ).forEach(([id, nm]) => {
+          if (id !== data.center && !baseIds.has(id) && !seen.has(id)) {
+            seen.add(id);
+            latN.push({ id, kind: 'subcap', label: nm, pillar: id.slice(0, 2) });
+          }
+        });
+      });
+    }
+    const min = strong ? 0.5 : 0;
+    const edges = [...baseEdges, ...latE].filter((e) => (e.strength ?? 1) >= min);
+    const connected = new Set<string>([data.center]);
+    edges.forEach((e) => {
       connected.add(e.source);
       connected.add(e.target);
     });
-    return (kg.data?.nodes ?? []).filter((n) => connected.has(n.id));
-  }, [kg.data, showB]);
+    const nodes = [...data.nodes, ...latN].filter((n) => connected.has(n.id));
+    return { nodes, edges };
+  }, [kg.data, layer, strong]);
 
   const layout = useMemo(() => {
     const W = 620;
     const H = 460;
     const cx = W / 2;
     const cy = H / 2;
-    const neighbours = visibleNodes.filter((n) => n.id !== centerId);
+    const neighbours = graph.nodes.filter((n) => n.id !== centerId);
     const pos = new Map<string, { x: number; y: number }>();
     pos.set(centerId, { x: cx, y: cy });
     neighbours.forEach((n, i) => {
@@ -63,7 +141,7 @@ export function KnowledgeGraph() {
       pos.set(n.id, { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
     });
     return { W, H, pos };
-  }, [visibleNodes, centerId]);
+  }, [graph.nodes, centerId]);
 
   const onNode = (n: KgNode) => setSel((s) => (s === n.id ? null : n.id));
   const navNode = (n: KgNode) => {
@@ -71,11 +149,14 @@ export function KnowledgeGraph() {
     else if (n.kind === 'platform') go('platforms');
   };
 
+  const latent = kg.data?.latent ?? [];
+  const globalLatent = discover.data ?? [];
+
   return (
     <Page
       eyebrow="B · Catalogue tools · admin"
       title="Knowledge graph"
-      intro="Reveal the structural relationships the flat catalogue hides. Solid edges are deterministic (Layer A); dashed orange edges are AI-proposed (semantic-similarity / shared-feature) with a confidence score, gated in the Change flags inbox before commit."
+      intro="Reveal the relationships the flat catalogue hides — structural co-occurrence, semantic similarity, and the LATENT co-delivery links mined from the Jira corpus (delivered together far more than chance). Edge thickness is the relationship strength; dashed edges are AI-proposed, gated in Change flags before commit. Nothing renders as fact ungated."
       actions={
         <div className="row gap8">
           <Dropdown value={cur} icon="branch" options={options} onChange={(v) => setCenter(v)} />
@@ -88,6 +169,14 @@ export function KnowledgeGraph() {
             value={layer}
             onChange={setLayer}
           />
+          <Seg
+            options={[
+              { v: 'all', l: 'All' },
+              { v: 'strong', l: 'Strong' },
+            ]}
+            value={strong ? 'strong' : 'all'}
+            onChange={(v) => setStrong(v === 'strong')}
+          />
         </div>
       }
     >
@@ -98,57 +187,69 @@ export function KnowledgeGraph() {
           relationships.
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 18, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 18, alignItems: 'start' }}>
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: 12 }}>
-              {kg.isLoading && <div className="muted" style={{ fontSize: 12, padding: 12 }}>Projecting the neighbourhood…</div>}
-              {kg.data && visibleNodes.length <= 1 && (
+              {kg.isLoading && (
+                <div className="muted" style={{ fontSize: 12, padding: 12 }}>
+                  Projecting the neighbourhood…
+                </div>
+              )}
+              {kg.data && graph.nodes.length <= 1 && (
                 <Empty
                   icon="graph"
-                  title="No structural edges for this subcap"
-                  desc="This subcap has no platform, offering or shared-platform links in the catalogue yet. Pick another centre, or open it to add platform mappings."
+                  title="No edges for this subcap"
+                  desc="This subcap has no platform, offering, structural or co-delivery links in this version yet. Pick another centre, or relax the strength filter."
                 />
               )}
-              {kg.data && visibleNodes.length > 1 && (
+              {kg.data && graph.nodes.length > 1 && (
                 <svg width="100%" viewBox={`0 0 ${layout.W} ${layout.H}`} style={{ display: 'block' }}>
-                  {[...edges, ...pending].map((e, i) => {
+                  {graph.edges.map((e, i) => {
                     const a = layout.pos.get(e.source);
                     const b = layout.pos.get(e.target);
                     if (!a || !b) return null;
-                    const isB = e.layer === 'B_proposed';
+                    const isLatent = e.layer === 'latent';
+                    const isB = e.layer === 'B_proposed' || isLatent;
                     const inc = sel != null && (e.source === sel || e.target === sel);
                     const dim = sel != null && !inc;
+                    const col = edgeColor(e.kind);
+                    const w = 1 + 2.6 * (e.strength ?? 0.45) + (inc ? 1 : 0);
                     return (
-                      <g key={i} opacity={dim ? 0.18 : 1}>
+                      <g key={i} opacity={dim ? 0.16 : isLatent ? 0.55 : 1}>
                         <line
                           x1={a.x}
                           y1={a.y}
                           x2={b.x}
                           y2={b.y}
-                          stroke={isB ? 'var(--z-orange)' : 'var(--border-medium)'}
-                          strokeWidth={inc ? 2.5 : 1.5}
+                          stroke={col}
+                          strokeWidth={w}
                           strokeDasharray={isB ? '5 4' : undefined}
-                        />
+                        >
+                          <title>
+                            {(RELATION_LABEL[e.kind] ?? e.kind.replace(/_/g, ' ')) +
+                              (e.basis ? ` — ${e.basis}` : '')}
+                          </title>
+                        </line>
                         {inc && (
                           <text
                             x={(a.x + b.x) / 2}
                             y={(a.y + b.y) / 2 - 3}
                             fontSize="8.5"
                             fontWeight="700"
-                            fill={isB ? 'var(--state-warn-text)' : 'var(--text-tertiary)'}
+                            fill={isB ? col : 'var(--text-tertiary)'}
                             textAnchor="middle"
                           >
-                            {e.kind.replace(/_/g, ' ')}
-                            {e.score != null ? ` · ${e.score.toFixed(2)}` : ''}
+                            {RELATION_LABEL[e.kind] ?? e.kind.replace(/_/g, ' ')}
+                            {e.strength != null ? ` · ${e.strength.toFixed(2)}` : ''}
                           </text>
                         )}
                       </g>
                     );
                   })}
-                  {visibleNodes.map((n) => {
+                  {graph.nodes.map((n) => {
                     const p = layout.pos.get(n.id);
                     if (!p) return null;
-                    const isCenter = n.id === kg.data!.center;
+                    const isCenter = n.id === centerId;
                     const r = isCenter ? 26 : n.kind === 'subcap' ? 18 : 14;
                     return (
                       <g
@@ -179,38 +280,104 @@ export function KnowledgeGraph() {
               )}
             </div>
             <div
-              className="row gap16"
-              style={{ padding: '10px 16px', borderTop: '1px solid var(--border-subtle)', fontSize: 11 }}
+              className="row gap12"
+              style={{
+                padding: '10px 16px',
+                borderTop: '1px solid var(--border-subtle)',
+                fontSize: 10.5,
+                flexWrap: 'wrap',
+              }}
             >
-              {Object.entries(KIND_COLOR).map(([k, c]) => (
+              {Object.entries(RELATION_LABEL).map(([k, l]) => (
                 <span key={k} className="row gap6">
-                  <span className="pilldot" style={{ borderRadius: '50%', width: 10, height: 10, background: c }} />
-                  {k}
+                  <span style={{ width: 14, height: 0, borderTop: `3px solid ${edgeColor(k)}` }} />
+                  {l}
                 </span>
               ))}
               <span className="grow" />
               <span className="row gap6">
-                <span style={{ width: 16, height: 0, borderTop: '2px dashed var(--z-orange)' }} />
-                AI-proposed
+                <span style={{ width: 16, height: 0, borderTop: '2px dashed var(--text-tertiary)' }} />
+                AI-proposed / latent
               </span>
-              <span className="muted">· click a node to label its edges</span>
+              <span className="muted">· thickness ∝ strength · hover an edge for the why</span>
             </div>
           </div>
           <div style={{ display: 'grid', gap: 14 }}>
+            {/* Relationships you may be missing — the headline: the most novel hidden links */}
+            <div className="card pad" style={{ borderColor: '#8b5cf6' }}>
+              <div className="row gap8" style={{ marginBottom: 4 }}>
+                <Icon n="sparkles" s={15} style={{ color: '#8b5cf6' }} />
+                <div className="h3">Relationships you may be missing</div>
+              </div>
+              <div className="muted" style={{ fontSize: 10.5, marginBottom: 10 }}>
+                Co-delivered far more than chance, yet hidden by the catalogue structure. Ranked by
+                novelty (cross-pillar, not already linked). Grounded inference — promote in Change flags.
+              </div>
+              {discover.isLoading && (
+                <div className="muted" style={{ fontSize: 12 }}>Mining the corpus…</div>
+              )}
+              {!discover.isLoading && globalLatent.length === 0 && (
+                <div className="muted" style={{ fontSize: 12 }}>
+                  No above-chance co-delivery links yet. They appear once the Jira corpus is carried.
+                </div>
+              )}
+              <div style={{ display: 'grid', gap: 7 }}>
+                {globalLatent.slice(0, 8).map((l: LatentEdge, i) => (
+                  <div
+                    key={i}
+                    className="card hov"
+                    style={{ padding: '8px 10px', cursor: 'pointer' }}
+                    onClick={() => setCenter(l.source)}
+                    title="Centre the graph on this relationship"
+                  >
+                    <div className="between" style={{ marginBottom: 3 }}>
+                      <CrossBadge crosses={l.crosses} />
+                      <span
+                        className="num"
+                        style={{ fontSize: 11, fontWeight: 700, color: '#8b5cf6' }}
+                      >
+                        {l.lift.toFixed(1)}× lift
+                      </span>
+                    </div>
+                    <div className="mono" style={{ fontSize: 10.5 }}>
+                      {l.source} ~ {l.target}
+                    </div>
+                    <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>
+                      {l.basis}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="card pad">
               <div className="h3" style={{ marginBottom: 8 }}>
                 Centre: {kg.data?.name ?? cur ?? '—'}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 10 }}>
-                {(['platforms', 'offerings', 'siblings'] as const).map((k) => (
-                  <div key={k} className="card" style={{ padding: '8px 6px', textAlign: 'center' }}>
-                    <div className="num" style={{ fontSize: 18, fontWeight: 700, color: 'var(--interactive)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 10 }}>
+                {(
+                  [
+                    ['siblings', 'structural'],
+                    ['pending', 'pending'],
+                    ['accepted', 'accepted'],
+                    ['latent', 'latent'],
+                  ] as const
+                ).map(([k, lbl]) => (
+                  <div key={k} className="card" style={{ padding: '8px 4px', textAlign: 'center' }}>
+                    <div className="num" style={{ fontSize: 16, fontWeight: 700, color: 'var(--interactive)' }}>
                       {kg.data?.stats[k] ?? 0}
                     </div>
-                    <div className="muted" style={{ fontSize: 9.5 }}>{k}</div>
+                    <div className="muted" style={{ fontSize: 9 }}>{lbl}</div>
                   </div>
                 ))}
               </div>
+              {latent.length > 0 && (
+                <div className="muted" style={{ fontSize: 10.5, marginBottom: 8 }}>
+                  This subcap is co-delivered with{' '}
+                  <b style={{ color: '#8b5cf6' }}>{latent.length}</b> subcap(s) the tree doesn’t link —
+                  shown faint-dashed on the graph.
+                </div>
+              )}
               <button
                 className="btn ghost sm"
                 style={{ width: '100%', justifyContent: 'center' }}
@@ -219,38 +386,26 @@ export function KnowledgeGraph() {
                 Open subcap <Icon n="arrowR" s={13} />
               </button>
             </div>
-            <div className="card pad">
-              <div className="h3" style={{ marginBottom: 8 }}>
-                Neighbour subcaps
-              </div>
-              <div style={{ display: 'grid', gap: 6 }}>
-                {visibleNodes
-                  .filter((n) => n.kind === 'subcap' && n.id !== centerId)
-                  .map((n) => (
-                    <div key={n.id} className="sclink mono" style={{ fontSize: 11.5 }} onClick={() => openPeek(n.id)}>
-                      {n.id} · {n.label.slice(0, 22)}
-                    </div>
-                  ))}
-                {(kg.data?.stats.siblings ?? 0) === 0 && (
-                  <div className="muted" style={{ fontSize: 12 }}>
-                    No subcap shares a platform with this one yet.
-                  </div>
-                )}
-              </div>
-            </div>
+
             <div className="card pad" style={{ borderColor: 'var(--border-medium)' }}>
               <div className="h3" style={{ marginBottom: 8 }}>
                 Pending edges ({kg.data?.stats.pending ?? 0})
               </div>
-              {pending.length > 0 ? (
+              {(kg.data?.pending ?? []).length > 0 ? (
                 <div style={{ display: 'grid', gap: 7, marginBottom: 10 }}>
-                  {pending.map((e, i) => (
+                  {(kg.data?.pending ?? []).map((e, i) => (
                     <div key={i} className="card" style={{ padding: '8px 10px' }}>
                       <div className="between" style={{ marginBottom: 4 }}>
-                        <span className="claim hypothesis">AI proposed</span>
-                        {e.score != null && (
-                          <span className="num" style={{ fontSize: 11, fontWeight: 700, color: 'var(--state-warn-text)' }}>
-                            {e.score.toFixed(2)}
+                        <span className="row gap6">
+                          <span className="claim hypothesis">AI proposed</span>
+                          <CrossBadge crosses={e.crosses} />
+                        </span>
+                        {e.strength != null && (
+                          <span
+                            className="num"
+                            style={{ fontSize: 11, fontWeight: 700, color: edgeColor(e.kind) }}
+                          >
+                            {e.strength.toFixed(2)}
                           </span>
                         )}
                       </div>
@@ -258,7 +413,7 @@ export function KnowledgeGraph() {
                         {e.source} → {e.target}
                       </div>
                       <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>
-                        {e.kind.replace(/_/g, ' ')}
+                        {e.basis ?? (RELATION_LABEL[e.kind] ?? e.kind.replace(/_/g, ' '))}
                       </div>
                     </div>
                   ))}

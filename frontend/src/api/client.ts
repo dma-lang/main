@@ -174,9 +174,30 @@ export interface KgNode {
 export interface KgEdge {
   source: string;
   target: string;
-  kind: string; // relation: uses_platform | maps_to_offering | shares_platform | semantically_similar
+  kind: string; // uses_platform | maps_to_offering | shares_platform | co_delivered | shares_offering...
   layer: string;
   score?: number | null; // Layer-B proposal confidence (pending_edge.weight)
+  strength?: number | null; // unified 0..1 edge strength (thickness ∝ this)
+  basis?: string | null; // the human "why" — e.g. "co-delivered in 7 engagements (lift 4.2)"
+  crosses?: string | null; // cross_capability | cross_pillar
+}
+
+// A "relationship you may be missing": a co-delivery link the catalogue structure hides, surfaced
+// read-time (grounded INFERENCE — never a committed fact until promoted + gated).
+export interface LatentEdge {
+  source: string;
+  source_name: string;
+  target: string;
+  target_name: string;
+  kind: string;
+  strength: number;
+  novelty: number;
+  crosses: string; // cross_capability | cross_pillar
+  lift: number;
+  co_projects: number;
+  co_stories: number;
+  basis: string;
+  claim_label: string;
 }
 
 export interface KgResp {
@@ -186,6 +207,7 @@ export interface KgResp {
   edges: KgEdge[];
   stats: Record<string, number>;
   pending: KgEdge[];
+  latent: LatentEdge[]; // read-time co-delivery discovery for this subcap (INFERENCE)
 }
 
 export interface SowDoc {
@@ -1256,6 +1278,8 @@ export const api = {
     http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
   kg: (v: string, subcap: string): Promise<KgResp> =>
     http<KgResp>(`/api/catalogue/${v}/kg?subcap=${encodeURIComponent(subcap)}`),
+  kgDiscover: (v: string, limit = 30): Promise<LatentEdge[]> =>
+    http<LatentEdge[]>(`/api/catalogue/${v}/kg/discover?limit=${limit}`),
   whatif: (v: string, subcap: string, action: string): Promise<WhatIfResp> =>
     http<WhatIfResp>(
       `/api/catalogue/${v}/whatif?subcap=${encodeURIComponent(subcap)}&action=${action}`,

@@ -220,6 +220,33 @@ def knowledge_graph_semantic_config() -> float:
     return cosine
 
 
+def knowledge_graph_codelivery_config() -> tuple[float, int, int]:
+    """(min_lift, min_projects, shares_offering_min) for the R5 KG co-delivery + co-membership
+    mining. A cross-capability pair is a co-delivery candidate only when delivered together across
+    >= ``min_projects`` client engagements AND with a lift (P(A&B)/(P(A)P(B))) >= ``min_lift`` (real
+    volume above chance). ``shares_offering_min`` is the shared-offering count for a co-membership
+    edge. Config, not code."""
+    section = load_gate_config().get("knowledge_graph") or {}
+    min_lift = float(section.get("co_delivery_min_lift", 1.5))
+    min_proj = int(section.get("co_delivery_min_projects", 3))
+    off_min = int(section.get("shares_offering_min_shared", 1))
+    if min_lift <= 0 or min_proj < 1 or off_min < 1:
+        raise ValueError("gates.yaml: invalid knowledge_graph co-delivery thresholds")
+    return min_lift, min_proj, off_min
+
+
+def knowledge_graph_novelty_config() -> tuple[float, float]:
+    """(same_pillar_factor, structural_factor): novelty discounts that rank latent KG edges so the
+    strong-but-hidden ones surface. A pair within one pillar is multiplied by the first factor, a
+    pair already sharing a platform by the second. Both in (0, 1]. Config, not code."""
+    section = load_gate_config().get("knowledge_graph") or {}
+    sp = float(section.get("novelty_same_pillar_factor", 0.6))
+    st = float(section.get("novelty_structural_factor", 0.5))
+    if not (0 < sp <= 1 and 0 < st <= 1):
+        raise ValueError("gates.yaml: novelty factors must be in (0, 1]")
+    return sp, st
+
+
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
     """Run G5 + G7 over a grounded answer; return the gate_results jsonb and the verdict."""
     g5 = retrieval_count > 0 and citation_count > 0

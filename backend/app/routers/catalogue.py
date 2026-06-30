@@ -965,9 +965,31 @@ class KgNode(BaseModel):
 class KgEdge(BaseModel):
     source: str
     target: str
-    kind: str  # uses_platform | maps_to_offering | shares_platform | semantically_similar
+    kind: str  # uses_platform | maps_to_offering | shares_platform | co_delivered | shares_offering
     layer: str  # A_deterministic | B_proposed
     score: float | None = None  # Layer-B proposal confidence (pending_edge.weight); None for A
+    strength: float | None = None  # unified 0..1 edge strength (thickness ∝ this in the UI)
+    basis: str | None = None  # the human "why" — e.g. "co-delivered in 7 engagements (lift 4.2)"
+    crosses: str | None = None  # cross_capability | cross_pillar (for Layer-B subcap~subcap edges)
+
+
+class LatentEdge(BaseModel):
+    """A "relationship you may be missing": a co-delivery link the catalogue structure hides,
+    surfaced read-time (grounded INFERENCE, never a committed fact until promoted + gated)."""
+
+    source: str
+    source_name: str
+    target: str
+    target_name: str
+    kind: str
+    strength: float
+    novelty: float
+    crosses: str  # cross_capability | cross_pillar
+    lift: float
+    co_projects: int
+    co_stories: int
+    basis: str
+    claim_label: str
 
 
 class KgResp(BaseModel):
@@ -977,6 +999,7 @@ class KgResp(BaseModel):
     edges: list[KgEdge]
     stats: dict[str, int]
     pending: list[KgEdge]  # Layer B — AI-proposed, gated in Change Flags (dashed, never fact)
+    latent: list[LatentEdge] = []  # read-time co-delivery discovery for this subcap (INFERENCE)
 
 
 @router.get("/{version}/kg")
@@ -1057,13 +1080,38 @@ async def knowledge_graph(
                     text(
                         "SELECT fn.ref_id AS source, fn.label AS source_label, "
                         "tn.ref_id AS target, tn.label AS target_label, pe.kind::text AS kind, "
-                        "pe.weight AS score "
+                        "pe.weight AS score, cf.detail ->> 'basis' AS basis, "
+                        "cf.detail ->> 'crosses' AS crosses "
                         "FROM control.pending_edge pe "
                         "JOIN control.kg_node fn ON fn.node_id = pe.from_node "
                         "JOIN control.kg_node tn ON tn.node_id = pe.to_node "
+                        "LEFT JOIN control.change_flag cf ON cf.kind = 'kg_edge_proposal' "
+                        "  AND (cf.detail ->> 'pending_id') = pe.pending_id::text "
                         "WHERE pe.version_id = :ver "
                         "AND (fn.ref_id = :sid OR tn.ref_id = :sid) "
-                        "AND pe.status = 'pending' LIMIT 10"
+                        "AND pe.status = 'pending' ORDER BY pe.weight DESC LIMIT 16"
+                    ),
+                    params,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        # accepted Layer-B edges (a human approved them) — render so approval shows in the graph,
+        # with the basis carried onto the edge so it still explains "why related".
+        accepted = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT fn.ref_id AS source, fn.label AS source_label, "
+                        "tn.ref_id AS target, tn.label AS target_label, ke.kind::text AS kind, "
+                        "ke.weight AS score, ke.detail ->> 'basis' AS basis, "
+                        "ke.detail ->> 'crosses' AS crosses "
+                        "FROM control.kg_edge ke "
+                        "JOIN control.kg_node fn ON fn.node_id = ke.from_node "
+                        "JOIN control.kg_node tn ON tn.node_id = ke.to_node "
+                        "WHERE ke.version_id = :ver AND ke.layer = 'B_proposed' "
+                        "AND (fn.ref_id = :sid OR tn.ref_id = :sid) LIMIT 16"
                     ),
                     params,
                 )
@@ -1085,35 +1133,101 @@ async def knowledge_graph(
         )
     for sb in sibs:
         nodes.append(KgNode(id=sb["id"], kind="subcap", label=sb["name"], pillar=sb["pillar"]))
+        shared = int(sb["shared"])
         edges.append(
-            KgEdge(source=subcap, target=sb["id"], kind="shares_platform", layer="A_deterministic")
+            KgEdge(
+                source=subcap,
+                target=sb["id"],
+                kind="shares_platform",
+                layer="A_deterministic",
+                basis=f"{shared} shared platform" + ("s" if shared != 1 else ""),
+            )
         )
-    pending: list[KgEdge] = []
     existing_ids = {n.id for n in nodes}
+
+    def _add_neighbour(ref: str, label: object) -> None:
+        if ref != subcap and ref not in existing_ids:
+            nodes.append(KgNode(id=ref, kind="subcap", label=str(label), pillar=ref[:2]))
+            existing_ids.add(ref)
+
+    # accepted Layer-B edges render in the main graph (human-confirmed inferred relationships), each
+    # still carrying its basis so the "why" survives approval.
+    for r in accepted:
+        sc = float(r["score"]) if r["score"] is not None else None
+        edges.append(
+            KgEdge(
+                source=r["source"],
+                target=r["target"],
+                kind=r["kind"],
+                layer="B_proposed",
+                score=sc,
+                strength=sc,
+                basis=r["basis"],
+                crosses=r["crosses"],
+            )
+        )
+        _add_neighbour(r["source"], r["source_label"])
+        _add_neighbour(r["target"], r["target_label"])
+
+    pending: list[KgEdge] = []
     for p in pend:
+        sc = float(p["score"]) if p["score"] is not None else None
         pending.append(
             KgEdge(
                 source=p["source"],
                 target=p["target"],
                 kind=p["kind"],
                 layer="B_proposed",
-                score=float(p["score"]) if p["score"] is not None else None,
+                score=sc,
+                strength=sc,
+                basis=p["basis"],
+                crosses=p["crosses"],
             )
         )
-        # add the proposed neighbour subcap node(s) so the dashed edge connects to a drawn node
-        for ref, label in ((p["source"], p["source_label"]), (p["target"], p["target_label"])):
-            if ref != subcap and ref not in existing_ids:
-                nodes.append(KgNode(id=ref, kind="subcap", label=str(label), pillar=ref[:2]))
-                existing_ids.add(ref)
+        _add_neighbour(p["source"], p["source_label"])
+        _add_neighbour(p["target"], p["target_label"])
+
+    # "Relationships you may be missing" for this subcap — read-time co-delivery discovery (grounded
+    # INFERENCE, never committed fact); a side panel, not graph nodes.
+    from app.services import kg as _kg_svc
+
+    latent = [
+        LatentEdge(**d) for d in await _kg_svc.discover_latent(version, center=subcap, limit=6)
+    ]
     stats = {
         "platforms": len(plats),
         "offerings": len(offs),
         "siblings": len(sibs),
         "pending": len(pending),
+        "accepted": len(accepted),
+        "latent": len(latent),
     }
     return KgResp(
-        center=subcap, name=str(name[0]), nodes=nodes, edges=edges, stats=stats, pending=pending
+        center=subcap,
+        name=str(name[0]),
+        nodes=nodes,
+        edges=edges,
+        stats=stats,
+        pending=pending,
+        latent=latent,
     )
+
+
+@router.get("/{version}/kg/discover")
+async def kg_discover(
+    version: str,
+    subcap: str | None = None,
+    limit: int = 30,
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> list[LatentEdge]:
+    """ "Relationships you may be missing" — the catalogue-wide co-delivery links the flat structure
+    hides, ranked by NOVELTY (strong but cross-pillar / not already structurally visible). Grounded
+    read-time INFERENCE over the Jira corpus (never a committed fact); ``subcap`` scopes to one
+    subcap's hidden links, else the whole graph. Promote any to a gated edge to commit it."""
+    from app.services import kg as _kg_svc
+
+    rows = await _kg_svc.discover_latent(version, center=subcap, limit=max(1, min(limit, 100)))
+    return [LatentEdge(**d) for d in rows]
 
 
 class WhatIfRef(BaseModel):
