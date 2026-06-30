@@ -249,21 +249,33 @@ class VendorCellSubcap(BaseModel):
 
 class UseCaseRow(BaseModel):
     use_case_id: str
-    archetype: str | None = None
+    archetype: str | None = None  # the raw archetype CODE (leaderboard / filter key)
+    name: str | None = None  # readable title (humanized archetype)
     description: str | None = None
     subcap_id: str
     subcap_name: str
     pillar: str
-    category: str
-    cluster: str | None = None  # the L1 capability the use case's subcap belongs to
-    maturity: str | None = None  # the owning subcap's tier (M-level proxy)
-    n_stories: int = 0  # delivered Jira stories on the owning subcap (this version)
+    category: str  # the L1 capability (category.name) the use case belongs to
+    category_id: str  # the L1 capability id (P1C1 …) the capability toggle filters on
+    cluster: str | None = None  # the L2 capability ("cluster") the owning subcap sits in
+    maturity: str | None = None  # the use case's OWN maturity (e.g. M3+), not the subcap tier
+    is_new: bool = False  # flagged new in this catalogue version
+    n_stories: int = 0  # Jira stories MATCHED to this use case (real per-use-case delivery)
+    subcap_stories: int = 0  # the owning subcap's total delivery (for the "X of N" context)
 
 
 class ArchetypeFacet(BaseModel):
     archetype: str
-    count: int
-    n_stories: int = 0  # DISTINCT delivered stories on the archetype's subcaps (no double-count)
+    count: int  # distinct use cases of this archetype (in scope)
+    n_stories: int = 0  # DISTINCT stories matched to this archetype's use cases (no double-count)
+
+
+class CategoryFacet(BaseModel):
+    category_id: str  # L1 capability id (P1C1 …)
+    category: str  # L1 capability name
+    pillar: str
+    use_cases: int  # distinct use cases in this L1 (in scope)
+    n_stories: int = 0  # DISTINCT stories matched to this L1's use cases
 
 
 class UseCasePage(BaseModel):
@@ -272,6 +284,7 @@ class UseCasePage(BaseModel):
     size: int
     items: list[UseCaseRow]
     archetypes: list[ArchetypeFacet]
+    categories: list[CategoryFacet] = []  # L1-capability grouping (matched-story totals)
 
 
 class LifecycleSubcap(BaseModel):
@@ -2166,39 +2179,32 @@ async def list_use_cases(
     size: int = Query(12, ge=1, le=60),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> UseCasePage:
-    """Actual use cases, delivery-ranked, filterable by pillar / area / type / text (Use case
-    explorer). Inherits the reference's use cases when this version has none of its own."""
+    """Actual use cases, ranked by the Jira stories MATCHED to them (Use case explorer), filterable
+    by pillar / capability area (L1) / type / text. Inherits the reference's use cases when this
+    version has none of its own; per-use-case delivery is the story->use-case match (not the subcap
+    total), so two use cases of the same subcap no longer show the same number."""
     v = await resolve_version(version)
     s = _schema(v)
     async with _engine().connect() as conn:
         ench_s = await _enrichment_schema(conn, s, "use_case")
-        joins = (
-            f"FROM {ench_s}.use_case uc "
-            f"JOIN {ench_s}.subcap sc ON sc.subcap_id = uc.subcap_id "
-            f"JOIN {ench_s}.capability cap ON cap.capability_id = sc.capability_id "
-            f"JOIN {ench_s}.category cat ON cat.category_id = cap.category_id "
-            "LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
-            "WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = uc.subcap_id"
-        )
-        # the archetype facet joins DIRECTLY to the story links so it can count DISTINCT stories per
-        # archetype — summing the per-subcap count across a subcap's use-cases would double-count.
-        facet_joins = (
-            f"FROM {ench_s}.use_case uc "
-            f"JOIN {ench_s}.subcap sc ON sc.subcap_id = uc.subcap_id "
-            f"JOIN {ench_s}.capability cap ON cap.capability_id = sc.capability_id "
-            f"JOIN {ench_s}.category cat ON cat.category_id = cap.category_id "
-            "LEFT JOIN control.story_catalogue_link scl "
-            "  ON scl.subcap_id = uc.subcap_id AND scl.version_id = :ver"
-        )
         return await _use_cases_page(
-            conn, joins, facet_joins, pillar, category, archetype, q, v.version_id, sort, page, size
+            conn, ench_s, pillar, category, archetype, q, v.version_id, sort, page, size
         )
+
+
+# story->use-case MATCHED delivery (real per-use-case count) + the owning subcap's total for context
+_UC_MATCH_JOIN = (
+    "LEFT JOIN (SELECT use_case_id, count(DISTINCT story_key) n "
+    "FROM control.story_use_case_link WHERE version_id = :ver GROUP BY use_case_id) ucm "
+    "ON ucm.use_case_id = uc.use_case_id "
+    "LEFT JOIN (SELECT subcap_id, count(*) n FROM control.story_catalogue_link "
+    "WHERE version_id = :ver GROUP BY subcap_id) stc ON stc.subcap_id = uc.subcap_id"
+)
 
 
 async def _use_cases_page(
     conn: AsyncConnection,
-    joins: str,
-    facet_joins: str,
+    ench_s: str,
     pillar: str,
     category: str,
     archetype: str,
@@ -2208,15 +2214,34 @@ async def _use_cases_page(
     page: int,
     size: int,
 ) -> UseCasePage:
+    base = (
+        f"FROM {ench_s}.use_case uc "
+        f"JOIN {ench_s}.subcap sc ON sc.subcap_id = uc.subcap_id "
+        f"JOIN {ench_s}.capability cap ON cap.capability_id = sc.capability_id "
+        f"JOIN {ench_s}.category cat ON cat.category_id = cap.category_id "
+    )
+    text_q = (
+        "(:q = '' OR uc.description ILIKE :qlike OR uc.name ILIKE :qlike OR sc.name ILIKE :qlike)"
+    )
     where = (
         " WHERE (:pillar = '' OR left(uc.subcap_id, 2) = :pillar) "
         "AND (:category = '' OR cat.category_id = :category) "
-        "AND (:archetype = '' OR uc.archetype = :archetype) "
-        "AND (:q = '' OR uc.description ILIKE :qlike OR sc.name ILIKE :qlike)"
+        "AND (:archetype = '' OR uc.archetype = :archetype) AND " + text_q
     )
-    facet_where = (
+    # the archetype leaderboard joins the match links DIRECTLY so it counts DISTINCT matched stories
+    # per archetype (scope = pillar + category); the L1-category facet drops the category filter so
+    # it can drive the capability-toggle / section headers across the whole pillar.
+    arch_where = (
         " WHERE (:pillar = '' OR left(uc.subcap_id, 2) = :pillar) "
         "AND (:category = '' OR cat.category_id = :category) AND uc.archetype IS NOT NULL"
+    )
+    cat_where = (
+        " WHERE (:pillar = '' OR left(uc.subcap_id, 2) = :pillar) "
+        "AND (:archetype = '' OR uc.archetype = :archetype) AND " + text_q
+    )
+    match_links = (
+        "LEFT JOIN control.story_use_case_link sucl "
+        "ON sucl.use_case_id = uc.use_case_id AND sucl.version_id = :ver "
     )
     params = {
         "pillar": pillar,
@@ -2228,34 +2253,88 @@ async def _use_cases_page(
     }
     order = "sc.name, uc.use_case_id" if sort == "alpha" else "n_stories DESC, uc.use_case_id"
     items_sql = text(
-        "SELECT uc.use_case_id, uc.archetype, uc.description, uc.subcap_id, "
+        "SELECT uc.use_case_id, uc.archetype, uc.name, uc.description, uc.subcap_id, "
         "sc.name AS subcap_name, left(uc.subcap_id, 2) AS pillar, cat.name AS category, "
-        "cap.name AS cluster, sc.tier AS maturity, coalesce(stc.n, 0)::int AS n_stories "
-        + joins
+        "cat.category_id, cap.name AS cluster, uc.maturity, uc.is_new, "
+        "coalesce(ucm.n, 0)::int AS n_stories, coalesce(stc.n, 0)::int AS subcap_stories "
+        + base
+        + _UC_MATCH_JOIN
         + where
         + f" ORDER BY {order} LIMIT :size OFFSET :off"
     )
-    count_sql = text("SELECT count(*) " + joins + where)
-    facet_sql = text(
-        # count = use-cases of this archetype; n_stories = DISTINCT delivered stories on the subcaps
-        # that have such a use-case (a story on a subcap with several same-archetype use-cases is
-        # counted ONCE — no per-use-case double-count).
+    count_sql = text("SELECT count(*) " + base + where)
+    arch_sql = text(
         "SELECT uc.archetype, count(DISTINCT uc.use_case_id) AS count, "
-        "count(DISTINCT scl.story_key)::int AS n_stories "
-        + facet_joins
-        + facet_where
+        "count(DISTINCT sucl.story_key)::int AS n_stories "
+        + base
+        + match_links
+        + arch_where
         + " GROUP BY uc.archetype ORDER BY n_stories DESC, count DESC, uc.archetype"
+    )
+    cat_sql = text(
+        "SELECT cat.category_id, cat.name AS category, left(uc.subcap_id, 2) AS pillar, "
+        "count(DISTINCT uc.use_case_id) AS use_cases, "
+        "count(DISTINCT sucl.story_key)::int AS n_stories "
+        + base
+        + match_links
+        + cat_where
+        + " GROUP BY cat.category_id, cat.name, left(uc.subcap_id, 2) "
+        + "ORDER BY n_stories DESC, cat.category_id"
     )
     total = (await conn.execute(count_sql, params)).scalar() or 0
     off = (page - 1) * size
     rows = (await conn.execute(items_sql, {**params, "size": size, "off": off})).mappings().all()
-    facets = (await conn.execute(facet_sql, params)).mappings().all()
+    arch = (await conn.execute(arch_sql, params)).mappings().all()
+    cats = (await conn.execute(cat_sql, params)).mappings().all()
     return UseCasePage(
         total=int(total),
         page=page,
         size=size,
         items=[UseCaseRow.model_validate(dict(r)) for r in rows],
-        archetypes=[ArchetypeFacet.model_validate(dict(r)) for r in facets],
+        archetypes=[ArchetypeFacet.model_validate(dict(r)) for r in arch],
+        categories=[CategoryFacet.model_validate(dict(r)) for r in cats],
+    )
+
+
+@router.get("/{version}/use-cases/{use_case_id}/stories")
+async def use_case_stories(
+    version: str,
+    use_case_id: str,
+    page: int = Query(1, ge=1),
+    size: int = Query(12, ge=1, le=100),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> StoryPage:
+    """The Jira stories MATCHED to this use case (story->use-case), highest composite first — the
+    drawer's delivering stories for the use case ITSELF, not the whole owning subcap."""
+    v = await resolve_version(version)
+    where = (
+        "FROM control.story_use_case_link l "
+        "JOIN control.story st ON st.story_key = l.story_key "
+        "WHERE l.version_id = :ver AND l.use_case_id = :uid"
+    )
+    rows_sql = text(
+        "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
+        "st.composite_score::float AS composite_score, st.ac_score::float AS ac_score, "
+        "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
+        "st.delivery_score::float AS delivery_score, st.epic_key, st.cap_name, "
+        "st.category_name, st.reusability_layer, st.population, "
+        "st.story_sv_code, st.tier, st.is_synthetic "
+        + where
+        + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
+    )
+    params = {"ver": v.version_id, "uid": use_case_id}
+    async with _engine().connect() as conn:
+        total = (await conn.execute(text("SELECT count(*) " + where), params)).scalar() or 0
+        rows = (
+            (await conn.execute(rows_sql, {**params, "size": size, "off": (page - 1) * size}))
+            .mappings()
+            .all()
+        )
+    return StoryPage(
+        total=int(total),
+        page=page,
+        size=size,
+        items=[StoryRow.model_validate(dict(r)) for r in rows],
     )
 
 

@@ -181,6 +181,19 @@ def offerings_match_config() -> tuple[float, int, int]:
     return floor, top_k, max_per
 
 
+def use_case_match_config() -> tuple[float, bool]:
+    """(match_floor, multi_match) for the story -> use-case matcher (services/use_case_match). The
+    floor separates a confirmed match from a weak-overlap 'review' one; ``multi_match`` toggles
+    single best match (counts partition the subcap's stories) vs a story matching several use cases.
+    Config, not code — recalibrated without a deploy."""
+    section = load_gate_config().get("use_case_match") or {}
+    floor = float(section.get("match_floor", 0.06))
+    multi = bool(section.get("multi_match", False))
+    if not 0 <= floor <= 1:
+        raise ValueError("gates.yaml: use_case_match.match_floor must be in [0, 1]")
+    return floor, multi
+
+
 def knowledge_graph_config() -> tuple[int, int, int]:
     """(shares_platform_min, shares_feature_min, max_proposals) for the deterministic KG Layer-B
     structural builder: how many distinct L3 platforms two cross-capability subcaps must share to

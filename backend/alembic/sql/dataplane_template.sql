@@ -120,7 +120,9 @@ CREATE TABLE {schema}.use_case (
     subcap_id       text NOT NULL REFERENCES {schema}.subcap(subcap_id),
     archetype       text,
     name            text NOT NULL,
-    description     text
+    description     text,
+    maturity        text,                            -- the use case's OWN maturity (e.g. M3+), not the subcap tier
+    is_new          boolean NOT NULL DEFAULT false   -- flagged "new in this version" in the source catalogue
 );
 
 CREATE TABLE {schema}.maturity_descriptor (      

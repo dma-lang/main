@@ -103,3 +103,13 @@ offerings:
   match_floor: 0.12             # combined hybrid-score floor — below this a subcap is NOT matched
   top_k_per_capability: 8       # candidate subcaps retrieved per named capability
   max_subcaps_per_offering: 30  # bound the matches kept per offering (resilience: bounded everything)
+
+# Story -> use-case matching (services/use_case_match). Carry-forward maps a story to a SUBCAP only,
+# so every use case under a subcap shows that subcap's full delivery (the "static number"). This
+# attributes each carried story to the best-matching USE CASE of its subcap by term-frequency cosine
+# (the story summary vs the use-case title + description), so per-use-case delivery is REAL — under
+# single best match the counts PARTITION the subcap's stories across its use cases. Below the floor
+# the match still counts (nothing is dropped) but is flagged 'review' (weak overlap). Config, not code.
+use_case_match:
+  match_floor: 0.06             # TF-cosine below this -> matched but status='review'
+  multi_match: false            # single best match (partition) vs multi-match (a story -> several use cases)

@@ -278,11 +278,38 @@ def test_use_cases(client: TestClient) -> None:
     assert body["total"] > 0
     assert len(body["items"]) == 5
     assert len(body["archetypes"]) > 0
-    assert {"use_case_id", "archetype", "subcap_id", "pillar", "category"} <= set(body["items"][0])
+    it = body["items"][0]
+    # the parse is complete: readable title + the use case's OWN maturity/new flag + L1 id, and the
+    # delivery number is the story->use-case MATCH (not the subcap total), with subcap for context.
+    assert {
+        "use_case_id",
+        "archetype",
+        "name",
+        "subcap_id",
+        "pillar",
+        "category",
+        "category_id",
+        "is_new",
+        "n_stories",
+        "subcap_stories",
+    } <= set(it)
+    assert it["n_stories"] <= it["subcap_stories"]  # matched <= the subcap's whole delivery
+    # the L1-capability grouping facet (matched-story totals per category)
+    assert body["categories"] and {"category_id", "category", "use_cases", "n_stories"} <= set(
+        body["categories"][0]
+    )
     # pillar filter narrows the set
     p4 = client.get("/api/catalogue/v7/use-cases?pillar=P4&size=1").json()
     assert 0 < p4["total"] < body["total"]
     assert all(left == "P4" for left in [i["pillar"] for i in p4["items"]])
+
+    # the matched-stories drawer endpoint resolves to the StoryPage shape and reconciles with the
+    # use case's count (this fixture provisions without carry, so the match set is 0 here; the
+    # non-zero matched-delivery path is covered in test_use_case_match).
+    uc_id = it["use_case_id"]
+    st = client.get(f"/api/catalogue/v7/use-cases/{uc_id}/stories").json()
+    assert {"total", "page", "size", "items"} <= set(st)
+    assert st["total"] == it["n_stories"]
 
 
 @needs_db

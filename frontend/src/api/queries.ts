@@ -226,6 +226,14 @@ export const useSubcapStories = (version: string, id: string | null, synthetic =
     enabled: !!version && !!id,
   });
 
+// the Jira stories MATCHED to a specific use case (story->use-case), for the Use Case drawer
+export const useUseCaseStories = (version: string, useCaseId: string | null) =>
+  useQuery<StoryPage>({
+    queryKey: ['use-case-stories', version, useCaseId],
+    queryFn: () => api.useCaseStories(version, useCaseId ?? '', 1, 12),
+    enabled: !!version && !!useCaseId,
+  });
+
 export const useSubcapDelivery = (version: string, id: string | null, synthetic = false) =>
   useQuery<DeliveryDrill>({
     queryKey: ['subcap-delivery', version, id, synthetic],

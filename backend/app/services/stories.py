@@ -336,6 +336,16 @@ async def carry_forward(
     except Exception as exc:  # noqa: BLE001 - never block carry-forward on the offerings matcher
         logger.warning("offerings matcher unavailable for %s: %s", target_version, exc)
 
+    # Story -> use-case matching: attribute each subcap's carried stories to its own use cases
+    # (term-frequency cosine), so the Use Case Explorer shows REAL per-use-case delivery instead of
+    # the subcap total. Best-effort + hermetic-safe; a failure leaves the subcap-level carry intact.
+    try:
+        from app.services import use_case_match as _ucm
+
+        await _ucm.match_use_cases(target_version)
+    except Exception as exc:  # noqa: BLE001 - never block carry-forward on the use-case matcher
+        logger.warning("use-case matcher unavailable for %s: %s", target_version, exc)
+
     confirmed = sum(1 for c in carries if c["status"] == "confirmed")
     unmapped = sum(1 for c in carries if c["status"] == "unmapped")
     distinct = len({c["carried_to_subcap"] for c in carries if c["carried_to_subcap"]})

@@ -34,6 +34,23 @@ All notable changes to this project are documented here. The format is based on
   `--client-id` to set the OAuth client id. Documented as the recommended path in DEPLOYMENT A11.
 
 ### Fixed
+- **Use Case Explorer shows REAL per-use-case delivery, not the subcap total.** Carry-forward maps a
+  Jira story to a *subcap* only, so every use case under a subcap showed that subcap's whole delivery
+  — the same "static number" on each, and a drawer that listed the subcap's stories. A new
+  deterministic matcher (`services/use_case_match`, run inside `carry_forward` so the deploy
+  self-refresh rebuilds it) scores each carried story against its subcap's individual use cases by a
+  **per-subcap TF-IDF cosine** (story summary vs use-case title + description + archetype) and writes
+  the best match to `control.story_use_case_carry`. The IDF is computed over the subcap's *own* use
+  cases, so a term shared by all of them (e.g. "case") carries no weight and only *discriminating*
+  terms drive the match. **Grounded only:** a story is attributed solely when it shares a real
+  discriminating term — a terse implementation summary that overlaps none of its subcap's conceptual
+  use cases stays subcap-level "general delivery", never force-pinned onto a use case. So per-use-case
+  counts are real and differentiated (sum ≤ the subcap's delivery, never fabricated to equal it), the
+  drawer shows the use case's *own* matched stories (new `/use-cases/{id}/stories`), and the explorer
+  groups by L1 capability with matched-story totals. The parse is also completed — each use case now
+  carries its **own** maturity + "new" flag and a readable title (humanized archetype, e.g.
+  `AI_AUTHOR` → "AI Author"), instead of the subcap's tier and the raw code. Inherited to v5 (matches
+  v5's own carried delivery onto the reference's use cases). `config/gates.yaml::use_case_match`.
 - **Trend detection is time-robust — the hermetic news fixture rebases to the scan date.** The
   recorded news fixture carried absolute publish dates; trend detection (D2) reasons over a rolling
   8-week window whose velocity signal rewards a recent burst, so as real time passed the whole

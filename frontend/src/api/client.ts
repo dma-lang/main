@@ -1015,15 +1015,27 @@ export interface VendorCellSubcap {
 
 export interface UseCaseRow {
   use_case_id: string;
-  archetype: string | null;
+  archetype: string | null; // raw archetype code (filter key)
+  name: string | null; // readable title (humanized archetype)
   description: string | null;
   subcap_id: string;
   subcap_name: string;
   pillar: string;
+  category: string; // L1 capability name
+  category_id: string; // L1 capability id (P1C1 …)
+  cluster: string | null; // L2 capability ("cluster")
+  maturity: string | null; // the use case's OWN maturity (e.g. M3+)
+  is_new: boolean;
+  n_stories: number; // Jira stories MATCHED to this use case (real per-use-case delivery)
+  subcap_stories: number; // the owning subcap's total delivery (for "X of N" context)
+}
+
+export interface UseCaseCategory {
+  category_id: string;
   category: string;
-  cluster: string | null;
-  maturity: string | null; // owning subcap tier
-  n_stories: number; // delivered stories on the owning subcap
+  pillar: string;
+  use_cases: number;
+  n_stories: number; // distinct stories matched to this L1's use cases
 }
 
 export interface UseCasePage {
@@ -1032,6 +1044,7 @@ export interface UseCasePage {
   size: number;
   items: UseCaseRow[];
   archetypes: { archetype: string; count: number; n_stories: number }[];
+  categories: UseCaseCategory[]; // L1-capability grouping (matched-story totals)
 }
 
 export interface UseCaseQuery {
@@ -1230,6 +1243,10 @@ export const api = {
   subcapStories: (v: string, id: string, page = 1, size = 8, synthetic = false): Promise<StoryPage> =>
     http<StoryPage>(
       `/api/catalogue/${v}/subcaps/${id}/stories?page=${page}&size=${size}&include_synthetic=${synthetic}`,
+    ),
+  useCaseStories: (v: string, id: string, page = 1, size = 12): Promise<StoryPage> =>
+    http<StoryPage>(
+      `/api/catalogue/${v}/use-cases/${encodeURIComponent(id)}/stories?page=${page}&size=${size}`,
     ),
   subcapDelivery: (v: string, id: string, synthetic = false): Promise<DeliveryDrill> =>
     http<DeliveryDrill>(

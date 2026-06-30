@@ -32,6 +32,20 @@ _COUNT = re.compile(r"\s*\(count:\s*\d+\)\s*$")
 _MARKER = re.compile(r"\[(L3-[A-Z0-9-]+)\]\s*([^\n\[]*)")
 _PREFIX = re.compile(r"(L3-[A-Z0-9]+)-")
 
+# Use-case archetypes are CODES (AI_AUTHOR, EXEC_DASHBOARD); humanise them into a readable title
+# while preserving common acronyms, so cards show "AI Author" not the raw code.
+_ACRONYMS = {
+    "AI", "ML", "API", "UI", "UX", "KPI", "CRM", "ERP", "SLA", "KYC", "AML", "ETL",
+    "BI", "NLP", "LLM", "RPA", "ROI", "SQL", "PDF", "CDP", "SDK", "OCR", "IVR", "QA",
+}
+
+
+def _humanize(code: str) -> str:
+    """``AI_AUTHOR`` -> ``AI Author`` (acronyms kept upper); a blank falls back to the code."""
+    words = [w for w in re.split(r"[_\s]+", (code or "").strip()) if w]
+    titled = [w.upper() if w.upper() in _ACRONYMS else w.capitalize() for w in words]
+    return " ".join(titled) or (code or "")
+
 
 def _parse_l3s(platforms: list[dict]) -> dict[str, str]:
     """Every (l3_id -> name) packed into a subcap's platform cells."""
@@ -73,8 +87,14 @@ def main() -> None:
                     "use_case_id": f"{sid}.{ucid}",
                     "subcap_id": sid,
                     "archetype": arch,
-                    "name": arch,
+                    # readable title (the source carries no separate name) — humanize the archetype
+                    # CODE; the raw code stays in ``archetype`` for the leaderboard / filter.
+                    "name": _humanize(arch),
                     "description": u.get("text") or u.get("desc") or "",
+                    # the use case's OWN maturity + "new" flag (the previous parse dropped both, so
+                    # cards fell back to the subcap's tier and never showed a "new" badge).
+                    "maturity": (str(u.get("mat") or u.get("maturity") or "").strip() or None),
+                    "is_new": bool(u.get("neww") or u.get("new") or u.get("is_new")),
                 }
             )
 

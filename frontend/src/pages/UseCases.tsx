@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import type { UseCaseRow } from '../api/client';
-import { useSubcaps, useSubcapStories, useUseCases } from '../api/queries';
+import { useSubcaps, useUseCaseStories, useUseCases } from '../api/queries';
 import { Dropdown, Empty, Page, PillarDot, Seg } from '../components/primitives';
 import { go } from '../lib/events';
 import { heatBg, PILLAR_COLORS } from '../lib/helpers';
@@ -25,7 +25,7 @@ const PER = 10;
 
 // Drawer — the use case's owning subcap, its delivering Jira stories, and links onward.
 function UseCaseDrawer({ version, uc, onClose }: { version: string; uc: UseCaseRow; onClose: () => void }) {
-  const stories = useSubcapStories(version, uc.subcap_id);
+  const stories = useUseCaseStories(version, uc.use_case_id);
   const rows = stories.data?.items ?? [];
   return (
     <>
@@ -34,7 +34,8 @@ function UseCaseDrawer({ version, uc, onClose }: { version: string; uc: UseCaseR
         <div className="drawer-head">
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="eyebrow" style={{ marginBottom: 4 }}>
-              Use case · {uc.archetype ?? 'use case'}
+              Use case · {uc.name ?? uc.archetype ?? 'use case'}
+              {uc.is_new && <span className="chip green" style={{ marginLeft: 6 }}>new</span>}
             </div>
             <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.4 }}>{uc.description}</div>
           </div>
@@ -44,10 +45,15 @@ function UseCaseDrawer({ version, uc, onClose }: { version: string; uc: UseCaseR
         </div>
         <div className="drawer-body">
           <div className="between" style={{ marginBottom: 14 }}>
-            <span className="num" style={{ fontSize: 26, fontWeight: 700, color: 'var(--interactive)' }}>
-              {uc.n_stories.toLocaleString()}
-              <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}> delivering stories</span>
-            </span>
+            <div>
+              <span className="num" style={{ fontSize: 26, fontWeight: 700, color: 'var(--interactive)' }}>
+                {uc.n_stories.toLocaleString()}
+                <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}> matched stories</span>
+              </span>
+              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                of {uc.subcap_stories.toLocaleString()} delivered to the owning subcap
+              </div>
+            </div>
             {uc.maturity && <span className="tierchip">{uc.maturity}</span>}
           </div>
 
@@ -74,7 +80,7 @@ function UseCaseDrawer({ version, uc, onClose }: { version: string; uc: UseCaseR
           </button>
 
           <div className="eyebrow" style={{ marginBottom: 8 }}>
-            Delivering stories {rows.length > 0 && <span className="muted">· top {rows.length}</span>}
+            Matched stories {rows.length > 0 && <span className="muted">· top {rows.length}</span>}
           </div>
           {stories.isLoading ? (
             <div className="muted" style={{ fontSize: 12 }}>
@@ -82,7 +88,7 @@ function UseCaseDrawer({ version, uc, onClose }: { version: string; uc: UseCaseR
             </div>
           ) : rows.length === 0 ? (
             <div className="muted" style={{ fontSize: 12 }}>
-              No Jira stories carried onto this subcap in this version yet.
+              No Jira story matched specifically to this use case — its subcap's delivery is general.
             </div>
           ) : (
             <div style={{ display: 'grid', gap: 7 }}>
@@ -172,6 +178,10 @@ export function UseCases() {
   // IS the type filter (click a bar to filter, click again to clear).
   const board = useMemo(() => (data?.archetypes ?? []).slice(0, 6), [data?.archetypes]);
   const boardMax = Math.max(1, ...board.map((a) => a.n_stories));
+  // L1-capability grouping: the categories in scope, ranked by matched delivery (the "matched use
+  // cases by capability" overview). Shown when no specific capability is selected; click to drill in.
+  const cats = useMemo(() => data?.categories ?? [], [data?.categories]);
+  const catMax = Math.max(1, ...cats.map((c) => c.n_stories));
 
   return (
     <Page
@@ -268,6 +278,48 @@ export function UseCases() {
         </div>
       )}
 
+      {cat === 'all' && cats.length > 0 && (
+        <div className="card pad" style={{ marginBottom: 16 }}>
+          <div className="eyebrow" style={{ marginBottom: 12 }}>
+            Capability areas (L1) · matched delivery — click to scope
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+              gap: 8,
+            }}
+          >
+            {cats.map((c) => (
+              <button
+                key={c.category_id}
+                onClick={() => setCat(c.category_id)}
+                className="card hov"
+                style={{ padding: '10px 12px', cursor: 'pointer', textAlign: 'left' }}
+              >
+                <div className="row gap6" style={{ marginBottom: 5 }}>
+                  <span className="dot" style={{ background: PILLAR_COLORS[c.pillar] }} />
+                  <span style={{ fontSize: 12.5, fontWeight: 600 }}>{c.category}</span>
+                </div>
+                <div className="bartrack" style={{ marginBottom: 5 }}>
+                  <div
+                    className="barfill"
+                    style={{
+                      width: `${(c.n_stories / catMax) * 100}%`,
+                      background: heatBg(0.3 + 0.7 * (c.n_stories / catMax)),
+                    }}
+                  />
+                </div>
+                <div className="muted" style={{ fontSize: 10.5 }}>
+                  <b style={{ color: 'var(--text-primary)' }}>{c.n_stories.toLocaleString()}</b> matched ·{' '}
+                  {c.use_cases} use cases
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {items.length ? (
         <>
           <div style={{ display: 'grid', gap: 8 }}>
@@ -295,14 +347,20 @@ export function UseCases() {
                     {u.n_stories.toLocaleString()}
                   </div>
                   <div className="muted" style={{ fontSize: 9.5 }}>
-                    stories
+                    matched
                   </div>
+                  {u.subcap_stories > 0 && (
+                    <div className="muted" style={{ fontSize: 8.5, marginTop: 1 }}>
+                      of {u.subcap_stories.toLocaleString()}
+                    </div>
+                  )}
                 </div>
                 <div style={{ flex: 1, minWidth: 0, padding: '12px 15px' }}>
                   <div className="row gap6" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
                     <span className="chip blue" style={{ fontWeight: 700 }}>
-                      {u.archetype ?? 'use case'}
+                      {u.name ?? u.archetype ?? 'use case'}
                     </span>
+                    {u.is_new && <span className="chip green">new</span>}
                     {u.maturity && <span className="tierchip">{u.maturity}</span>}
                     <span className="mono muted" style={{ fontSize: 10, marginLeft: 'auto' }}>
                       {u.use_case_id}

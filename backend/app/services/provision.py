@@ -97,7 +97,9 @@ async def _seed_enrichment(
     )
     await ins(e.get("personas", []), "persona_id, canonical_name, role_description", "persona")
     await ins(
-        e.get("use_cases", []), "use_case_id, subcap_id, archetype, name, description", "use_case"
+        e.get("use_cases", []),
+        "use_case_id, subcap_id, archetype, name, description, maturity, is_new",
+        "use_case",
     )
     await ins(e.get("subcap_platforms", []), "subcap_id, l3_id", "subcap_platform")
     await ins(e.get("subcap_personas", []), "subcap_id, persona_id", "subcap_persona")
@@ -600,9 +602,10 @@ async def _inherit_enrichment(
     )
     await conn.execute(
         text(
-            f"INSERT INTO {schema}.use_case (use_case_id, subcap_id, archetype, name, description) "
+            f"INSERT INTO {schema}.use_case "
+            "(use_case_id, subcap_id, archetype, name, description, maturity, is_new) "
             f"SELECT uc.use_case_id || ':' || m.this_sub, m.this_sub, uc.archetype, uc.name, "
-            f"uc.description FROM _emap m "
+            f"uc.description, uc.maturity, uc.is_new FROM _emap m "
             f"JOIN {src_schema}.use_case uc ON uc.subcap_id = m.src_sub"
         )
     )
