@@ -1,0 +1,24 @@
+# R8 — role phrases for the [CLIENT_ROLE] placeholder in Jira story descriptions, keyed by
+# subvertical CODE. The raw catalog descriptions are templated ("As a [CLIENT_ROLE], I want ...");
+# story synthesis substitutes the placeholder with the role for the story's own subvertical so the
+# narrative reads in that subvertical's language. DETERMINISTIC config (grounded in the story's
+# stored subvertical + tier, never invented per story) — same trust level as the other config/*.yaml,
+# so no gate is required. An unknown code falls back to `default`.
+default: "a financial-services stakeholder"
+roles:
+  RB: "a retail banking operations lead"
+  CL: "a commercial lending officer"
+  CU: "a credit union operations lead"
+  RIA: "an advisory relationship manager"
+  IC: "an insurance carrier operations lead"
+  IB: "an insurance brokerage lead"
+  AM: "an asset management operations lead"
+  CIB: "a corporate & investment banking lead"
+# generic substitutions for the other bracketed technical placeholders in the raw text
+# ([OBJECT_NAME], [FIELD_NAME], [FLOW_NAME], ...) so the narrative never leaks a raw token.
+placeholders:
+  OBJECT_NAME: "the relevant object"
+  FIELD_NAME: "the relevant field"
+  FLOW_NAME: "the configured flow"
+  RECORD_TYPE: "the record type"
+  PROFILE_NAME: "the relevant profile"

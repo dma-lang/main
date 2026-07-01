@@ -84,20 +84,28 @@ _INGEST = text(
     "INSERT INTO control.story "
     "(story_key, project_key, epic_key, sub_cap_id, cap_id, pillar_id, category_id, category_name, "
     "cap_name, sub_cap_name, tier, story_sv_code, project_sv_code, reusability_layer, population, "
-    "summary, ac_quality, sd_quality, delivery_score, composite_score, confidence_level, "
-    "ac_score, sd_score, story_score, source_version, is_synthetic) VALUES "
+    "summary, description, ac_text, solution_design_text, ac_quality, sd_quality, delivery_score, "
+    "composite_score, confidence_level, ac_score, sd_score, story_score, "
+    "client_name, salesforce_account_id, client_match_method, client_match_confidence, "
+    "source_version, is_synthetic) VALUES "
     "(:story_key, :project_key, :epic_key, :sub_cap_id, :cap_id, :pillar_id, :category_id, "
     ":category_name, :cap_name, :sub_cap_name, :tier, :story_sv_code, :project_sv_code, "
-    ":reusability_layer, :population, :summary, :ac_quality, :sd_quality, :delivery_score, "
-    ":composite_score, CAST(:confidence_level AS confidence_level), "
-    ":ac_score, :sd_score, :story_score, "
+    ":reusability_layer, :population, :summary, :description, :ac_text, :solution_design_text, "
+    ":ac_quality, :sd_quality, :delivery_score, :composite_score, "
+    "CAST(:confidence_level AS confidence_level), :ac_score, :sd_score, :story_score, "
+    ":client_name, :salesforce_account_id, :client_match_method, :client_match_confidence, "
     ":source_version, false) "
     "ON CONFLICT (story_key) DO UPDATE SET "
     "sub_cap_id = EXCLUDED.sub_cap_id, summary = EXCLUDED.summary, "
+    "description = EXCLUDED.description, ac_text = EXCLUDED.ac_text, "
+    "solution_design_text = EXCLUDED.solution_design_text, "
     "composite_score = EXCLUDED.composite_score, ac_score = EXCLUDED.ac_score, "
     "sd_score = EXCLUDED.sd_score, story_score = EXCLUDED.story_score, "
-    "confidence_level = EXCLUDED.confidence_level, source_version = EXCLUDED.source_version, "
-    "ingested_at = now()"
+    "confidence_level = EXCLUDED.confidence_level, client_name = EXCLUDED.client_name, "
+    "salesforce_account_id = EXCLUDED.salesforce_account_id, "
+    "client_match_method = EXCLUDED.client_match_method, "
+    "client_match_confidence = EXCLUDED.client_match_confidence, "
+    "source_version = EXCLUDED.source_version, ingested_at = now()"
 )
 
 # One story may evidence SEVERAL subcaps (corpus mapping + the catalogue's own story refs), so the
@@ -132,6 +140,10 @@ def _ingest_row(s: dict[str, Any], source_version: str) -> dict[str, Any]:
         "reusability_layer": s.get("rl"),
         "population": s.get("pop"),
         "summary": s.get("sum"),
+        # R8 rich narrative source (real stories now carry the raw Jira text, not just the summary)
+        "description": s.get("desc"),
+        "ac_text": s.get("act"),
+        "solution_design_text": s.get("sdt"),
         "ac_quality": s.get("acq"),
         "sd_quality": s.get("sdq"),
         "delivery_score": s.get("dlv"),
@@ -140,6 +152,11 @@ def _ingest_row(s: dict[str, Any], source_version: str) -> dict[str, Any]:
         "ac_score": s.get("ac"),
         "sd_score": s.get("sd"),
         "story_score": s.get("ss"),
+        # R8 resolved client identity (separate from story_key)
+        "client_name": s.get("cn"),
+        "salesforce_account_id": s.get("said"),
+        "client_match_method": s.get("cmm"),
+        "client_match_confidence": s.get("cmc"),
         "source_version": source_version,
     }
 
@@ -345,6 +362,17 @@ async def carry_forward(
         await _ucm.match_use_cases(target_version)
     except Exception as exc:  # noqa: BLE001 - never block carry-forward on the use-case matcher
         logger.warning("use-case matcher unavailable for %s: %s", target_version, exc)
+
+    # R8 story synthesis: mine each real story's raw description / acceptance criteria / solution
+    # design into a cohesive narrative + structured facets (deterministic, hermetic-safe, idempotent
+    # gap-fill), so every surface shows WHAT was delivered and HOW, not just the summary line.
+    # Best-effort; a failure leaves the story rows intact, never blocking the carry.
+    try:
+        from app.services import story_synthesis as _syn
+
+        await _syn.synthesize_all(target_version)
+    except Exception as exc:  # noqa: BLE001 - never block carry-forward on story synthesis
+        logger.warning("story synthesis unavailable for %s: %s", target_version, exc)
 
     confirmed = sum(1 for c in carries if c["status"] == "confirmed")
     unmapped = sum(1 for c in carries if c["status"] == "unmapped")
