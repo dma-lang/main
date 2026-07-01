@@ -14,6 +14,7 @@ export interface VersionInfo {
   status: string;
   schema_name: string;
   created_at: string | null;
+  tier?: string; // active | inactive | legacy — computed relative to the active version's number
 }
 
 export interface DiffRow {

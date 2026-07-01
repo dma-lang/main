@@ -94,7 +94,8 @@ export function Header() {
   const versionOpts = sortedVersions.length
     ? sortedVersions.map((v) => ({
         v: v.version_id,
-        l: `${v.version_id} · ${v.status === 'active' ? 'active' : 'legacy'}`,
+        // tier is computed server-side relative to the active version (active | inactive | legacy)
+        l: `${v.version_id} · ${v.tier ?? (v.status === 'active' ? 'active' : 'legacy')}`,
       }))
     : [{ v: '', l: 'no catalogue yet' }];
 
