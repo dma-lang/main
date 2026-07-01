@@ -374,6 +374,16 @@ async def carry_forward(
     except Exception as exc:  # noqa: BLE001 - never block carry-forward on story synthesis
         logger.warning("story synthesis unavailable for %s: %s", target_version, exc)
 
+    # R8 per-SV rollups: precompute per-(subcap|use_case x subvertical) delivery aggregates so a
+    # surface viewed under a subvertical lens shows that SV's own representative stories + narrative
+    # (all-SV canonical fallback). Best-effort + deterministic + hermetic-safe; after synthesis.
+    try:
+        from app.services import sv_rollups as _svr
+
+        await _svr.build_rollups(target_version)
+    except Exception as exc:  # noqa: BLE001 - never block carry-forward on the SV rollups
+        logger.warning("SV rollups unavailable for %s: %s", target_version, exc)
+
     confirmed = sum(1 for c in carries if c["status"] == "confirmed")
     unmapped = sum(1 for c in carries if c["status"] == "unmapped")
     distinct = len({c["carried_to_subcap"] for c in carries if c["carried_to_subcap"]})

@@ -1055,6 +1055,47 @@ async def subcap_offerings(
     return SubcapOfferingCoverage(subcap_id=subcap_id, multi=len(out) >= 2, offerings=out)
 
 
+class SubcapSvSummary(BaseModel):
+    subvertical: str  # the SV this rollup is for ('' = the all-SV canonical fallback)
+    story_count: int
+    client_count: int
+    rep_story_keys: list[str]  # the SV's representative delivered stories (top by composite)
+    narrative: str | None = None  # SV-tailored delivery narrative (all-SV when no lens)
+
+
+@router.get("/{version}/subcaps/{subcap_id}/sv-summary")
+async def subcap_sv_summary(
+    version: str,
+    subcap_id: str,
+    sv: str = Query(""),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> SubcapSvSummary:
+    """The subcap's delivery TAILORED to the active subvertical lens (its own representative stories
+    + an SV narrative), falling back to the all-SV canonical rollup when no lens is set. Backed by
+    the precomputed control.sv_rollup."""
+    import json as _json
+
+    from app.services import sv_rollups
+
+    v = await resolve_version(version)
+    async with _engine().connect() as conn:
+        r = await sv_rollups.get(conn, v.version_id, "subcap", subcap_id, sv or None)
+    if r is None:
+        return SubcapSvSummary(
+            subvertical="", story_count=0, client_count=0, rep_story_keys=[], narrative=None
+        )
+    reps = r["rep_story_keys"]
+    if isinstance(reps, str):
+        reps = _json.loads(reps)
+    return SubcapSvSummary(
+        subvertical=str(r["subvertical"]),
+        story_count=int(r["story_count"]),
+        client_count=int(r["client_count"]),
+        rep_story_keys=[str(k) for k in reps],
+        narrative=r["narrative"],
+    )
+
+
 @router.get("/{version}/subcaps/{subcap_id}/connections")
 async def subcap_connections(
     version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
