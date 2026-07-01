@@ -925,6 +925,127 @@ async def subcap_enrichment(
     )
 
 
+class OfferingAlignment(BaseModel):
+    offering_id: str
+    name: str
+    category: str | None = None
+    score: float  # the matcher's confidence that this offering tackles the subcap
+    capability: str  # the offering capability that drove the match (the "why")
+    aligned_use_cases: list[dict[str, str]]  # the subcap's use cases this offering's scope covers
+    explanation: str  # grounded, plain-language WHY this offering applies
+    evidence_story_keys: list[str]  # top delivered stories on the subcap
+
+
+class SubcapOfferingCoverage(BaseModel):
+    subcap_id: str
+    multi: bool  # a subcap tackled by >= 2 productized offerings
+    offerings: list[OfferingAlignment]
+
+
+@router.get("/{version}/subcaps/{subcap_id}/offerings")
+async def subcap_offerings(
+    version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> SubcapOfferingCoverage:
+    """Every productized offering that tackles this subcap, and — when MORE THAN ONE does — a
+    grounded explanation of each: the capability that drove the match, the subcap's use cases that
+    offering's scope aligns with (deterministic TF-IDF between the offering capability and each use
+    case), and the delivered stories that evidence it. A subcap MAY be tackled by several offerings;
+    this surfaces and explains that instead of hiding it."""
+    import math
+    import re as _re
+
+    from app.services.use_case_match import _score, _tfidf, _tokens
+
+    v = await resolve_version(version)
+    s = _schema(v)
+    async with _engine().connect() as conn:
+        off_s = await _enrichment_schema(conn, s, "offering_subcap")
+        uc_s = await _enrichment_schema(conn, s, "use_case")
+        offs = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT o.offering_id, o.name, o.category, "
+                        "os.mapping_rationale AS rationale, os.maturity_lift AS lift "
+                        f"FROM {off_s}.offering_subcap os "
+                        f"JOIN {off_s}.offering o ON o.offering_id = os.offering_id "
+                        "WHERE os.subcap_id = :sid ORDER BY o.name"
+                    ),
+                    {"sid": subcap_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        ucs = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT use_case_id, name, coalesce(description, '') AS d, "
+                        f"coalesce(archetype, '') AS a FROM {uc_s}.use_case "
+                        "WHERE subcap_id = :sid ORDER BY use_case_id"
+                    ),
+                    {"sid": subcap_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        evidence = [
+            str(r[0])
+            for r in (
+                await conn.execute(
+                    text(
+                        "SELECT scl.story_key FROM control.story_catalogue_link scl "
+                        "JOIN control.story st ON st.story_key = scl.story_key "
+                        "WHERE scl.version_id = :ver AND scl.subcap_id = :sid "
+                        "ORDER BY st.composite_score DESC NULLS LAST, scl.story_key LIMIT 6"
+                    ),
+                    {"ver": v.version_id, "sid": subcap_id},
+                )
+            ).all()
+        ]
+
+    uc_toks = [_tokens(f"{u['name']} {u['d']} {u['a'].replace('_', ' ')}") for u in ucs]
+    uc_vecs, uc_norms = _tfidf(uc_toks) if uc_toks else ([], [])
+    out: list[OfferingAlignment] = []
+    for o in offs:
+        cap = _offering_capability(o["rationale"])
+        m = _re.search(r"score\s+([\d.]+)", o["rationale"] or "")
+        score = float(m.group(1)) if m else float(o["lift"] or 0.0)
+        q = _tokens(f"{o['name']} {cap}")
+        qn = math.sqrt(sum(n * n for n in q.values()))
+        aligned = sorted(
+            ((_score(q, qn, uc_vecs[i], uc_norms[i]), ucs[i]) for i in range(len(ucs))),
+            key=lambda kv: -kv[0],
+        )
+        picks = [
+            {"use_case_id": str(u["use_case_id"]), "name": str(u["name"])}
+            for sc, u in aligned
+            if sc > 0.0
+        ][:4]
+        uc_names = ", ".join(p["name"] for p in picks) or "its use cases"
+        explanation = (
+            f"{o['name']} applies here via its '{cap or o['name']}' capability "
+            f"(match {score:.0%}); the subcap's {uc_names} and {len(evidence)} delivered "
+            "stories align with this offering's scope."
+        )
+        out.append(
+            OfferingAlignment(
+                offering_id=str(o["offering_id"]),
+                name=str(o["name"]),
+                category=o["category"],
+                score=round(score, 3),
+                capability=cap,
+                aligned_use_cases=picks,
+                explanation=explanation,
+                evidence_story_keys=evidence,
+            )
+        )
+    out.sort(key=lambda a: -a.score)
+    return SubcapOfferingCoverage(subcap_id=subcap_id, multi=len(out) >= 2, offerings=out)
+
+
 @router.get("/{version}/subcaps/{subcap_id}/connections")
 async def subcap_connections(
     version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
