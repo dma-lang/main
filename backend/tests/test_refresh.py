@@ -42,6 +42,17 @@ def provisioned() -> Iterator[None]:
         engine = db.get_engine()
         assert engine is not None
         async with engine.begin() as conn:
+            # discovery rows the run_discovery pass may create — FK-safe: every child of
+            # reasoning_chain (change_flag / pending_edge / validation_gate_run / citation /
+            # reasoning_step) before the chain itself, then the evidence they cite.
+            await conn.execute(text("DELETE FROM control.pending_edge"))
+            await conn.execute(text("DELETE FROM control.change_flag"))
+            await conn.execute(text("DELETE FROM control.validation_gate_run"))
+            await conn.execute(text("DELETE FROM control.citation"))
+            await conn.execute(text("DELETE FROM control.reasoning_step"))
+            await conn.execute(text("DELETE FROM control.reasoning_chain"))
+            await conn.execute(text("DELETE FROM control.evidence_item WHERE kind = 'catalogue'"))
+            await conn.execute(text("DELETE FROM control.story_use_case_carry"))
             await conn.execute(text("DELETE FROM control.story_subcap_carry"))
             await conn.execute(text("DELETE FROM control.story"))
             await conn.execute(text("DROP SCHEMA IF EXISTS cat_v7 CASCADE"))
@@ -153,6 +164,39 @@ def test_force_overrides_matching_marker(
     rc = asyncio.run(refresh.refresh_data_plane())
     assert rc == 0
     assert "v7" in ran  # forced past the matching marker -> the rebuild ran
+
+
+@needs_db
+def test_run_discovery_surfaces_gated_proposals_on_redeploy(provisioned: None) -> None:
+    """The wiring that makes 'new use cases to commit on redeploy' actually appear: after the data
+    plane is refreshed, run_discovery() scans the rebuilt version and surfaces its GATED discovery
+    proposals into the Change-Flags / Notifications box. The v7 corpus has abundant delivery its use
+    cases do not cover, so real NEW-use-case proposals appear — every one carrying a passing gate
+    run (trust envelope, nothing shown ungated) — and a second pass proposes nothing new
+    (idempotent, so a repeat deploy never duplicates)."""
+    asyncio.run(refresh.run_discovery(["v7"]))
+
+    eng = _sync_engine()
+    with eng.connect() as conn:  # type: ignore[attr-defined]
+        gaps = conn.execute(
+            text("SELECT count(*) FROM control.change_flag WHERE kind = 'use_case_gap'")
+        ).scalar()
+        gated = conn.execute(
+            text(
+                "SELECT count(*) FROM control.change_flag cf "
+                "JOIN control.validation_gate_run vg ON vg.chain_id = cf.chain_id "
+                "WHERE cf.kind = 'use_case_gap'"
+            )
+        ).scalar()
+    assert (gaps or 0) > 0  # uncovered delivery -> real gated NEW-use-case proposals to commit
+    assert gated == gaps  # every surfaced proposal is gated (trust envelope; nothing ungated)
+
+    asyncio.run(refresh.run_discovery(["v7"]))  # idempotent — a repeat deploy adds no duplicates
+    with _sync_engine().connect() as conn:  # type: ignore[attr-defined]
+        gaps_again = conn.execute(
+            text("SELECT count(*) FROM control.change_flag WHERE kind = 'use_case_gap'")
+        ).scalar()
+    assert gaps_again == gaps
 
 
 def test_bootstrap_versions_parses_env(monkeypatch: pytest.MonkeyPatch) -> None:

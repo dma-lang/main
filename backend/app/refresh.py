@@ -11,6 +11,13 @@ numbers after every deploy. This brings the data plane back in step with what wa
                      the catalogue from the bundled seed, transactionally) then
                      ``stories.carry_forward`` (re-ingest the canonical corpus, re-run the
                      offerings matcher + embeddings).
+  * discovery     -> for every version actually rebuilt this deploy, re-run the GATED discovery
+                     detectors (``use_case_gaps`` NEW use cases implied by delivery, ``kg``
+                     propose_structural_edges latent edges, ``subverticals`` unscoped delivery) so a
+                     redeploy also refreshes the Change-Flags / Notifications proposal box — never
+                     stale. Each is idempotent, gated (G1-G8, human-approved), hermetic-safe (no
+                     spend) and best-effort (a detector failing never fails the deploy). Skipped for
+                     versions the marker left un-rebuilt, so a same-image redeploy never re-spends.
 
 Safe + bounded (safeguard 9). Each version's rebuild is ONE transaction — concurrent readers on the
 old revision block briefly and then see the new data, never a half-built schema. A per-schema build
@@ -139,9 +146,12 @@ async def _refresh_version(version_id: str, label: str, build: str) -> dict[str,
     return {"version": version_id, "skipped": False, "provision": prov, "carry": carry}
 
 
-async def refresh_data_plane() -> int:
+async def refresh_data_plane(rebuilt_out: list[str] | None = None) -> int:
     """Re-provision + re-carry every provisioned version. Returns 0 on full success, 1 if any
-    version failed (its data is rolled back to the prior state; the deploy then holds traffic)."""
+    version failed (its data is rolled back to the prior state; the deploy then holds traffic). When
+    ``rebuilt_out`` is supplied, the id of every version ACTUALLY rebuilt (i.e. not skipped by a
+    matching build marker) is appended to it, so the caller can scope post-refresh discovery to just
+    the versions whose data changed (a same-image redeploy then re-scans nothing)."""
     if db.init_engine() is None:
         logger.warning("DATABASE_URL not set; no data plane to refresh")
         return 0
@@ -169,7 +179,9 @@ async def refresh_data_plane() -> int:
         )
         for version_id, label in versions:
             try:
-                await _refresh_version(version_id, label, build)
+                result = await _refresh_version(version_id, label, build)
+                if rebuilt_out is not None and not result.get("skipped"):
+                    rebuilt_out.append(version_id)
             except Exception:  # noqa: BLE001 - one version failing must not abort the others
                 logger.exception("refresh FAILED for %s — existing data left intact", version_id)
                 rc = 1
@@ -178,14 +190,65 @@ async def refresh_data_plane() -> int:
     return rc
 
 
+async def run_discovery(versions: list[str]) -> None:
+    """Surface each version's GATED discovery proposals after its data plane is refreshed, so a
+    redeploy also brings the Change-Flags / Notifications proposal box back in step (never stale):
+    NEW use cases implied by delivery (``use_case_gaps``), knowledge-graph latent edges
+    (``kg.propose_structural_edges``), and unscoped subverticals. Every detector is IDEMPOTENT
+    (dedupes on its own target_ref / pair — a re-run over unchanged delivery proposes nothing new),
+    hermetic-safe (deterministic, zero spend), gated + bounded, and BEST-EFFORT: a detector raising
+    is logged and never fails the deploy (the data plane is already live; discovery is purely
+    additive). Only the ``versions`` actually rebuilt this deploy are scanned."""
+    if not versions:
+        return
+    if db.init_engine() is None:
+        return
+    # Imported here, not at module load, so importing app.refresh never eagerly drags in the whole
+    # detector graph and a detector-module import error can never break the core refresh path.
+    from app.services import kg as kg_svc
+    from app.services import subverticals as subverticals_svc
+    from app.services import use_case_gaps as use_case_gaps_svc
+
+    detectors: tuple[tuple[str, Any], ...] = (
+        ("use_case_gaps", use_case_gaps_svc.detect_use_case_gaps),
+        ("kg_edges", kg_svc.propose_structural_edges),
+        ("unscoped_subverticals", subverticals_svc.detect_unscoped_subverticals),
+    )
+    try:
+        for version_id in versions:
+            for name, fn in detectors:
+                try:
+                    result = await fn(version_id)
+                    logger.info("discovery %s[%s]: %s", name, version_id, result)
+                except Exception:  # noqa: BLE001 - additive + gated; never fail the deploy
+                    logger.exception(
+                        "discovery %s[%s] FAILED (non-fatal — data plane already live)",
+                        name,
+                        version_id,
+                    )
+    finally:
+        await db.dispose_engine()
+
+
 def run() -> int:
-    """Migrate the control plane to head, then refresh every provisioned data plane. Exit 0 only
-    when BOTH succeed, so a failed migration or refresh keeps traffic on the previous revision."""
+    """Migrate the control plane to head, refresh every provisioned data plane, then surface the
+    gated discovery proposals for the versions rebuilt this deploy. Exit 0 only when migration and
+    the data-plane refresh both succeed, so a failed migration or refresh keeps traffic on the
+    previous revision; discovery is best-effort and never changes the exit code. Set
+    ``REFRESH_NO_DISCOVERY=1`` to skip the discovery pass (data-plane refresh still runs)."""
     mig = migrate.run()
     if mig != 0:
         logger.error("migration returned %s; not refreshing the data plane", mig)
         return mig
-    return asyncio.run(refresh_data_plane())
+
+    async def _refresh_then_discover() -> int:
+        rebuilt: list[str] = []
+        rc = await refresh_data_plane(rebuilt_out=rebuilt)
+        if rc == 0 and not _env_flag("REFRESH_NO_DISCOVERY"):
+            await run_discovery(rebuilt)
+        return rc
+
+    return asyncio.run(_refresh_then_discover())
 
 
 if __name__ == "__main__":

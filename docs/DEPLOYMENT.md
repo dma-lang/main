@@ -342,9 +342,15 @@ gcloud run deploy cia --source . --region "$REGION"
 ```
 
 Then point the job at the fresh image and run it once. This **always** runs after a deploy now (not
-only when tables changed): `app.refresh` migrates **and** rebuilds the data plane so the new code's
-catalogue + delivery numbers go live. It's marker-guarded by the image digest — re-running the same
-image is a no-op (no rebuild, no embedding spend), and a new image refreshes exactly once:
+only when tables changed): `app.refresh` migrates, rebuilds the data plane so the new code's
+catalogue + delivery numbers go live, **and then re-runs the gated discovery detectors for every
+version it rebuilt** — the use-case-gap clustering (new use cases implied by delivery), the
+knowledge-graph latent-edge mining, and the unscoped-subvertical scan — so their proposals appear in
+the Change-Flags / Notifications box after each deploy instead of only on the weekly schedule. Each
+detector is idempotent (a re-run proposes nothing new) and gated (G1–G8 + human approve), so nothing
+is auto-applied. It's marker-guarded by the image digest — re-running the same image is a no-op (no
+rebuild, no discovery, no embedding spend), and a new image refreshes exactly once (set
+`REFRESH_NO_DISCOVERY=1` to run the data-plane refresh without the discovery pass):
 
 ```bash
 IMAGE="$(gcloud run services describe cia --region "$REGION" --format='value(spec.template.spec.containers[0].image)')"
