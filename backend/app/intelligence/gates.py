@@ -220,6 +220,19 @@ def knowledge_graph_semantic_config() -> float:
     return cosine
 
 
+def xref_semantic_config() -> tuple[float, float]:
+    """(subcap_min_cosine, l2_min_cosine) for the SEMANTIC tier of the cross-version subcap resolver
+    (services/subcap_xref, rule 5): the embedding-cosine floors a drifted legacy subcap must clear
+    to resolve to a reference subcap, and to scope the search by its L2 (capability) name. Config,
+    not code — the deep-learning matching that enriches a legacy version from the standard ones."""
+    section = load_gate_config().get("xref") or {}
+    subcap = float(section.get("semantic_min_cosine", 0.62))
+    l2 = float(section.get("l2_semantic_min_cosine", 0.60))
+    if not 0 < subcap <= 1 or not 0 <= l2 <= 1:
+        raise ValueError("gates.yaml: invalid xref semantic thresholds")
+    return subcap, l2
+
+
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
     """Run G5 + G7 over a grounded answer; return the gate_results jsonb and the verdict."""
     g5 = retrieval_count > 0 and citation_count > 0

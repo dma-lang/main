@@ -768,6 +768,7 @@ async def _map_to_reference(
     crosswalk -> L2-capability name + near description -> L2-capability name. Returns the reference
     subcap id (the same id when the version already uses v7 ids), so the read-time fallback matches
     what provisioning bakes — stat tiles and tabs never disagree."""
+    from app.intelligence import gates
     from app.services import enrichment_seed
     from app.services.subcap_xref import resolve
 
@@ -797,7 +798,32 @@ async def _map_to_reference(
     crosswalk = {subcap_id: str(cw[0])} if cw else {}
     l2 = meta[0] if meta else None
     descr = meta[1] if meta else None
-    return resolve(subcap_id, l2, descr, ref_index, crosswalk) or subcap_id
+    lexical = resolve(subcap_id, l2, descr, ref_index, crosswalk)
+    if lexical:
+        return lexical
+    # RULE 5 (semantic, deep-learning): the lexical rules found no capability match — a drifted
+    # legacy version whose ids AND L1/L2 names differ from the reference. Resolve to the reference
+    # subcap nearest in the shared embedding space (pgvector HNSW) above the configured floor, so a
+    # renamed legacy version still inherits enrichment by MEANING. Additive + graceful: with no
+    # embeddings on either side there is no row, so the subcap stays self-referential (unchanged).
+    sub_min, _ = gates.xref_semantic_config()
+    ref_schema = f"cat_{ref_ver}"
+    if _SCHEMA_RE.match(ref_schema):
+        near = (
+            await conn.execute(
+                text(
+                    f"SELECT r.subcap_id, 1 - (r.embedding <=> q.embedding) AS cos "
+                    f"FROM {ref_schema}.subcap r, "
+                    f"(SELECT embedding FROM {schema}.subcap WHERE subcap_id = :sid) q "
+                    "WHERE q.embedding IS NOT NULL AND r.embedding IS NOT NULL "
+                    "ORDER BY r.embedding <=> q.embedding ASC LIMIT 1"
+                ),
+                {"sid": subcap_id},
+            )
+        ).first()
+        if near is not None and float(near[1]) >= sub_min:
+            return str(near[0])
+    return subcap_id
 
 
 @router.get("/{version}/subcaps/{subcap_id}/enrichment")

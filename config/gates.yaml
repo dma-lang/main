@@ -113,3 +113,11 @@ offerings:
 use_case_match:
   match_floor: 0.06             # TF-cosine below this -> matched but status='review'
   multi_match: false            # single best match (partition) vs multi-match (a story -> several use cases)
+
+# Cross-version subcap resolution SEMANTIC tier (services/subcap_xref, rule 5): a legacy version
+# (lower than the active version) whose ids AND L1/L2 names drifted is enriched from the standard
+# versions (v5/v7) by MEANING when the lexical rules (id / crosswalk / L2-name) find nothing —
+# deep-learning matching over the subcap + L2 (capability) embeddings. Config, not code.
+xref:
+  semantic_min_cosine: 0.62      # a drifted subcap must embed at least this close to a reference subcap
+  l2_semantic_min_cosine: 0.60   # ...and its L2 name this close to scope the search to that capability
