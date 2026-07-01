@@ -88,6 +88,18 @@ knowledge_graph:
   # only ever HYPOTHESIS/INFERENCE proposals through G1-G8 + Change Flags, never a committed surface.
   allow_cross_pillar: true
   max_proposals_per_scan: 200             # bound the run (resilience: bounded everything)
+  # R6 NLP DIRECTIONAL relationship engine (services/kg.propose_directional_edges + Gemini
+  # infer_relationship / verify_relationship). Per subcap a BOUNDED candidate set (semantic kNN +
+  # co-delivery + structural + keyphrase overlap) is read by the enrich model into a TYPED,
+  # DIRECTIONAL relation (enables/depends_on/precedes/affects/complements/alternative_to/subsumes),
+  # then DUAL-verified — an adversarial refutation AND corpus corroboration against the Jira
+  # delivery corpus — before a gated proposal. Live spend, so bounded + metered (G8 + cost meter).
+  directional_candidate_cap: 12           # max candidate partners per subcap (bounds live spend)
+  directional_semantic_knn: 8             # nearest semantic neighbours seeded per subcap
+  directional_confidence_floor: 0.45      # drop an inferred relation below this confidence
+  directional_verify_passes: 3            # adversarial refutation passes (live); majority refutes
+  directional_corroboration_lift: 1.5     # co-delivery lift a depends_on/complements must clear
+  directional_max_per_scan: 150           # bound the whole directional run (bounded everything)
 
 # Use-case gap detector (services/use_case_gaps): surface use cases IMPLIED by delivered Jira stories
 # that the catalogue does NOT yet model, and propose each as a gated, human-approved NEW use case.
@@ -139,8 +151,16 @@ offerings:
 # single best match the counts PARTITION the subcap's stories across its use cases. Below the floor
 # the match still counts (nothing is dropped) but is flagged 'review' (weak overlap). Config, not code.
 use_case_match:
-  match_floor: 0.06             # TF-cosine below this -> matched but status='review'
+  match_floor: 0.06             # hybrid score below this -> matched but status='review'
   multi_match: false            # single best match (partition) vs multi-match (a story -> several use cases)
+  # R6 HYBRID matching: the score is (1 - semantic_weight)*TF-IDF-cosine + semantic_weight*embedding-
+  # cosine (gemini-embedding-001; hermetic = deterministic token-hash, so still zero-spend + stable).
+  # The dense half RERANKS the candidate use cases + sets the confidence. A story is attributed when it
+  # shares a discriminating TERM (as before — preserves the unmatched set the gap detector needs) OR is
+  # STRONGLY semantically near a use case (embedding cosine >= semantic_match_floor), so a summary that
+  # MEANS the same as a use case without sharing a word is caught, while baseline noise stays unmatched.
+  semantic_weight: 0.5          # 0 = pure lexical (legacy), 1 = pure semantic; 0.5 = balanced hybrid
+  semantic_match_floor: 0.82    # embedding cosine at/above this attributes even with no term overlap
 
 # Cross-version subcap resolution SEMANTIC tier (services/subcap_xref, rule 5): a legacy version
 # (lower than the active version) whose ids AND L1/L2 names drifted is enriched from the standard

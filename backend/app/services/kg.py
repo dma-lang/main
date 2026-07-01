@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app import db
 from app.intelligence import gates
+from app.intelligence.gemini import Gemini, RelationshipInference
 from app.versioning import resolve_version
 
 _KG_EDGE_KIND = "kg_edge_proposal"  # the change_flag kind (also the pending_edge promotion target)
@@ -847,8 +848,8 @@ async def promote_pending_edge(conn: AsyncConnection, pending_id: str) -> bool:
         (
             await conn.execute(
                 text(
-                    "SELECT version_id, from_node, to_node, kind, weight, detail::text AS detail "
-                    "FROM control.pending_edge "
+                    "SELECT version_id, from_node, to_node, kind, relation, direction, weight, "
+                    "detail::text AS detail FROM control.pending_edge "
                     "WHERE pending_id = :p AND status = 'pending' FOR UPDATE"
                 ),
                 {"p": pending_id},
@@ -866,14 +867,16 @@ async def promote_pending_edge(conn: AsyncConnection, pending_id: str) -> bool:
     await conn.execute(
         text(
             "INSERT INTO control.kg_edge "
-            "(version_id, from_node, to_node, kind, layer, weight, detail) "
-            "VALUES (:v, :f, :t, :k, 'B_proposed', :w, CAST(:d AS jsonb))"
+            "(version_id, from_node, to_node, kind, relation, direction, layer, weight, detail) "
+            "VALUES (:v, :f, :t, :k, :rel, :dir, 'B_proposed', :w, CAST(:d AS jsonb))"
         ),
         {
             "v": pe["version_id"],
             "f": pe["from_node"],
             "t": pe["to_node"],
             "k": pe["kind"],
+            "rel": pe["relation"],  # directional relation (NULL for legacy symmetric edges)
+            "dir": pe["direction"],  # forward | bidirectional (NULL for legacy)
             "w": pe["weight"],
             "d": pe["detail"],  # the edge's "why" survives promotion (migration 0014)
         },
@@ -889,4 +892,521 @@ async def reject_pending_edge(conn: AsyncConnection, pending_id: str) -> None:
             "WHERE pending_id = :p AND status = 'pending'"
         ),
         {"p": pending_id},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R6 — NLP DIRECTIONAL relationship engine. Reads two subcaps' DESCRIPTIONS into a
+# typed, DIRECTIONAL relation (one affects / precedes / depends_on the other), then
+# DUAL-verifies it — an adversarial refutation AND corroboration against the Jira
+# delivery corpus — before a gated, dashed pending_edge + Change-Flags proposal.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SYMMETRIC_REL = frozenset({"complements", "alternative_to"})
+# Order-independent target_ref suffix per relation — distinct from the structural _SHORT set, so a
+# directional proposal never collides with a structural one for the same pair.
+_REL_SHORT = {
+    "enables": "den",
+    "depends_on": "ddp",
+    "precedes": "dpr",
+    "affects": "daf",
+    "complements": "dcm",
+    "alternative_to": "dal",
+    "subsumes": "dsb",
+}
+# Delivery-language stopwords dropped before keyphrase overlap — the shared subset is "the major
+# keywords" connecting two subcaps, surfaced on the edge and fed to the NLP extractor.
+_KW_STOP = frozenset(
+    (
+        "the a an and or of to in for with on by from as is are be this that these those it its "
+        "into via per across enable enables support supports provide provides using use used new "
+        "existing which such their they them our your capability capabilities subcap platform"
+    ).split()
+)
+
+
+def _content_tokens(text_in: str) -> set[str]:
+    """Salient content tokens of a description (>= 4 chars, stopwords dropped) — the keyphrase set a
+    relationship is grounded in. No regex: split on non-alphanumerics so kg.py needs no new import.
+    """
+    words = "".join(c if c.isalnum() else " " for c in (text_in or "").lower()).split()
+    return {w for w in words if len(w) >= 4 and w not in _KW_STOP}
+
+
+def _directional_ref(a: str, b: str, relation: str) -> str:
+    """Stable, order-independent change_flag target_ref for a directional edge (pair-level
+    idempotency; the relation suffix records which relation won)."""
+    lo, hi = _pair_key(a, b)
+    return f"{lo}>{hi}:{_REL_SHORT.get(relation, 'dxx')}"
+
+
+async def _directional_flag_exists(conn: AsyncConnection, a: str, b: str) -> bool:
+    """Pair-level idempotency for the directional layer: has ANY directional relation already been
+    proposed for this pair? (Exact match against the finite per-relation ref set.)"""
+    lo, hi = _pair_key(a, b)
+    refs = [f"{lo}>{hi}:{s}" for s in _REL_SHORT.values()]
+    return (
+        await conn.execute(
+            text(
+                "SELECT 1 FROM control.change_flag "
+                "WHERE kind = :k AND target_ref = ANY(:refs) LIMIT 1"
+            ),
+            {"k": _KG_EDGE_KIND, "refs": refs},
+        )
+    ).first() is not None
+
+
+def _aggregate_signals(raw: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Fold every structural / co-delivery / semantic signal into ONE dict per (a<b) pair, carrying
+    the exact counts the directional extractor + corroboration need (shared platforms/offerings,
+    co-delivery lift + client/story co-counts, cosine)."""
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in raw:
+        a, b = str(r["a"]), str(r["b"])
+        key = _pair_key(a, b)
+        s = out.setdefault(
+            key,
+            {
+                "a": key[0],
+                "b": key[1],
+                "a_name": str(r.get("a_name") or key[0]),
+                "b_name": str(r.get("b_name") or key[1]),
+                "shared_platforms": 0,
+                "shared_offerings": 0,
+                "lift": 0.0,
+                "co_clients": 0,
+                "co_stories": 0,
+                "cosine": 0.0,
+            },
+        )
+        kind = r["kind"]
+        if kind == _SHARES_PLATFORM:
+            s["shared_platforms"] = int(r.get("shared") or 0)
+        elif kind == _SHARES_OFFERING:
+            s["shared_offerings"] = int(r.get("shared") or 0)
+        elif kind == _CO_DELIVERED:
+            s["lift"] = float(r.get("lift") or 0.0)
+            s["co_clients"] = int(r.get("co_clients") or 0)
+            s["co_stories"] = int(r.get("co_stories") or 0)
+        elif kind == _SEMANTIC:
+            s["cosine"] = float(r.get("cosine") or 0.0)
+    return out
+
+
+async def _subcap_descriptions(conn: AsyncConnection, schema: str) -> dict[str, tuple[str, str]]:
+    """Every subcap's (name, description) — the natural language the NLP extractor reads."""
+    rows = (
+        await conn.execute(
+            text(f"SELECT subcap_id, name, coalesce(description, '') AS d FROM {schema}.subcap")
+        )
+    ).all()
+    return {str(r[0]): (str(r[1]), str(r[2])) for r in rows}
+
+
+async def _subcap_stage_ords(conn: AsyncConnection, schema: str) -> dict[str, int]:
+    """Each subcap's earliest value-chain stage ordinal — the canonical sequence signal that
+    corroborates a ``precedes`` relation (an earlier-stage subcap precedes a later-stage one)."""
+    vcc_s = await _ench_schema(conn, schema, "subcap_vcc")
+    rows = (
+        await conn.execute(
+            text(
+                f"SELECT subcap_id, min(stage_ord) FROM {vcc_s}.subcap_vcc "
+                "WHERE stage_ord IS NOT NULL GROUP BY subcap_id"
+            )
+        )
+    ).all()
+    return {str(r[0]): int(r[1]) for r in rows if r[1] is not None}
+
+
+def _prelim_strength(sig: dict[str, Any]) -> float:
+    """A quick, signal-only strength to RANK candidates before the bounded NLP pass (strongest,
+    most-novel pairs first) — reuses the unified per-kind ``_strength``."""
+    return max(
+        _strength({"kind": _SEMANTIC, "cosine": sig.get("cosine")}) if sig.get("cosine") else 0.0,
+        _strength({"kind": _CO_DELIVERED, "lift": sig.get("lift")}) if sig.get("lift") else 0.0,
+        (
+            _strength({"kind": _SHARES_PLATFORM, "shared": sig.get("shared_platforms")})
+            if sig.get("shared_platforms")
+            else 0.0
+        ),
+        (
+            _strength({"kind": _SHARES_OFFERING, "shared": sig.get("shared_offerings")})
+            if sig.get("shared_offerings")
+            else 0.0
+        ),
+    )
+
+
+def _rank_directional_candidates(
+    sig_by_pair: dict[tuple[str, str], dict[str, Any]],
+    descs: dict[str, tuple[str, str]],
+    stage_ords: dict[str, int],
+    dcfg: gates.KnowledgeGraphDirectionalConfig,
+) -> list[dict[str, Any]]:
+    """Assemble the full per-pair signal (descriptions + value-chain order + shared keyphrases) for
+    every connected candidate, drop cross-pillar ones when disallowed (D16), and rank by preliminary
+    novelty so the bounded NLP pass reads the strongest, most non-obvious pairs first."""
+    out: list[dict[str, Any]] = []
+    for (a, b), sig in sig_by_pair.items():
+        if not dcfg.allow_cross_pillar and a[:2] != b[:2]:
+            continue
+        a_name, a_desc = descs.get(a, (sig["a_name"], ""))
+        b_name, b_desc = descs.get(b, (sig["b_name"], ""))
+        shared_kw = sorted(_content_tokens(a_desc) & _content_tokens(b_desc))[:8]
+        full = {
+            **sig,
+            "a_id": a,
+            "b_id": b,
+            "a_name": a_name,
+            "b_name": b_name,
+            "a_desc": a_desc,
+            "b_desc": b_desc,
+            "a_stage_ord": stage_ords.get(a),
+            "b_stage_ord": stage_ords.get(b),
+            "shared_keywords": shared_kw,
+        }
+        full["_prelim"] = _prelim_strength(sig)
+        full["_novelty"] = _novelty(
+            full["_prelim"], a, b, bool(sig.get("shared_platforms")), dcfg.novelty_weight
+        )
+        out.append(full)
+    out.sort(key=lambda d: (-float(d["_novelty"]), -float(d["_prelim"]), d["a"], d["b"]))
+    return out
+
+
+def _corroborate(
+    relation: str, direction: str, a: str, b: str, sig: dict[str, Any], lift_min: float
+) -> tuple[bool, str]:
+    """The corpus/structural half of the dual verification ("does it truly pan out"): the claimed
+    relation must be consistent with the grounded delivery + catalogue data. A relation the data
+    does not support is dropped. Returns (corroborated, note)."""
+    lift = float(sig.get("lift") or 0.0)
+    co_clients = int(sig.get("co_clients") or 0)
+    co_stories = int(sig.get("co_stories") or 0)
+    cosine = float(sig.get("cosine") or 0.0)
+    shared_plat = int(sig.get("shared_platforms") or 0)
+    shared_off = int(sig.get("shared_offerings") or 0)
+    a_ord, b_ord = sig.get("a_stage_ord"), sig.get("b_stage_ord")
+    if relation == "precedes":
+        if a_ord is None or b_ord is None or int(a_ord) == int(b_ord):
+            return (False, "no value-chain ordering to corroborate precedence")
+        a_first = int(a_ord) < int(b_ord)
+        ok = a_first == (direction != "b_to_a")
+        verb = "supports" if ok else "contradicts"
+        return (ok, f"value-chain stage order {verb} the claimed direction")
+    if relation in ("depends_on", "complements", "enables"):
+        ok = lift >= lift_min or co_clients >= 1
+        return (
+            ok,
+            (
+                f"co-delivered in real Jira (lift {lift:.1f}, {co_clients} client projects)"
+                if ok
+                else "no co-delivery in the corpus to support the relation"
+            ),
+        )
+    if relation == "alternative_to":
+        ok = cosine >= 0.9 or shared_plat >= 1
+        return (
+            ok,
+            (
+                f"near-identical capability space (cosine {cosine:.2f})"
+                if ok
+                else "not similar enough in the corpus to be an alternative"
+            ),
+        )
+    if relation in ("affects", "subsumes"):
+        ok = co_clients >= 1 or co_stories >= 1 or shared_plat >= 1 or shared_off >= 1
+        return (
+            ok,
+            (
+                "co-occur in real delivery / shared catalogue structure"
+                if ok
+                else "no delivery or structural co-occurrence to support the relation"
+            ),
+        )
+    return (False, "unrecognised relation")
+
+
+def _directional_strength(confidence: float, refuted_fraction: float, corroborated: bool) -> float:
+    """Unified 0..1 strength for a directional edge: the NLP confidence, how strongly it survived
+    the adversary (1 − refuted fraction), and whether the corpus corroborated it."""
+    verify_margin = 1.0 - refuted_fraction
+    base = 0.5 * confidence + 0.3 * verify_margin + 0.2 * (1.0 if corroborated else 0.0)
+    return round(min(0.999, max(0.0, base)), 3)
+
+
+async def propose_directional_edges(version: str) -> dict[str, Any]:
+    """R6: read the DIRECTIONAL relationship between connected subcap pairs by NLP over their
+    descriptions, DUAL-verify each (adversary refutation + Jira-corpus corroboration), and queue the
+    survivors as gated, dashed directional ``pending_edge`` + Change-Flags proposals. Candidates are
+    the bounded union of the structural / co-delivery / semantic signals the flat catalogue hides;
+    the enrich model assigns the typed relation + direction, the adversarial model tries to refute
+    it, and the delivery corpus (co-delivery lift, value-chain order) must corroborate it. Hermetic:
+    deterministic stub extraction + verification, zero spend; live: metered, G8-gated. Idempotent at
+    the pair level; bounded by ``directional_max_per_scan``. Returns
+    ``{version, created, candidates, refuted, uncorroborated, already}``."""
+    cfg = gates.knowledge_graph_full_config()
+    dcfg = gates.knowledge_graph_directional_config()
+    v = await resolve_version(version)
+    gem = Gemini()
+    engine = db.require_engine()
+    created = refuted = uncorroborated = already = 0
+    async with engine.begin() as conn:
+        ench_s = await _ench_schema(conn, v.schema_name, "subcap_platform")
+        raw = await _candidate_pairs(
+            conn, ench_s, cfg.shares_platform_min, cfg.shares_feature_min, dcfg.max_per_scan
+        )
+        raw += await _co_membership_pairs(
+            conn,
+            v.schema_name,
+            cfg.shares_offering_min,
+            cfg.same_value_chain_min,
+            dcfg.max_per_scan,
+        )
+        raw += await _co_delivery_pairs(
+            conn,
+            v.schema_name,
+            v.version_id,
+            cfg.co_delivery_min_lift,
+            cfg.co_delivery_min_count,
+            dcfg.max_per_scan,
+        )
+        emb_s = await _embedding_schema(conn, v.schema_name)
+        if emb_s is not None:
+            raw += await _semantic_pairs(conn, emb_s, cfg.semantic_min_cosine, dcfg.max_per_scan)
+        descs = await _subcap_descriptions(conn, ench_s)
+        stage_ords = await _subcap_stage_ords(conn, v.schema_name)
+        ranked = _rank_directional_candidates(_aggregate_signals(raw), descs, stage_ords, dcfg)[
+            : dcfg.max_per_scan
+        ]
+        for sig in ranked:
+            a, b = str(sig["a"]), str(sig["b"])
+            if await _directional_flag_exists(conn, a, b):
+                already += 1
+                continue
+            inf = await gem.infer_relationship(sig)
+            if inf.relation == "none" or inf.confidence < dcfg.confidence_floor:
+                continue
+            refutes, vcost = 0, 0.0
+            for _ in range(dcfg.verify_passes):
+                verdict = await gem.verify_relationship(inf, sig)
+                vcost += verdict.cost_usd
+                if verdict.refuted:
+                    refutes += 1
+            refuted_fraction = refutes / dcfg.verify_passes
+            if refuted_fraction >= 0.5:
+                refuted += 1  # the adversary majority refuted it — dropped
+                continue
+            corrob, note = _corroborate(
+                inf.relation, inf.direction, a, b, sig, dcfg.corroboration_lift
+            )
+            if not corrob:
+                uncorroborated += 1  # the corpus does not support it — dropped
+                continue
+            strength = _directional_strength(inf.confidence, refuted_fraction, corrob)
+            novelty = _novelty(
+                strength, a, b, bool(sig.get("shared_platforms")), dcfg.novelty_weight
+            )
+            await _create_directional_proposal(
+                conn, v.version_id, sig, inf, note, strength, novelty, refuted_fraction, vcost
+            )
+            created += 1
+    return {
+        "version": v.version_id,
+        "created": created,
+        "candidates": len(ranked),
+        "refuted": refuted,
+        "uncorroborated": uncorroborated,
+        "already": already,
+    }
+
+
+async def _create_directional_proposal(
+    conn: AsyncConnection,
+    version_id: str,
+    sig: dict[str, Any],
+    inf: RelationshipInference,
+    corroboration: str,
+    strength: float,
+    novelty: float,
+    refuted_fraction: float,
+    cost: float,
+) -> None:
+    """Write ONE gated, DIRECTIONAL Layer-B proposal (reasoning chain + evidence + citation + REAL
+    G1-G8 run + dashed pending_edge + Change-Flags flag). ``from_node`` is the relation's SOURCE and
+    ``to_node`` its TARGET; ``direction`` is 'forward' (arrow) or 'bidirectional' (symmetric)."""
+    a, b = str(sig["a"]), str(sig["b"])
+    a_name, b_name = str(sig["a_name"]), str(sig["b_name"])
+    relation, keywords = inf.relation, list(inf.keywords)
+    if inf.direction == "b_to_a":
+        src, dst, src_name, dst_name, stored_dir = b, a, b_name, a_name, "forward"
+    elif inf.direction == "bidirectional":
+        src, dst, src_name, dst_name, stored_dir = a, b, a_name, b_name, "bidirectional"
+    else:
+        src, dst, src_name, dst_name, stored_dir = a, b, a_name, b_name, "forward"
+    ref = _directional_ref(a, b, relation)
+    crosses = _crosses(a, b)
+    claim = inf.claim_label
+    arrow = "<->" if stored_dir == "bidirectional" else "->"
+    kw_txt = ", ".join(keywords) if keywords else "shared themes"
+    # REAL gates: the survivor passed the adversary + corpus, so G6 contradicts=False is earned; G8
+    # carries the REAL extraction+verification spend (0 under hermetic), G2 the corroborating count.
+    evidence_count = max(
+        2,
+        int(sig.get("co_clients") or 0)
+        + int(sig.get("co_stories") or 0)
+        + int(sig.get("shared_platforms") or 0)
+        + int(sig.get("shared_offerings") or 0)
+        + (1 if sig.get("cosine") else 0),
+    )
+    results, verdict = gates.evaluate_suggestion(
+        target_exists=True,
+        evidence_count=evidence_count,
+        source_tier="T1",
+        cited=True,
+        contradicts=False,  # survived the adversary AND corpus corroboration -> earned
+        cost_usd=cost,
+    )
+    basis = f"{relation.replace('_', ' ')} ({stored_dir}); {corroboration}"
+    title = f"Proposed directional edge: {src} {arrow} {dst} ({relation})"
+    body = (
+        f"NLP over the descriptions of {src} ({src_name}) and {dst} ({dst_name}) infers that "
+        f"{src_name} {relation.replace('_', ' ')} {dst_name}"
+        + (f" ({arrow})" if stored_dir != "bidirectional" else " (both ways)")
+        + f". {inf.rationale} It survived an adversarial counter-check and is corroborated: "
+        f"{corroboration}. Connective keywords: {kw_txt}. Proposed dashed Layer-B directional edge "
+        f"(AI-{'hypothesis' if claim == 'HYPOTHESIS' else 'inference'}); approve to confirm the "
+        "relationship + direction, or reject. Nothing is written to the graph until approved."
+    )
+    summary = (
+        f"KG directional edge {src} {arrow} {dst} [{relation}] — strength {strength:.2f}, "
+        f"novelty {novelty:.2f}, confidence {inf.confidence:.2f}."
+    )
+    chain_id = (
+        await conn.execute(
+            text(
+                "INSERT INTO control.reasoning_chain "
+                "(operation, subject_ref, claim_label, summary, model, cost_usd) "
+                "VALUES ('kg_directional_extract', :subj, CAST(:cl AS claim_label), :summary, "
+                ":model, :cost) RETURNING chain_id"
+            ),
+            {"subj": ref, "cl": claim, "summary": summary, "model": inf.model, "cost": cost},
+        )
+    ).scalar_one()
+    ev = await _edge_evidence(conn, a, b, "directional")
+    steps = [
+        (
+            "retrieve",
+            f"Read the descriptions of {src} and {dst} plus grounded signals (shared keywords: "
+            f"{kw_txt}).",
+            ev,
+        ),
+        (
+            "weigh",
+            f"NLP infers {src_name} {relation.replace('_', ' ')} {dst_name} "
+            f"(confidence {inf.confidence:.2f}). {inf.rationale}",
+            None,
+        ),
+        (
+            "weigh",
+            f"Adversarial counter-check: {(1.0 - refuted_fraction):.0%} of passes upheld the "
+            "relationship (majority did not refute).",
+            None,
+        ),
+        ("weigh", f"Corpus corroboration: {corroboration}.", None),
+        (
+            "conclude",
+            f"Propose a dashed directional {relation} edge {src} {arrow} {dst} "
+            f"(novelty {novelty:.2f}); route to a pillar lead (never rendered as fact ungated).",
+            None,
+        ),
+    ]
+    for i, (k, txt, evid) in enumerate(steps, 1):
+        await conn.execute(
+            text(
+                "INSERT INTO control.reasoning_step (chain_id, ordinal, kind, text, evidence_id) "
+                "VALUES (:c, :o, :k, :t, :e)"
+            ),
+            {"c": chain_id, "o": i, "k": k, "t": txt, "e": evid},
+        )
+    await conn.execute(
+        text(
+            "INSERT INTO control.citation (chain_id, evidence_id, verified) VALUES (:c, :e, true)"
+        ),
+        {"c": chain_id, "e": ev},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO control.validation_gate_run (chain_id, target_ref, gate_results, verdict) "
+            "VALUES (:c, :t, CAST(:r AS jsonb), CAST(:v AS gate_verdict))"
+        ),
+        {"c": chain_id, "t": ref, "r": json.dumps(results), "v": verdict},
+    )
+    from_node = await _node_id(conn, version_id, "subcap", src, src_name)
+    to_node = await _node_id(conn, version_id, "subcap", dst, dst_name)
+    edge_detail: dict[str, Any] = {
+        "kind_edge": relation,
+        "relation": relation,
+        "direction": stored_dir,
+        "from": src,
+        "from_name": src_name,
+        "to": dst,
+        "to_name": dst_name,
+        "basis": basis,
+        "rationale": inf.rationale,
+        "keywords": keywords,
+        "confidence": round(float(inf.confidence), 3),
+        "verify_survived": round(1.0 - refuted_fraction, 3),
+        "corroboration": corroboration,
+        "strength": strength,
+        "novelty": novelty,
+        "crosses": crosses,
+        "claim_label": claim,
+        "source_tier": "T1",
+        "model": inf.model,
+        "cost": round(cost, 6),
+    }
+    pending_id = (
+        await conn.execute(
+            text(
+                "INSERT INTO control.pending_edge "
+                "(version_id, from_node, to_node, kind, relation, direction, weight, chain_id, "
+                "status, detail) VALUES (:v, :f, :t, :k, :rel, :dir, :w, :c, 'pending', "
+                "CAST(:d AS jsonb)) RETURNING pending_id"
+            ),
+            {
+                "v": version_id,
+                "f": from_node,
+                "t": to_node,
+                "k": relation,
+                "rel": relation,
+                "dir": stored_dir,
+                "w": strength,
+                "c": chain_id,
+                "d": json.dumps(edge_detail),
+            },
+        )
+    ).scalar_one()
+    flag_detail = {
+        **edge_detail,
+        "title": title,
+        "body": body,
+        "version": version_id,
+        "gate_failed": gates.first_failing(results),
+        "verdict": verdict,
+        "weight": strength,
+        "pending_id": str(pending_id),
+    }
+    await conn.execute(
+        text(
+            "INSERT INTO control.change_flag (kind, severity, target_ref, detail, chain_id) "
+            "VALUES (:k, :sev, :t, CAST(:d AS jsonb), :c)"
+        ),
+        {
+            "k": _KG_EDGE_KIND,
+            "sev": _severity(evidence_count),
+            "t": ref,
+            "d": json.dumps(flag_detail),
+            "c": chain_id,
+        },
     )

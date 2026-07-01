@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added (intelligence — R6)
+- **NLP directional Knowledge Graph.** The KG now reads two subcaps' **descriptions** into a typed,
+  **directional** relationship (`enables` / `depends_on` / `precedes` / `affects` / `complements` /
+  `alternative_to` / `subsumes`) instead of only symmetric structural/co-occurrence edges. A bounded
+  candidate set (semantic-kNN + co-delivery + structural + shared-keyphrase) is read by the enrich
+  model (`Gemini.infer_relationship`), then **dual-verified** — an adversarial refutation
+  (`verify_relationship`, majority-refute drops it) **and** corroboration against the Jira delivery
+  corpus (value-chain order for `precedes`, co-delivery lift for `depends_on`/`complements`, …) —
+  before a **gated** (real G1–G8), dashed directional `pending_edge` + Change-Flags proposal with the
+  full trust envelope (rationale, connective keywords, confidence, verification verdict, novelty).
+  Migration `0015` adds `kg_edge.relation`/`.direction` (+ `pending_edge`); approval promotes a
+  directional edge. Live enrich+adversarial spend, metered + G8-gated, on the weekly
+  `kg_directional_propose` schedule + `POST /api/admin/kg/directional/{version}`; hermetic =
+  deterministic stub, zero spend. Frontend renders arrows + per-relation colour/label + a legend and
+  shows the rationale/keywords/verdict on click. Covered by `tests/test_kg_directional.py`.
+- **Hybrid (semantic) story→use-case matcher.** `use_case_match` is now `(1−w)·TF-IDF + w·embedding`
+  cosine (`gemini-embedding-001`; hermetic = deterministic token-hash). The dense half reranks the
+  candidate use cases and catches a summary that *means* the same as a use case without sharing a
+  term (embedding cosine ≥ `semantic_match_floor`), while a shared discriminating term still gates
+  attribution — so the gap detector's "unmatched" fuel is preserved. Config in `gates.yaml`.
+
+### Added (usability)
+- **Change-flag severity filter + visible proposals.** `GET /api/change-flags` accepts
+  `severity=BLOCKING|HIGH|MED|LOW`; the inbox's severity chips are now a clickable filter (composed
+  with the kind/theme filter), and the notifications **bell now counts MED** (was BLOCKING+HIGH only)
+  so the MED/LOW proposal flags — use-case gaps, KG edges — are no longer silently hidden.
+  Proposal flags use a proposal-scaled severity so a sizeable use-case gap reaches MED/HIGH. The
+  deploy self-refresh also re-runs the deterministic discovery for the **active** version on every
+  redeploy (not only rebuilt ones), so the proposal box always refreshes.
+
 ### Added (operations)
 - **The deploy self-refreshes the data plane (`app.refresh`).** A deploy ships new code/seeds, but
   the live `cat_<v>` catalogue and carried Jira delivery were built by the *previous* run — so the

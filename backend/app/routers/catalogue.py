@@ -206,6 +206,12 @@ class LatentEdge(BaseModel):
     crosses: str
     chain: str | None = None
     pending_id: str | None = None
+    # R6 — directional relationship (None on legacy symmetric edges): the panel shows an arrow +
+    # relation label and, on click, the rationale + keywords + verification verdict.
+    relation: str | None = None
+    direction: str | None = None  # forward | bidirectional
+    keywords: list[str] = []
+    rationale: str | None = None
 
 
 class SubcapConnections(BaseModel):
@@ -984,7 +990,9 @@ async def subcap_connections(
                         "pe.kind::text AS kind, pe.weight AS strength, "
                         "coalesce((pe.detail->>'novelty')::float, 0) AS novelty, "
                         "coalesce(pe.detail->>'basis', '') AS basis, "
-                        "pe.detail->>'crosses' AS crosses, "
+                        "pe.detail->>'crosses' AS crosses, pe.relation AS relation, "
+                        "pe.direction AS direction, pe.detail->'keywords' AS keywords, "
+                        "pe.detail->>'rationale' AS rationale, "
                         "pe.chain_id::text AS chain, pe.pending_id::text AS pending_id "
                         "FROM control.pending_edge pe "
                         "JOIN control.kg_node fn ON fn.node_id = pe.from_node "
@@ -1047,6 +1055,10 @@ async def subcap_connections(
                 crosses=str(crosses),
                 chain=r["chain"],
                 pending_id=r["pending_id"],
+                relation=r["relation"],
+                direction=r["direction"],
+                keywords=list(r["keywords"] or []),
+                rationale=r["rationale"],
             )
         )
     return SubcapConnections(
@@ -1075,6 +1087,14 @@ class KgEdge(BaseModel):
     novelty: float | None = None  # R5 discovery rank (Layer-B): strong AND non-obvious ranks top
     chain: str | None = None  # R5 reasoning-chain backlink (Layer-B)
     pending_id: str | None = None  # R5 approve/peek the proposal straight from the edge
+    # R6 — NLP directional relationship (None on legacy symmetric edges; the FE draws an arrow when
+    # direction == 'forward', a plain line when 'bidirectional').
+    relation: str | None = None  # enables | depends_on | precedes | affects | complements | ...
+    direction: str | None = None  # forward | bidirectional
+    keywords: list[str] = []  # the connective concepts driving the relationship ("major keywords")
+    rationale: str | None = None  # the NLP "why", grounded in the two descriptions
+    verify_survived: float | None = None  # fraction of adversary passes that upheld it
+    corroboration: str | None = None  # the Jira-corpus corroboration note
 
 
 class KgResp(BaseModel):
@@ -1301,6 +1321,12 @@ async def knowledge_graph(
                 novelty=det.get("novelty"),
                 chain=p["chain"],
                 pending_id=p["pending_id"],
+                relation=det.get("relation"),  # R6 directional (None on legacy symmetric edges)
+                direction=det.get("direction"),
+                keywords=list(det.get("keywords") or []),
+                rationale=det.get("rationale"),
+                verify_survived=det.get("verify_survived"),
+                corroboration=det.get("corroboration"),
             )
         )
         # add the proposed neighbour subcap node(s) so the dashed edge connects to a drawn node
@@ -1330,6 +1356,10 @@ async def knowledge_graph(
                 ),
                 chain=p["chain"],
                 pending_id=p["pending_id"],
+                relation=det.get("relation"),
+                direction=det.get("direction"),
+                keywords=list(det.get("keywords") or []),
+                rationale=det.get("rationale"),
             )
         )
     latent.sort(key=lambda e: -e.novelty)
@@ -1377,7 +1407,9 @@ async def kg_discover(
                         "coalesce(pe.detail->>'basis', '') AS basis, "
                         "coalesce(pe.detail->>'crosses', CASE WHEN left(fn.ref_id, 2) <> "
                         "left(tn.ref_id, 2) THEN 'cross_pillar' ELSE 'cross_capability' END) "
-                        "AS crosses, pe.chain_id::text AS chain, pe.pending_id::text AS pending_id "
+                        "AS crosses, pe.relation AS relation, pe.direction AS direction, "
+                        "pe.detail->'keywords' AS keywords, pe.detail->>'rationale' AS rationale, "
+                        "pe.chain_id::text AS chain, pe.pending_id::text AS pending_id "
                         "FROM control.pending_edge pe "
                         "JOIN control.kg_node fn ON fn.node_id = pe.from_node "
                         "JOIN control.kg_node tn ON tn.node_id = pe.to_node "
@@ -1390,7 +1422,16 @@ async def kg_discover(
             .mappings()
             .all()
         )
-    latent = [LatentEdge(**{**dict(r), "strength": float(r["strength"] or 0.0)}) for r in rows]
+    latent = [
+        LatentEdge(
+            **{
+                **dict(r),
+                "strength": float(r["strength"] or 0.0),
+                "keywords": list(r["keywords"] or []),
+            }
+        )
+        for r in rows
+    ]
     return KgDiscoverResp(version=v.version_id, latent=latent)
 
 

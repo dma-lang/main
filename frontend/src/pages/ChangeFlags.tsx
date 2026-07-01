@@ -41,8 +41,12 @@ export function ChangeFlags() {
   const allFlags = q.data?.flags ?? [];
   const counts = q.data?.counts ?? { BLOCKING: 0, HIGH: 0, MED: 0, LOW: 0 };
   const [kind, setKind] = useState<string>('all');
+  const [sev, setSev] = useState<string>('all');
   const kinds = [...new Set(allFlags.map((f) => f.kind))];
-  const flags = kind === 'all' ? allFlags : allFlags.filter((f) => f.kind === kind);
+  // Kind + severity compose client-side (both narrow the same list; counts come from the API).
+  const flags = allFlags.filter(
+    (f) => (kind === 'all' || f.kind === kind) && (sev === 'all' || f.sev === sev),
+  );
 
   const onReject = (id: string) => {
     const reason = window.prompt('Reason for rejecting this flag?')?.trim();
@@ -89,16 +93,37 @@ export function ChangeFlags() {
         ) : null
       }
     >
-      <div className="row gap8" style={{ marginBottom: 12 }}>
-        {SEV_ORDER.map((k) => (
-          <span
-            key={k}
-            className={'chip ' + (k === 'BLOCKING' ? 'orange' : 'soft')}
-            style={{ padding: '6px 11px', fontSize: 12 }}
-          >
-            {counts[k] ?? 0} {k}
-          </span>
-        ))}
+      {/* Severity toggle — the counts double as filters; composes with the kind filter below. The
+          active chip is highlighted with an outline so the current severity reads at a glance. */}
+      <div className="row wrap gap8" style={{ marginBottom: 12 }}>
+        <button
+          className={'chip ' + (sev === 'all' ? 'teal' : 'soft')}
+          style={{ padding: '6px 11px', fontSize: 12, cursor: 'pointer', border: 'none' }}
+          aria-pressed={sev === 'all'}
+          onClick={() => setSev('all')}
+        >
+          {allFlags.length} All
+        </button>
+        {SEV_ORDER.map((k) => {
+          const on = sev === k;
+          return (
+            <button
+              key={k}
+              className={'chip ' + (k === 'BLOCKING' || k === 'HIGH' ? 'orange' : 'soft')}
+              style={{
+                padding: '6px 11px',
+                fontSize: 12,
+                cursor: 'pointer',
+                border: on ? '1px solid var(--border-focus)' : '1px solid transparent',
+                outline: on ? '1px solid var(--border-focus)' : 'none',
+              }}
+              aria-pressed={on}
+              onClick={() => setSev(on ? 'all' : k)}
+            >
+              {counts[k] ?? 0} {k}
+            </button>
+          );
+        })}
       </div>
 
       {/* kind filter — a decay scan can raise hundreds of "no delivery" candidates; narrow by kind */}
@@ -226,8 +251,9 @@ export function ChangeFlags() {
         ))}
         {flags.length > RENDER_CAP && (
           <div className="card pad muted" style={{ fontSize: 12, textAlign: 'center' }}>
-            Showing the first {RENDER_CAP} of {flags.length} {kind === 'all' ? '' : KIND_LABEL[kind] ?? ''}{' '}
-            flags (highest severity first). Resolve or filter by kind to see more — none are dropped.
+            Showing the first {RENDER_CAP} of {flags.length} {sev === 'all' ? '' : sev + ' '}
+            {kind === 'all' ? '' : KIND_LABEL[kind] ?? ''} flags (highest severity first). Resolve or
+            filter by kind or severity to see more — none are dropped.
           </div>
         )}
         {!flags.length && (

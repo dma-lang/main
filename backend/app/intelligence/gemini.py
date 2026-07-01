@@ -105,6 +105,55 @@ class UseCaseInference:
     cost_usd: float
 
 
+# R6 — the directional relationship taxonomy the KG extractor reads from two subcaps' descriptions.
+# Directional relations flow over (a, b); the two symmetric ones carry direction 'bidirectional'.
+_RELATIONS: tuple[str, ...] = (
+    "enables",
+    "depends_on",
+    "precedes",
+    "affects",
+    "complements",
+    "alternative_to",
+    "subsumes",
+)
+_SYMMETRIC_RELATIONS = frozenset({"complements", "alternative_to"})
+
+
+@dataclass(frozen=True)
+class RelationshipInference:
+    """An AI-inferred DIRECTIONAL relationship between two subcaps, read by NLP from their
+    descriptions + grounded signals (shared platforms/offerings, value-chain order, co-delivery,
+    cosine, shared keywords).
+
+    Always a HYPOTHESIS/INFERENCE (never a fact): gated G1-G8, dual-verified (adversary + corpus),
+    and surfaced as a human-approved change flag, never applied automatically. ``direction`` is
+    ``a_to_b`` (a is the source that enables/precedes/affects b), ``b_to_a``, or ``bidirectional``
+    for the symmetric relations; ``relation`` is one of ``_RELATIONS`` or ``none``."""
+
+    relation: str  # one of _RELATIONS, or "none"
+    direction: str  # a_to_b | b_to_a | bidirectional
+    confidence: float  # 0..1
+    rationale: str  # grounded "why", drawn from the two descriptions + signals
+    keywords: tuple[str, ...]  # the connective concepts driving the relationship
+    claim_label: str
+    model: str
+    cost_usd: float
+
+
+@dataclass(frozen=True)
+class RelationshipVerdict:
+    """The adversary's verdict on a proposed relationship — argue-the-opposite, refute-by-default.
+
+    ``refuted`` True drops the relationship (it did not survive the semantic counter-check); the
+    corpus corroboration in services/kg.py is the second, independent gate ("does it truly pan
+    out")."""
+
+    refuted: bool
+    reason: str
+    model: str
+    cost_usd: float
+
+
 _TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 _CLIENT: Any = None
 
@@ -473,6 +522,187 @@ class Gemini:
             claim_label="HYPOTHESIS",
             model=model,
             cost_usd=cost,
+        )
+
+    async def infer_relationship(self, signals: dict[str, Any]) -> RelationshipInference:
+        """Infer the DIRECTIONAL relationship between two subcaps by NLP over their descriptions +
+        grounded signals. ``signals`` carries ``a_id``/``b_id``, ``a_name``/``b_name``,
+        ``a_desc``/``b_desc`` (the descriptions the model reads) and the structured evidence —
+        shared platform/offering counts, value-chain order, co-delivery ``lift``, ``cosine``,
+        ``shared_keywords``. Live reads the descriptions on the pinned *enrich* model (models.yaml)
+        with retry/backoff, MAX_TOKENS->chunk, SAFETY->review, spend governed by G8 + the cost
+        meter; hermetic (and a spent envelope) derive a deterministic relation + direction from the
+        signals (no Vertex, no spend)."""
+        if self._settings.is_hermetic or await cost_meter.over_throttle():
+            return self._hermetic_infer_relationship(signals)
+        return await self._infer_relationship_live(signals)
+
+    @staticmethod
+    def _hermetic_infer_relationship(signals: dict[str, Any]) -> RelationshipInference:
+        """Deterministic stand-in for the enrich model: derive a typed, directional relationship
+        from the grounded signals (value-chain order -> precedes; near-duplicate cosine ->
+        alternative_to; co-delivery -> complements; shared platforms/offerings -> depends_on; else
+        affects). The live model reads the prose; this keeps type + direction meaningful."""
+        a_id, b_id = str(signals.get("a_id", "")), str(signals.get("b_id", ""))
+        a_name = str(signals.get("a_name") or a_id)
+        b_name = str(signals.get("b_name") or b_id)
+        a_ord, b_ord = signals.get("a_stage_ord"), signals.get("b_stage_ord")
+        cosine = float(signals.get("cosine") or 0.0)
+        lift = float(signals.get("lift") or 0.0)
+        shared_plat = int(signals.get("shared_platforms") or 0)
+        shared_off = int(signals.get("shared_offerings") or 0)
+        keywords = tuple(
+            str(k) for k in (signals.get("shared_keywords") or [])[:8] if str(k).strip()
+        )
+        fwd = a_id <= b_id  # deterministic default direction for the id-ordered pair
+        if a_ord is not None and b_ord is not None and int(a_ord) != int(b_ord):
+            relation, direction, conf = (
+                "precedes",
+                "a_to_b" if int(a_ord) < int(b_ord) else "b_to_a",
+                0.6,
+            )
+            why = "one sits earlier in the shared value chain, so its delivery leads the other's"
+        elif cosine >= 0.9:
+            relation, direction = "alternative_to", "bidirectional"
+            conf = round(min(0.95, cosine), 3)
+            why = "they cover near-identical capability space (very high semantic similarity)"
+        elif lift > 1.0:
+            relation, direction = "complements", "bidirectional"
+            conf = round(min(0.9, 1.0 - 1.0 / lift), 3)
+            why = "they are repeatedly delivered together, complementing each other in engagements"
+        elif shared_plat or shared_off:
+            relation, direction = "depends_on", ("a_to_b" if fwd else "b_to_a")
+            conf = round(min(0.75, 0.4 + 0.08 * (shared_plat + shared_off)), 3)
+            why = "they share delivery platforms/offerings, so one builds on the other's foundation"
+        else:
+            relation, direction = "affects", ("a_to_b" if fwd else "b_to_a")
+            conf = round(min(0.7, 0.3 + cosine), 3)
+            why = "they are related in the descriptions without a hard structural or delivery bond"
+        src, dst = (a_name, b_name) if direction != "b_to_a" else (b_name, a_name)
+        kw_txt = ", ".join(keywords) if keywords else ""
+        rationale = (
+            f"{src} {relation.replace('_', ' ')} {dst}: {why}"
+            + (f" (connective themes: {kw_txt})" if kw_txt else "")
+            + ". Provisional signal-derived relationship — the live model reads descriptions to "
+            "confirm the type and direction."
+        )
+        claim = "HYPOTHESIS" if a_id[:2] != b_id[:2] else "INFERENCE"
+        return RelationshipInference(
+            relation=relation,
+            direction=direction,
+            confidence=conf,
+            rationale=rationale,
+            keywords=keywords,
+            claim_label=claim,
+            model="hermetic-stub",
+            cost_usd=0.0,
+        )
+
+    async def _infer_relationship_live(self, signals: dict[str, Any]) -> RelationshipInference:
+        model = model_config.model_for("enrich")
+        a_id, b_id = str(signals.get("a_id", "")), str(signals.get("b_id", ""))
+        a_name = str(signals.get("a_name") or a_id)
+        b_name = str(signals.get("b_name") or b_id)
+        kws = ", ".join(str(k) for k in (signals.get("shared_keywords") or [])[:8])
+        system = (
+            "You infer the DIRECTIONAL relationship between two sub-capabilities A and B "
+            "by reading their descriptions and grounded signals. Choose one of: "
+            f"{', '.join(_RELATIONS)}, or none. enables/depends_on/precedes/affects/subsumes are "
+            "directional; complements/alternative_to are symmetric. Return ONLY JSON "
+            '{"relation": "<one or none>", "direction": "a_to_b|b_to_a|bidirectional", '
+            '"confidence": <0..1>, "rationale": "<1-2 sentences grounded in the descriptions>", '
+            '"keywords": ["<connective concept>", ...]}. Ground everything; invent nothing.'
+        )
+        user = (
+            f"A = {a_id} ({a_name}): {signals.get('a_desc', '')}\n"
+            f"B = {b_id} ({b_name}): {signals.get('b_desc', '')}\n"
+            f"Signals: shared_platforms={signals.get('shared_platforms', 0)}, "
+            f"shared_offerings={signals.get('shared_offerings', 0)}, "
+            f"value_chain_order=({signals.get('a_stage_ord')},{signals.get('b_stage_ord')}), "
+            f"co_delivery_lift={signals.get('lift', 0)}, cosine={signals.get('cosine', 0)}, "
+            f"shared_keywords={kws}"
+        )
+        text_out, cost = await self._generate(model, system, user, as_json=True)
+        try:
+            data = json.loads(text_out)
+            relation = str(data["relation"]).strip().lower()
+            direction = str(data.get("direction", "")).strip().lower()
+            confidence = float(data.get("confidence", 0.0))
+            rationale = str(data.get("rationale", "")).strip()
+            keywords = tuple(str(k).strip() for k in (data.get("keywords") or []) if str(k).strip())
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return self._hermetic_infer_relationship(signals)  # bad parse -> never crash
+        if relation not in _RELATIONS and relation != "none":
+            relation = "none"
+        if relation in _SYMMETRIC_RELATIONS:
+            direction = "bidirectional"
+        elif direction not in ("a_to_b", "b_to_a"):
+            direction = "a_to_b"
+        claim = "HYPOTHESIS" if a_id[:2] != b_id[:2] else "INFERENCE"
+        return RelationshipInference(
+            relation=relation,
+            direction=direction,
+            confidence=max(0.0, min(1.0, confidence)),
+            rationale=rationale or "Inferred by the live enrich model from the descriptions.",
+            keywords=keywords,
+            claim_label=claim,
+            model=model,
+            cost_usd=cost,
+        )
+
+    async def verify_relationship(
+        self, inf: RelationshipInference, signals: dict[str, Any]
+    ) -> RelationshipVerdict:
+        """Adversarial counter-check (argue-the-opposite, refute-by-default) — the semantic half of
+        R6's dual verification. Live uses the pinned *adversarial* model; hermetic (and a spent
+        envelope) refute only a 'none'/low-confidence relation, so the deterministic corpus
+        corroboration in services/kg.py is the decisive "does it pan out" gate in tests."""
+        if self._settings.is_hermetic or await cost_meter.over_throttle():
+            return self._hermetic_verify_relationship(inf)
+        return await self._verify_relationship_live(inf, signals)
+
+    @staticmethod
+    def _hermetic_verify_relationship(inf: RelationshipInference) -> RelationshipVerdict:
+        refuted = inf.relation == "none" or inf.confidence < 0.35
+        reason = (
+            "no coherent directional relationship survives in the descriptions/signals"
+            if refuted
+            else "the relationship is consistent with the descriptions and grounded signals"
+        )
+        return RelationshipVerdict(
+            refuted=refuted, reason=reason, model="hermetic-stub", cost_usd=0.0
+        )
+
+    async def _verify_relationship_live(
+        self, inf: RelationshipInference, signals: dict[str, Any]
+    ) -> RelationshipVerdict:
+        model = model_config.model_for("adversarial")
+        a_name = str(signals.get("a_name") or signals.get("a_id", "A"))
+        b_name = str(signals.get("b_name") or signals.get("b_id", "B"))
+        system = (
+            "You are an adversarial reviewer. Argue the OPPOSITE of the proposed relationship and "
+            "decide whether it should be REFUTED. Refute by default unless descriptions clearly "
+            'support it. Return ONLY JSON {"refuted": <true|false>, "reason": "<1 sentence>"}.'
+        )
+        user = (
+            f"Proposed: {a_name} --{inf.relation} ({inf.direction})--> {b_name}\n"
+            f"Rationale: {inf.rationale}\n"
+            f"A: {signals.get('a_desc', '')}\nB: {signals.get('b_desc', '')}"
+        )
+        text_out, cost = await self._generate(model, system, user, as_json=True)
+        try:
+            data = json.loads(text_out)
+            refuted = bool(data["refuted"])
+            reason = str(data.get("reason", "")).strip()
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return RelationshipVerdict(
+                refuted=False,
+                reason="adversary parse failed; not refuted",
+                model=model,
+                cost_usd=cost,
+            )
+        return RelationshipVerdict(
+            refuted=refuted, reason=reason or "adversary verdict", model=model, cost_usd=cost
         )
 
     async def _generate(
