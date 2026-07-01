@@ -468,10 +468,12 @@ export const useQaMetrics = (enabled = true) =>
 export const useAuditLog = () =>
   useQuery<AuditRow[]>({ queryKey: ['audit-log'], queryFn: api.auditLog });
 
-export const useChangeFlags = (status = 'open') =>
+// `severity` is threaded through so the param is available; the ChangeFlags page filters client-side
+// by `f.sev` (so kind + severity compose without an extra fetch) and leaves this unset.
+export const useChangeFlags = (status = 'open', severity?: string) =>
   useQuery<ChangeFlagsResp>({
-    queryKey: ['change-flags', status],
-    queryFn: () => api.changeFlags(status),
+    queryKey: ['change-flags', status, severity ?? 'all'],
+    queryFn: () => api.changeFlags(status, severity),
   });
 
 export function useFlagActions() {

@@ -65,7 +65,10 @@ export function Header() {
   const flagsQ = useChangeFlags('open');
   const qa = useQaMetrics(ui.adminView);
   const c = flagsQ.data?.counts;
-  const flagBadge = c ? (c.BLOCKING ?? 0) + (c.HIGH ?? 0) : 0;
+  // Badge counts BLOCKING + HIGH + MED so MED proposals (use-case gaps, KG edges) aren't silently
+  // hidden — users must see they were raised. LOW stays out to avoid noise (still reachable via the
+  // Change-flags severity filter).
+  const flagBadge = c ? (c.BLOCKING ?? 0) + (c.HIGH ?? 0) + (c.MED ?? 0) : 0;
   // Live monthly LLM spend vs the budget envelope (G8) — admin-only, like the prototype meter.
   const spend = qa.data?.spend_usd;
   const envelope = qa.data?.envelope_usd ?? 8000;

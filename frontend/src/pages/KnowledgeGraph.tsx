@@ -34,12 +34,31 @@ const REL_COLOR: Record<string, string> = {
   uses_platform: 'var(--z-slate)',
   maps_to_offering: 'var(--interactive)',
 };
+
+// R6 directional relations get their OWN accessible palette (drawn from the app tokens) so the
+// semantic verb reads at a glance and pairs with the arrowhead. When an edge carries a `relation`
+// this colour wins over the structural `kind` colour above.
+const REL_R6_COLOR: Record<string, string> = {
+  enables: 'var(--interactive)', // teal — one capability unlocks another
+  depends_on: 'var(--z-orange)', // orange — a hard prerequisite
+  precedes: 'var(--z-blue)', // blue — sequencing in the value chain
+  affects: 'var(--p4)', // slate-violet — influences without gating
+  complements: 'var(--z-teal-light)', // mint — mutually reinforcing (symmetric)
+  alternative_to: 'var(--z-slate)', // slate — substitutable (symmetric)
+  subsumes: 'var(--interactive-active)', // deep teal — one contains the other
+};
 const relColor = (kind: string): string => REL_COLOR[kind] ?? 'var(--border-medium)';
 const relLabel = (kind: string): string => kind.replace(/_/g, ' ');
+// The colour an edge draws in: its R6 relation if present, else the structural-kind colour.
+const edgeColor = (e: KgEdge | LatentEdge): string =>
+  e.relation ? REL_R6_COLOR[e.relation] ?? relColor(e.kind) : relColor(e.kind);
+// → for a directed (forward) relation, ↔ for a symmetric one (or a legacy null relation).
+const relArrow = (dir?: string | null): string => (dir === 'forward' ? '→' : '↔');
 const edgeStrength = (e: KgEdge): number => e.strength ?? e.score ?? 0.4;
 
 function LatentRow({ e }: { e: LatentEdge }) {
   const crossPillar = e.crosses === 'cross_pillar';
+  const arrow = relArrow(e.direction);
   return (
     <div className="card" style={{ padding: '9px 11px' }}>
       <div className="between" style={{ marginBottom: 3 }}>
@@ -47,16 +66,28 @@ function LatentRow({ e }: { e: LatentEdge }) {
           <span className={crossPillar ? 'claim hypothesis' : 'claim inference'}>
             {crossPillar ? 'cross-pillar' : 'cross-cap'}
           </span>
-          <span className="mono" style={{ color: relColor(e.kind) }}>{relLabel(e.kind)}</span>
+          {/* R6 directional relation + arrow glyph (→ forward, ↔ symmetric) over the legacy kind */}
+          <span className="mono" style={{ color: edgeColor(e) }}>
+            {e.relation ? `${relLabel(e.relation)} ${arrow}` : relLabel(e.kind)}
+          </span>
         </span>
         <span className="num" style={{ fontSize: 11, fontWeight: 700, color: 'var(--state-warn-text)' }}>
           novelty {e.novelty.toFixed(2)}
         </span>
       </div>
       <div className="sclink mono" style={{ fontSize: 11 }} onClick={() => openPeek(e.target)}>
-        {e.source} → {e.target} · {e.target_name.slice(0, 26)}
+        {e.source} {arrow} {e.target} · {e.target_name.slice(0, 26)}
       </div>
-      <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>{e.basis}</div>
+      <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>{e.rationale || e.basis}</div>
+      {e.keywords && e.keywords.length > 0 && (
+        <div className="row wrap gap6" style={{ marginTop: 5 }}>
+          {e.keywords.slice(0, 5).map((k) => (
+            <span key={k} className="chip outline" style={{ fontSize: 9.5, padding: '2px 6px' }}>
+              {k}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="row gap8" style={{ marginTop: 6 }}>
         {e.chain && (
           <button className="btn ghost sm" onClick={() => openReasoning(e.chain)}>
@@ -114,6 +145,15 @@ export function KnowledgeGraph() {
     return (kg.data?.nodes ?? []).filter((n) => connected.has(n.id));
   }, [kg.data, allShown, centerId]);
 
+  // R6 relations actually present in the drawn graph — drives the legend (only what's on screen).
+  const presentRelations = useMemo(() => {
+    const seen = new Set<string>();
+    allShown.forEach((e) => {
+      if (e.relation) seen.add(e.relation);
+    });
+    return [...seen];
+  }, [allShown]);
+
   const layout = useMemo(() => {
     const W = 620;
     const H = 460;
@@ -121,13 +161,18 @@ export function KnowledgeGraph() {
     const cy = H / 2;
     const neighbours = visibleNodes.filter((n) => n.id !== centerId);
     const pos = new Map<string, { x: number; y: number }>();
+    // node draw-radius (kept in sync with the circle render below) — so a forward arrowhead lands on
+    // the target's rim instead of hiding under its circle.
+    const rad = new Map<string, number>();
     pos.set(centerId, { x: cx, y: cy });
+    rad.set(centerId, 26);
     neighbours.forEach((n, i) => {
       const a = (i / Math.max(1, neighbours.length)) * 2 * Math.PI - Math.PI / 2;
       const r = n.kind === 'subcap' ? 200 : 150;
       pos.set(n.id, { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+      rad.set(n.id, n.kind === 'subcap' ? 18 : 14);
     });
-    return { W, H, pos };
+    return { W, H, pos, rad };
   }, [visibleNodes, centerId]);
 
   const onNode = (n: KgNode) => {
@@ -195,6 +240,26 @@ export function KnowledgeGraph() {
                 )}
                 {kg.data && visibleNodes.length > 1 && (
                   <svg width="100%" viewBox={`0 0 ${layout.W} ${layout.H}`} style={{ display: 'block' }}>
+                    {/* One arrowhead marker per present R6 relation so its colour matches the stroke
+                        (SVG context-stroke isn't reliable across browsers). Drawn only for forward
+                        (directed) edges; symmetric/legacy edges stay arrowless as today. */}
+                    <defs>
+                      {presentRelations.map((rel) => (
+                        <marker
+                          key={rel}
+                          id={`arrow-${rel}`}
+                          viewBox="0 0 10 10"
+                          refX="9"
+                          refY="5"
+                          markerWidth="9"
+                          markerHeight="9"
+                          markerUnits="userSpaceOnUse"
+                          orient="auto-start-reverse"
+                        >
+                          <path d="M0 0 L10 5 L0 10 z" fill={REL_R6_COLOR[rel] ?? 'var(--border-medium)'} />
+                        </marker>
+                      ))}
+                    </defs>
                     {allShown.map((e, i) => {
                       const a = layout.pos.get(e.source);
                       const b = layout.pos.get(e.target);
@@ -203,7 +268,16 @@ export function KnowledgeGraph() {
                       const inc = sel != null && (e.source === sel || e.target === sel);
                       const isSel = selEdge === e;
                       const dim = (sel != null && !inc) || (selEdge != null && !isSel);
-                      const color = relColor(e.kind);
+                      const color = edgeColor(e);
+                      const forward = e.direction === 'forward' && !!e.relation;
+                      // Trim the drawn line back to the target's rim so a forward arrowhead sits ON
+                      // the node edge, not buried under the circle.
+                      const dx = b.x - a.x;
+                      const dy = b.y - a.y;
+                      const len = Math.hypot(dx, dy) || 1;
+                      const rB = (layout.rad.get(e.target) ?? 16) + 3;
+                      const ex = forward ? b.x - (dx / len) * rB : b.x;
+                      const ey = forward ? b.y - (dy / len) * rB : b.y;
                       return (
                         <g
                           key={i}
@@ -218,13 +292,16 @@ export function KnowledgeGraph() {
                           <line
                             x1={a.x}
                             y1={a.y}
-                            x2={b.x}
-                            y2={b.y}
+                            x2={ex}
+                            y2={ey}
                             stroke={color}
                             strokeWidth={(isSel || inc ? 1.5 : 0) + 1 + edgeStrength(e) * 3.5}
                             strokeDasharray={isB ? '5 4' : undefined}
+                            markerEnd={forward ? `url(#arrow-${e.relation})` : undefined}
                           />
-                          {(inc || isSel) && (
+                          {/* Relation label at the midpoint: always shown when the edge carries an R6
+                              relation, otherwise (legacy) only on hover/select as before. */}
+                          {(e.relation || inc || isSel) && (
                             <text
                               x={(a.x + b.x) / 2}
                               y={(a.y + b.y) / 2 - 3}
@@ -233,8 +310,8 @@ export function KnowledgeGraph() {
                               fill={color}
                               textAnchor="middle"
                             >
-                              {relLabel(e.kind)}
-                              {` · ${edgeStrength(e).toFixed(2)}`}
+                              {e.relation ? relLabel(e.relation) : relLabel(e.kind)}
+                              {(inc || isSel) && ` · ${edgeStrength(e).toFixed(2)}`}
                             </text>
                           )}
                         </g>
@@ -273,6 +350,29 @@ export function KnowledgeGraph() {
                   </svg>
                 )}
               </div>
+              {/* R6 directional legend — only the relations present in THIS graph, with the arrow
+                  glyph (→ forward, ↔ symmetric) taken from a representative edge. */}
+              {presentRelations.length > 0 && (
+                <div
+                  className="row gap12"
+                  style={{ padding: '9px 16px', borderTop: '1px solid var(--border-subtle)', fontSize: 10.5, flexWrap: 'wrap' }}
+                >
+                  <span className="eyebrow" style={{ fontSize: 9.5 }}>
+                    Relations
+                  </span>
+                  {presentRelations.map((rel) => {
+                    const dir = allShown.find((e) => e.relation === rel)?.direction;
+                    return (
+                      <span key={rel} className="row gap6">
+                        <span
+                          style={{ width: 16, height: 0, borderTop: `2px solid ${REL_R6_COLOR[rel] ?? 'var(--border-medium)'}` }}
+                        />
+                        {relLabel(rel)} <span className="mono">{relArrow(dir)}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
               <div
                 className="row gap12"
                 style={{ padding: '10px 16px', borderTop: '1px solid var(--border-subtle)', fontSize: 10.5, flexWrap: 'wrap' }}
@@ -294,27 +394,67 @@ export function KnowledgeGraph() {
             </div>
             <div style={{ display: 'grid', gap: 14 }}>
               {selEdge ? (
-                <div className="card pad" style={{ borderColor: relColor(selEdge.kind) }}>
+                <div className="card pad" style={{ borderColor: edgeColor(selEdge) }}>
                   <div className="between" style={{ marginBottom: 8 }}>
-                    <span className="h3">Edge · {relLabel(selEdge.kind)}</span>
+                    <span className="h3">
+                      Edge · {relLabel(selEdge.relation || selEdge.kind)}
+                    </span>
                     <button className="btn ghost sm" onClick={() => setSelEdge(null)}>
                       <Icon n="x" s={13} />
                     </button>
                   </div>
                   <div className="mono" style={{ fontSize: 11.5, marginBottom: 6 }}>
-                    {selEdge.source} → {selEdge.target}
+                    {selEdge.source} {relArrow(selEdge.direction)} {selEdge.target}
                   </div>
-                  <div className="row gap8" style={{ marginBottom: 6 }}>
+                  <div className="row wrap gap8" style={{ marginBottom: 6 }}>
                     <span className="claim hypothesis">
                       {selEdge.layer === 'B_proposed' ? 'AI proposed' : 'deterministic'}
                     </span>
+                    {/* R6 direction: directed (→) vs symmetric (↔), stated in words, not colour-only */}
+                    {selEdge.relation && (
+                      <span className="chip outline">
+                        {selEdge.direction === 'forward' ? 'directed →' : 'symmetric ↔'}
+                      </span>
+                    )}
                     {selEdge.crosses && <span className="chip">{selEdge.crosses.replace(/_/g, '-')}</span>}
                     <span className="num" style={{ fontSize: 11, fontWeight: 700 }}>
                       strength {edgeStrength(selEdge).toFixed(2)}
                     </span>
                   </div>
-                  {selEdge.basis && (
-                    <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>{selEdge.basis}</div>
+                  {/* R6 grounded "why" (rationale) preferred over the legacy basis line */}
+                  {(selEdge.rationale || selEdge.basis) && (
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                      {selEdge.rationale || selEdge.basis}
+                    </div>
+                  )}
+                  {selEdge.keywords && selEdge.keywords.length > 0 && (
+                    <div className="row wrap gap6" style={{ marginBottom: 8 }}>
+                      {selEdge.keywords.map((k) => (
+                        <span key={k} className="chip outline" style={{ fontSize: 10 }}>
+                          {k}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* R6 adversary survival + Jira-corpus corroboration — the trust evidence */}
+                  {(selEdge.verify_survived != null || selEdge.corroboration) && (
+                    <div
+                      className="card"
+                      style={{ background: 'var(--surface-raised)', padding: '8px 10px', marginBottom: 8 }}
+                    >
+                      {selEdge.verify_survived != null && (
+                        <div className="row gap6" style={{ fontSize: 11.5, marginBottom: selEdge.corroboration ? 4 : 0 }}>
+                          <Icon n="shield" s={12} />
+                          <span>
+                            adversary upheld{' '}
+                            <b className="num">{Math.round(selEdge.verify_survived * 100)}%</b>
+                          </span>
+                        </div>
+                      )}
+                      {selEdge.corroboration && (
+                        <div className="muted" style={{ fontSize: 11 }}>{selEdge.corroboration}</div>
+                      )}
+                    </div>
                   )}
                   <div className="row gap8">
                     {selEdge.chain && (

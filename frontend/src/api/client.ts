@@ -172,6 +172,18 @@ export interface KgNode {
   pillar: string | null;
 }
 
+// R6 directional semantics — the NLP relation, its direction, the connective keywords and the
+// grounded "why". `relation` is null on legacy symmetric edges (treat null as non-directional);
+// `direction` is "forward" (draw an ARROW source→target) or "bidirectional" (symmetric, no arrowhead).
+export type KgRelation =
+  | 'enables'
+  | 'depends_on'
+  | 'precedes'
+  | 'affects'
+  | 'complements'
+  | 'alternative_to'
+  | 'subsumes';
+
 export interface KgEdge {
   source: string;
   target: string;
@@ -184,6 +196,12 @@ export interface KgEdge {
   novelty?: number | null; // R5 discovery rank (Layer B): strong AND non-obvious ranks top
   chain?: string | null; // R5 reasoning-chain backlink (Layer B)
   pending_id?: string | null; // R5 approve/peek the proposal straight from the edge
+  relation?: KgRelation | string | null; // R6 directional semantics; null on legacy symmetric edges
+  direction?: 'forward' | 'bidirectional' | string | null; // R6 forward → arrowhead; bidirectional → none
+  keywords?: string[]; // R6 the connective concepts ("major keywords")
+  rationale?: string | null; // R6 the NLP "why", grounded in the two descriptions
+  verify_survived?: number | null; // R6 0..1 fraction of adversary passes that upheld it (KgEdge only)
+  corroboration?: string | null; // R6 the Jira-corpus corroboration note (KgEdge only)
 }
 
 // R5 "relationships you may be missing" — a gated Layer-B proposal oriented from a focus subcap to
@@ -201,6 +219,10 @@ export interface LatentEdge {
   crosses: string; // cross_capability | cross_pillar
   chain?: string | null;
   pending_id?: string | null;
+  relation?: KgRelation | string | null; // R6 directional semantics; null on legacy symmetric edges
+  direction?: 'forward' | 'bidirectional' | string | null; // R6 forward → arrow glyph, bidirectional → ↔
+  keywords?: string[]; // R6 the connective concepts ("major keywords")
+  rationale?: string | null; // R6 the NLP "why", grounded in the two descriptions
 }
 
 export interface KgResp {
@@ -1438,8 +1460,12 @@ export const api = {
   gates: (): Promise<GatesLog> => http<GatesLog>('/api/gates'),
   qaMetrics: (): Promise<QaMetrics> => http<QaMetrics>('/api/qa/metrics'),
   auditLog: (): Promise<AuditRow[]> => http<AuditRow[]>('/api/audit-log'),
-  changeFlags: (status: string): Promise<ChangeFlagsResp> =>
-    http<ChangeFlagsResp>(`/api/change-flags?status=${status}`),
+  changeFlags: (status: string, severity?: string): Promise<ChangeFlagsResp> => {
+    const qs = new URLSearchParams({ status });
+    // severity=BLOCKING|HIGH|MED|LOW narrows the server-side list; the counts stay per-severity.
+    if (severity && severity !== 'all') qs.set('severity', severity);
+    return http<ChangeFlagsResp>(`/api/change-flags?${qs.toString()}`);
+  },
   scanFlags: (version: string): Promise<{ created: number; candidates: number }> =>
     http<{ created: number; candidates: number }>(`/api/admin/change-flags/scan/${version}`, {
       method: 'POST',
