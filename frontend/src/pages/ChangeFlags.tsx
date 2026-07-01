@@ -29,6 +29,7 @@ const KIND_LABEL: Record<string, string> = {
   evidence_gate_failure: 'Evidence gate failures',
   unscoped_subvertical: 'New subvertical proposals',
   kg_edge_proposal: 'Knowledge-graph edge proposals',
+  use_case_gap: 'New use-case proposals',
 };
 const RENDER_CAP = 120;
 

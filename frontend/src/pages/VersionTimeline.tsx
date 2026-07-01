@@ -53,6 +53,8 @@ function VersionCard({ v }: { v: VersionInfo }) {
             <div className="row gap8">
               <b style={{ fontSize: 14 }}>{v.label}</b>
               {active && <span className="chip teal">active</span>}
+              {!active && v.tier === 'inactive' && <span className="chip soft">inactive</span>}
+              {!active && v.tier === 'legacy' && <span className="chip soft">legacy</span>}
               {uploaded && <span className="chip orange">awaiting approval</span>}
             </div>
             <div className="muted" style={{ fontSize: 11 }}>

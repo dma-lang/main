@@ -21,6 +21,7 @@ from app.services import change_flags as flags_svc
 from app.services import embeddings as embeddings_svc
 from app.services import kg as kg_svc
 from app.services import subverticals as subverticals_svc
+from app.services import use_case_gaps as use_case_gaps_svc
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
@@ -264,6 +265,18 @@ async def propose_kg_edges(
     cross-capability subcaps that co-occur structurally (shared L3 platforms / personas), each
     gated G1-G8 and queued in the Change-Flags inbox for human approval — never written live."""
     return await kg_svc.propose_structural_edges(version)
+
+
+@router.post("/admin/use-case-gaps/{version}")
+async def detect_use_case_gaps(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """Use-case gap detection: for each subcap, cluster the carried real-Jira stories its EXISTING
+    use cases do not cover, overlap-guard each cluster against those use cases (strict, to avoid
+    bloat), infer + gate a candidate NEW use case for each survivor, and queue it in the
+    Change-Flags inbox for human approval — never written to the catalogue live (approve re-gates
+    and inserts it into cat_<v>)."""
+    return await use_case_gaps_svc.detect_use_case_gaps(version)
 
 
 @router.post("/admin/embeddings/build/{version}")

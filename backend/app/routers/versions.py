@@ -25,6 +25,24 @@ class VersionInfo(BaseModel):
     status: str
     schema_name: str
     created_at: str | None = None
+    # active | inactive | legacy — computed RELATIVE to the active version's number: the active
+    # version is "active"; higher-numbered versions are "inactive"; lower-numbered are "legacy"
+    # (legacy versions still inherit enrichment from the standard provisioned versions).
+    tier: str = "active"
+
+
+def _vnum(version_id: str) -> int:
+    """The numeric ordinal of a version id (``v7`` -> 7); 0 when it carries no digits."""
+    digits = re.sub(r"[^0-9]", "", version_id)
+    return int(digits) if digits else 0
+
+
+def _tier(num: int, active_num: int) -> str:
+    """Version tier relative to the active version: equal = active, higher = inactive (a newer
+    modelled version not yet activated), lower = legacy (older, enrichment-inherited)."""
+    if num == active_num:
+        return "active"
+    return "inactive" if num > active_num else "legacy"
 
 
 @router.get("/versions")
@@ -42,7 +60,15 @@ async def list_versions(_user: dict[str, Any] = Depends(get_current_user)) -> li
     )
     async with engine.connect() as conn:
         rows = (await conn.execute(text(sql))).mappings().all()
-    return [VersionInfo.model_validate(dict(r)) for r in rows]
+    # The tier is relative to the ACTIVE version's number: the status='active' row if one exists,
+    # else the highest-numbered version (the de-facto active, matching how the header defaults).
+    active_num = next((_vnum(r["version_id"]) for r in rows if r["status"] == "active"), None)
+    if active_num is None:
+        active_num = max((_vnum(r["version_id"]) for r in rows), default=0)
+    return [
+        VersionInfo.model_validate({**dict(r), "tier": _tier(_vnum(r["version_id"]), active_num)})
+        for r in rows
+    ]
 
 
 class DiffRow(BaseModel):

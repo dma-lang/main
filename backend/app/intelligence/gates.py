@@ -194,6 +194,41 @@ def use_case_match_config() -> tuple[float, bool]:
     return floor, multi
 
 
+@dataclass(frozen=True)
+class UseCaseGapConfig:
+    """Use-case gap detector thresholds (config/gates.yaml: use_case_gap.*)."""
+
+    min_stories: int
+    overlap_max_cosine: float
+    cluster_min_cosine: float
+    max_proposals_per_scan: int
+
+
+def use_case_gap_config() -> UseCaseGapConfig:
+    """Thresholds for the use-case gap detector (services/use_case_gaps): the volume floor a cluster
+    of uncovered delivery must clear to be a candidate NEW use case (``min_stories``); the cosine
+    at/above which the cluster is judged ALREADY covered by an existing use case, so it is skipped
+    to avoid bloating the catalogue (``overlap_max_cosine``); the cosine an unmatched story shares
+    with a cluster seed to join it (``cluster_min_cosine``); and the per-scan proposal cap
+    (resilience: bounded everything). Config, not code — recalibrated without a deploy."""
+    section = load_gate_config().get("use_case_gap") or {}
+    cfg = UseCaseGapConfig(
+        min_stories=int(section.get("min_stories", 4)),
+        overlap_max_cosine=float(section.get("overlap_max_cosine", 0.82)),
+        cluster_min_cosine=float(section.get("cluster_min_cosine", 0.55)),
+        max_proposals_per_scan=int(section.get("max_proposals_per_scan", 200)),
+    )
+    if cfg.min_stories < 2:
+        raise ValueError("gates.yaml: use_case_gap.min_stories must be >= 2 (G2 needs >= 2)")
+    if not 0 < cfg.overlap_max_cosine <= 1:
+        raise ValueError("gates.yaml: use_case_gap.overlap_max_cosine must be in (0, 1]")
+    if not 0 < cfg.cluster_min_cosine <= 1:
+        raise ValueError("gates.yaml: use_case_gap.cluster_min_cosine must be in (0, 1]")
+    if cfg.max_proposals_per_scan < 1:
+        raise ValueError("gates.yaml: use_case_gap.max_proposals_per_scan must be >= 1")
+    return cfg
+
+
 def knowledge_graph_config() -> tuple[int, int, int]:
     """(shares_platform_min, shares_feature_min, max_proposals) for the deterministic KG Layer-B
     structural builder: how many distinct L3 platforms two cross-capability subcaps must share to
@@ -220,31 +255,73 @@ def knowledge_graph_semantic_config() -> float:
     return cosine
 
 
-def knowledge_graph_codelivery_config() -> tuple[float, int, int]:
-    """(min_lift, min_projects, shares_offering_min) for the R5 KG co-delivery + co-membership
-    mining. A cross-capability pair is a co-delivery candidate only when delivered together across
-    >= ``min_projects`` client engagements AND with a lift (P(A&B)/(P(A)P(B))) >= ``min_lift`` (real
-    volume above chance). ``shares_offering_min`` is the shared-offering count for a co-membership
-    edge. Config, not code."""
-    section = load_gate_config().get("knowledge_graph") or {}
-    min_lift = float(section.get("co_delivery_min_lift", 1.5))
-    min_proj = int(section.get("co_delivery_min_projects", 3))
-    off_min = int(section.get("shares_offering_min_shared", 1))
-    if min_lift <= 0 or min_proj < 1 or off_min < 1:
-        raise ValueError("gates.yaml: invalid knowledge_graph co-delivery thresholds")
-    return min_lift, min_proj, off_min
+def xref_semantic_config() -> tuple[float, float]:
+    """(subcap_min_cosine, l2_min_cosine) for the SEMANTIC tier of the cross-version subcap resolver
+    (services/subcap_xref, rule 5): the embedding-cosine floors a drifted legacy subcap must clear
+    to resolve to a reference subcap, and to scope the search by its L2 (capability) name. Config,
+    not code — the deep-learning matching that enriches a legacy version from the standard ones."""
+    section = load_gate_config().get("xref") or {}
+    subcap = float(section.get("semantic_min_cosine", 0.62))
+    l2 = float(section.get("l2_semantic_min_cosine", 0.60))
+    if not 0 < subcap <= 1 or not 0 <= l2 <= 1:
+        raise ValueError("gates.yaml: invalid xref semantic thresholds")
+    return subcap, l2
 
 
-def knowledge_graph_novelty_config() -> tuple[float, float]:
-    """(same_pillar_factor, structural_factor): novelty discounts that rank latent KG edges so the
-    strong-but-hidden ones surface. A pair within one pillar is multiplied by the first factor, a
-    pair already sharing a platform by the second. Both in (0, 1]. Config, not code."""
+@dataclass(frozen=True)
+class KnowledgeGraphConfig:
+    """The full KG Layer-B mining thresholds (config/gates.yaml: knowledge_graph.*). The R5
+    deep-relationship builders (co-delivery association mining + structural co-membership + the
+    semantic layer) all read these; every floor is >= 2 so G2 (>= 2 supporting items) always
+    passes for a real proposal. Config, not code — recalibrated without a deploy."""
+
+    shares_platform_min: int
+    shares_feature_min: int
+    shares_offering_min: int
+    same_value_chain_min: int
+    co_delivery_min_lift: float
+    co_delivery_min_count: int
+    semantic_min_cosine: float
+    novelty_weight: float
+    allow_cross_pillar: bool
+    max_proposals: int
+
+
+def knowledge_graph_full_config() -> KnowledgeGraphConfig:
+    """Every KG Layer-B threshold as one object (R5): the structural co-occurrence floors
+    (platform / persona / offering / value-chain shared counts), the co-delivery association floors
+    (market-basket lift + co-count over the Jira corpus), the semantic cosine floor, the novelty
+    suppression weight, whether gated cross-pillar proposals are allowed (D16 decision), and the
+    per-scan proposal cap (resilience: bounded everything)."""
     section = load_gate_config().get("knowledge_graph") or {}
-    sp = float(section.get("novelty_same_pillar_factor", 0.6))
-    st = float(section.get("novelty_structural_factor", 0.5))
-    if not (0 < sp <= 1 and 0 < st <= 1):
-        raise ValueError("gates.yaml: novelty factors must be in (0, 1]")
-    return sp, st
+    cfg = KnowledgeGraphConfig(
+        shares_platform_min=int(section.get("shares_platform_min_shared", 2)),
+        shares_feature_min=int(section.get("shares_feature_min_shared", 2)),
+        shares_offering_min=int(section.get("shares_offering_min_shared", 2)),
+        same_value_chain_min=int(section.get("same_value_chain_min_shared", 2)),
+        co_delivery_min_lift=float(section.get("co_delivery_min_lift", 2.0)),
+        co_delivery_min_count=int(section.get("co_delivery_min_count", 3)),
+        semantic_min_cosine=float(section.get("semantically_similar_min_cosine", 0.85)),
+        novelty_weight=float(section.get("novelty_weight", 1.0)),
+        allow_cross_pillar=bool(section.get("allow_cross_pillar", True)),
+        max_proposals=int(section.get("max_proposals_per_scan", 200)),
+    )
+    floors = (
+        cfg.shares_platform_min,
+        cfg.shares_feature_min,
+        cfg.shares_offering_min,
+        cfg.same_value_chain_min,
+        cfg.co_delivery_min_count,
+    )
+    if any(f < 2 for f in floors):
+        raise ValueError("gates.yaml: knowledge_graph shared/co-count floors must be >= 2 (G2)")
+    if cfg.co_delivery_min_lift <= 1.0:
+        raise ValueError("gates.yaml: co_delivery_min_lift must be > 1.0 (1.0 = independence)")
+    if not 0 < cfg.semantic_min_cosine <= 1:
+        raise ValueError("gates.yaml: semantically_similar_min_cosine must be in (0, 1]")
+    if not 0 <= cfg.novelty_weight <= 1 or cfg.max_proposals < 1:
+        raise ValueError("gates.yaml: invalid knowledge_graph novelty_weight / max_proposals")
+    return cfg
 
 
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:

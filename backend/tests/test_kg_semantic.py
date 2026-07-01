@@ -54,8 +54,16 @@ def provisioned() -> Iterator[None]:
                 ),
                 {"a": _A, "b": _B},
             )
-        # structural mins disabled (999) so every proposal here is the semantic kind
-        await kg_svc.propose_structural_edges("v7", shares_platform_min=999, shares_feature_min=999)
+        # every non-semantic miner disabled so the forced pair surfaces as the SEMANTIC kind (R5:
+        # co-delivery / offering / value-chain would otherwise outrank cosine in the reduce)
+        await kg_svc.propose_structural_edges(
+            "v7",
+            shares_platform_min=999,
+            shares_feature_min=999,
+            shares_offering_min=999,
+            same_value_chain_min=999,
+            co_delivery_min_count=10**9,
+        )
         await db.dispose_engine()
 
     async def _teardown() -> None:

@@ -35,6 +35,30 @@ def _provisional_sv_code(name: str, clients: list[str]) -> str:
     return code
 
 
+# Deterministic archetype buckets for a proposed use case, keyed on delivery-language cues. The
+# live enrich model can name any archetype; the hermetic stub picks the closest by term signal so
+# the proposal is grounded, never a guess. Ordered — the first matching cue wins.
+_UC_ARCHETYPE_CUES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Automation", ("automat", "workflow", "orchestrat", "straight-through", "rpa", "batch")),
+    ("Integration", ("integrat", "api", "connector", "sync", "ingest", "feed", "etl", "pipeline")),
+    ("Reporting & Analytics", ("report", "dashboard", "analytic", "metric", "insight", "kpi")),
+    ("Risk & Compliance", ("risk", "complian", "regulat", "audit", "kyc", "aml", "fraud")),
+    ("Onboarding & Servicing", ("onboard", "servic", "account", "customer", "client", "intake")),
+    ("Decisioning", ("decision", "approv", "score", "eligib", "underwrit", "assess", "triage")),
+)
+_UC_DEFAULT_ARCHETYPE = "Delivery Capability"
+
+
+def _use_case_archetype(terms: list[str], description: str) -> str:
+    """Pick a descriptive archetype for a proposed use case from its cluster's top terms + the
+    drafted description (deterministic; the first matching delivery-language cue wins)."""
+    haystack = " ".join(terms).lower() + " " + (description or "").lower()
+    for label, cues in _UC_ARCHETYPE_CUES:
+        if any(cue in haystack for cue in cues):
+            return label
+    return _UC_DEFAULT_ARCHETYPE
+
+
 if TYPE_CHECKING:  # type hints only — news/benchmarks/vendors modules import Gemini at runtime
     from app.intelligence.benchmarks import AdversaryVerdict, RawBenchmark
     from app.intelligence.news import NewsEnrichment, RawNewsItem
@@ -59,6 +83,23 @@ class SubverticalInference:
     code: str  # provisional subvertical code (collision-checked against the 9 modelled SVs)
     name: str  # human-readable proposed subvertical name
     rationale: str  # why these stories form a coherent, distinct, currently-unmodelled subvertical
+    claim_label: str
+    model: str
+    cost_usd: float
+
+
+@dataclass(frozen=True)
+class UseCaseInference:
+    """An AI-proposed NEW use case, inferred from a cluster of delivered Jira stories that a
+    subcap's existing use cases do NOT already cover.
+
+    Always a HYPOTHESIS (a net-new catalogue entity, never a fact); it is gated G1-G8 and surfaced
+    as a human-approved change flag, never applied automatically."""
+
+    name: str  # human-readable proposed use-case name (highly descriptive)
+    description: str  # 1-2 sentence descriptive summary of the delivered work it names
+    archetype: str  # the use-case archetype bucket (e.g. Automation, Reporting, Integration)
+    rationale: str  # why these stories form a coherent, currently-unmodelled use case
     claim_label: str
     model: str
     cost_usd: float
@@ -329,6 +370,106 @@ class Gemini:
             code=_provisional_sv_code(name, clients),
             name=name or "Cross-pillar delivery",
             rationale=rationale,
+            claim_label="HYPOTHESIS",
+            model=model,
+            cost_usd=cost,
+        )
+
+    async def infer_use_case_name(self, fingerprint: dict[str, Any]) -> UseCaseInference:
+        """Name + describe a candidate NEW use case from a cluster of delivered Jira stories that a
+        subcap's EXISTING use cases do not already cover.
+
+        ``fingerprint`` carries only stored, grounded facts: ``subcap_id``, ``subcap_name``,
+        ``pillar``, ``story_count``, ``top_terms`` (the cluster's discriminating tokens),
+        ``sample_summaries`` (representative story text) and ``overlap_score`` (its cosine to the
+        nearest existing use case, below the merge bar by construction). Live mode drafts a highly
+        descriptive name + 1-2 sentence description on the pinned *enrich* model (models.yaml)
+        with retry/backoff, MAX_TOKENS->chunk and SAFETY->review, its spend
+        governed by the G8 budget gate + the cost meter. Hermetic mode (and a spent budget envelope)
+        return a deterministic, delivery-grounded proposal (no Vertex, no spend) so the gated
+        proposal stays functional in any LLM_MODE."""
+        if self._settings.is_hermetic or await cost_meter.over_throttle():
+            return self._hermetic_infer_use_case(fingerprint)
+        return await self._infer_use_case_live(fingerprint)
+
+    @staticmethod
+    def _hermetic_infer_use_case(fingerprint: dict[str, Any]) -> UseCaseInference:
+        """Deterministic stand-in for the enrich model: derive a descriptive use-case name +
+        archetype + 1-2 sentence description from the cluster's top terms + its subcap. Names the
+        delivered work honestly (the live model upgrades the prose); always a HYPOTHESIS."""
+        terms = [str(t) for t in fingerprint.get("top_terms", []) if str(t).strip()]
+        subcap_name = str(fingerprint.get("subcap_name") or "").strip()
+        subcap_id = str(fingerprint.get("subcap_id") or "").strip()
+        pillar = str(fingerprint.get("pillar") or "").strip()
+        story_count = int(fingerprint.get("story_count", 0))
+        samples = [str(s) for s in fingerprint.get("sample_summaries", []) if str(s).strip()]
+        overlap = float(fingerprint.get("overlap_score", 0.0))
+
+        # A descriptive name: the two leading discriminating terms of the cluster, title-cased, tied
+        # to the subcap they were delivered under (so it never collides with a sibling use case).
+        lead = [t.title() for t in terms[:2]] or ["Emerging"]
+        theme = " ".join(dict.fromkeys(lead))  # dedupe while preserving order
+        base = subcap_name or subcap_id or "delivery"
+        name = f"{theme} for {base}" if base else theme
+        term_txt = ", ".join(terms[:6]) or "recurring delivery themes"
+        sample_txt = samples[0][:160] if samples else "recurring delivered stories"
+        description = (
+            f"Delivered work under {base} concentrating on {term_txt}, not yet captured by an "
+            f"existing use case. Representative story: {sample_txt}."
+        )
+        archetype = _use_case_archetype(terms, description)
+        overlap_txt = (
+            f"its closest existing use case is only {overlap:.0%} similar (below the merge bar), "
+            "so this is an uncovered use case, not a duplicate"
+            if overlap
+            else "no existing use case of the subcap covers it"
+        )
+        rationale = (
+            f"{story_count} delivered Jira stories under {base}"
+            + (f" (pillar {pillar})" if pillar else "")
+            + f" cluster on {term_txt}; {overlap_txt}. Provisional delivery-derived name — a "
+            "reviewer (or the live model) refines it to the canonical use-case label."
+        )
+        return UseCaseInference(
+            name=name,
+            description=description,
+            archetype=archetype,
+            rationale=rationale,
+            claim_label="HYPOTHESIS",
+            model="hermetic-stub",
+            cost_usd=0.0,
+        )
+
+    async def _infer_use_case_live(self, fingerprint: dict[str, Any]) -> UseCaseInference:
+        model = model_config.model_for("enrich")
+        terms = [str(t) for t in fingerprint.get("top_terms", []) if str(t).strip()]
+        subcap_name = str(fingerprint.get("subcap_name") or "").strip()
+        samples = " | ".join(str(s) for s in fingerprint.get("sample_summaries", [])[:5])
+        system = (
+            "You name a NEW, highly-descriptive use case from a cluster of delivered work under "
+            "one capability. Return ONLY JSON "
+            '{"name": "<short descriptive title>", "description": "<1-2 sentences>", '
+            '"archetype": "<one of: Automation, Integration, Reporting & Analytics, '
+            'Risk & Compliance, Onboarding & Servicing, Decisioning, Delivery Capability>"}. '
+            "Ground the name and description in the terms and sample work; invent nothing."
+        )
+        user = (
+            f"Capability: {subcap_name}\nTop terms: {', '.join(terms[:8])}\n"
+            f"Sample work: {samples}\nStory count: {fingerprint.get('story_count', 0)}"
+        )
+        text_out, cost = await self._generate(model, system, user, as_json=True)
+        try:
+            data = json.loads(text_out)
+            name = str(data["name"]).strip()
+            description = str(data.get("description", "")).strip()
+            archetype = str(data.get("archetype", "")).strip()
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return self._hermetic_infer_use_case(fingerprint)  # bad parse -> never crash
+        return UseCaseInference(
+            name=name or f"Emerging use case for {subcap_name or 'the subcap'}",
+            description=description or f"Delivered work under {subcap_name} not yet catalogued.",
+            archetype=archetype or _use_case_archetype(terms, description),
+            rationale=description or "Named by the live enrich model from the delivered cluster.",
             claim_label="HYPOTHESIS",
             model=model,
             cost_usd=cost,

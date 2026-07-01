@@ -6,38 +6,6 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Added (knowledge graph)
-- **Deep relationship mining — the links the catalogue structure hides.** The KG was a basic
-  ego-network (four edge kinds: platform/offering use + structural shared-platform/persona/cosine),
-  mining only two link tables and ignoring the 14,406-row Jira delivery corpus. It now mines
-  **co-delivery**: a market-basket pass over the corpus (client `project_key` baskets, corroborated
-  by same-story multi-subcap carries) scores every cross-capability subcap pair by **lift**
-  (P(A&B)/(P(A)P(B))) — "delivered together far more than chance" — plus `shares_offering`
-  co-membership, all unified onto a single 0–1 **strength**. A **novelty** rank (strength discounted
-  when the link is already obvious — same pillar, or already shares a platform, and balanced by
-  delivery volume) surfaces the **strong-but-hidden cross-pillar** relationships you would never spot
-  from the tree: the "**Relationships you may be missing**" discovery (`GET /kg/discover`, and a
-  per-subcap `latent` panel on `GET /kg`). The graph now renders **weighted** (thickness ∝ strength),
-  **colour-coded-by-relation**, **explained** edges (hover for the "why": lift + engagement count),
-  with the centre's hidden co-delivery links drawn faint-dashed. Every inferred edge stays grounded
-  (real Jira co-delivery / catalogue rows) and **gated** — `propose_structural_edges` queues the most
-  novel co-delivery pairs as G1–G8-passed `kg_edge_proposal`s in Change flags; approval promotes a
-  `kg_edge` that still carries its basis (migration `0014_kg_edge_detail`). Deterministic, hermetic,
-  zero-spend, idempotent, bounded. Config: `config/gates.yaml::knowledge_graph` (lift floor, min
-  engagements, novelty factors). Covered by `tests/test_kg_codelivery.py`.
-
-### Added (use-case explorer)
-- **Real per-use-case delivery — stories matched to use cases, not just subcaps.** Carry-forward maps
-  a Jira story to a subcap only, so every use case under a subcap showed that subcap's *whole*
-  delivery (the same "static" number on each) and the drawer listed the subcap's stories. A
-  deterministic TF-IDF matcher (`services/use_case_match`, run inside `carry_forward`) now attributes
-  each carried story to the best-matching use case of its subcap (per-subcap IDF, so only
-  discriminating terms drive the match; a terse story matching none stays subcap-level), persisted to
-  `control.story_use_case_carry` (migration `0013`). The endpoint reports the **matched** count + the
-  subcap total for context and a new `/use-cases/{id}/stories` for the drawer; the parse is completed
-  (each use case carries its own maturity + "new" flag + a readable title). Inherited to v5. Covered
-  by `tests/test_use_case_match.py`.
-
 ### Added (operations)
 - **The deploy self-refreshes the data plane (`app.refresh`).** A deploy ships new code/seeds, but
   the live `cat_<v>` catalogue and carried Jira delivery were built by the *previous* run — so the
@@ -150,6 +118,20 @@ All notable changes to this project are documented here. The format is based on
   `dist` itself).
 
 ### Added
+- **Use-case gap detector (`services/use_case_gaps`)**: surfaces use cases IMPLIED by delivered Jira
+  stories that the catalogue does not yet model, and proposes each as a gated, human-approved NEW use
+  case — modelled exactly on the unscoped-subvertical detector. For each subcap it takes the carried
+  real-Jira stories NOT attributed to any existing use case (`control.story_use_case_link`), embeds +
+  greedily clusters the uncovered summaries, and — with STRICT overlap-avoidance so nothing bloats —
+  SKIPS any cluster whose centroid embeds `>= overlap_max_cosine` to one of the subcap's EXISTING use
+  cases (already covered). Each survivor is named/described/archetyped by the single Gemini wrapper
+  (`infer_use_case_name`; hermetic = a deterministic, delivery-grounded stub, no spend), gated
+  G1-G8, and queued in the Change-Flags inbox with the full trust envelope (claim label HYPOTHESIS,
+  source tier T1, ERS, reasoning chain + citation + gate run). Idempotent on `(kind, <subcap>:<sig>)`,
+  bounded by `max_proposals_per_scan`. Approving a proposal re-gates server-side and inserts the use
+  case into `cat_<v>.use_case` (`is_new=true`) with an audit row; nothing auto-applies. Admin trigger
+  `POST /api/admin/use-case-gaps/{version}` + the weekly `use_case_gap_detect` schedule (Mon 06:55
+  UTC). Thresholds in `config/gates.yaml::use_case_gap`. Covered by `tests/test_use_case_gaps.py`.
 - **Pillar-wise workbook parser (FR-1, real)**: `services/workbooks.py` parses an uploaded ZIP of
   per-pillar .xlsx capability maps into the provisioning seed — tolerant header aliasing across the
   v5/v7 variants (incl. the v5 Pillar-3 layout), consolidated/archived files ignored, unparseable

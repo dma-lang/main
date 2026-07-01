@@ -602,6 +602,7 @@ function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
   const conn = useSubcapConnections(version, node.id);
   const sibs = conn.data?.siblings ?? [];
   const signals = conn.data?.signals ?? [];
+  const latent = conn.data?.latent ?? [];
   return (
     <div className="fade-in">
       <div className="eyebrow" style={{ marginBottom: 8 }}>
@@ -647,6 +648,40 @@ function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
           </span>
         )}
       </div>
+      {latent.length > 0 && (
+        <>
+          <div className="eyebrow" style={{ marginBottom: 8 }}>
+            Relationships you may be missing · co-delivered / semantic (AI-proposed, gated)
+          </div>
+          <div style={{ display: 'grid', gap: 6, marginBottom: 16 }}>
+            {latent.map((e, i) => (
+              <div key={i} className="card" style={{ padding: '9px 12px', borderColor: 'var(--z-orange)' }}>
+                <div className="between" style={{ marginBottom: 3 }}>
+                  <div className="row gap8" style={{ minWidth: 0 }}>
+                    <span className={e.crosses === 'cross_pillar' ? 'claim hypothesis' : 'claim inference'}>
+                      {e.crosses === 'cross_pillar' ? 'cross-pillar' : 'cross-cap'}
+                    </span>
+                    <span className="sclink" style={{ fontSize: 12.5 }} onClick={() => go('subcap/' + e.target)}>
+                      {e.target_name}
+                    </span>
+                  </div>
+                  <span className="chip soft" style={{ fontSize: 9.5, flex: 'none' }}>
+                    novelty {e.novelty.toFixed(2)}
+                  </span>
+                </div>
+                <div className="muted" style={{ fontSize: 10.5 }}>
+                  {e.kind.replace(/_/g, ' ')} · {e.basis}
+                </div>
+                {e.chain && (
+                  <button className="linkbtn mt8" onClick={() => e.chain && openReasoning(e.chain)}>
+                    <Icon n="eye" s={13} /> Reasoning
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
       <div className="eyebrow" style={{ marginBottom: 8 }}>
         Signals
       </div>

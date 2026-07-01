@@ -18,7 +18,7 @@ import {
   type SowDetail,
   type SowDoc,
   type KgResp,
-  type LatentEdge,
+  type KgDiscoverResp,
   type TimelineResp,
   type WhatIfResp,
   type ChangeFlagsResp,
@@ -135,11 +135,11 @@ export const useKg = (version: string, subcap: string | null) =>
     enabled: !!version && !!subcap,
   });
 
-// "Relationships you may be missing" — catalogue-wide co-delivery links the structure hides.
+// R5 version-wide discovery surface — the "relationships you may be missing" panel on the KG page.
 export const useKgDiscover = (version: string, enabled: boolean) =>
-  useQuery<LatentEdge[]>({
+  useQuery<KgDiscoverResp>({
     queryKey: ['kg-discover', version],
-    queryFn: () => api.kgDiscover(version, 24),
+    queryFn: () => api.kgDiscover(version),
     enabled: !!version && enabled,
   });
 

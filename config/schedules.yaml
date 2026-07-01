@@ -39,6 +39,12 @@ schedules:
     job: weekly_kg_structural
     batch: true
 
+  use_case_gap_detect:
+    description: Weekly scan for use cases IMPLIED by delivery but not yet in the catalogue -> infer + gate a NEW use case -> Change Flags.
+    cron: "55 6 * * MON"          # Monday 06:55 UTC (after the KG scan; needs story->use-case links)
+    job: weekly_use_case_gaps
+    batch: true
+
   vendor_scan:
     description: Weekly vendor-development ingest -> 8-type classification -> subcap impact.
     cron: "0 7 * * MON"           # Monday 07:00 UTC

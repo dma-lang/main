@@ -1,0 +1,51 @@
+# Example variables for the CIA prod environment.
+# Copy to terraform.tfvars and fill in the values that have no safe default.
+# This file contains NO secret values (secret VALUES go into Secret Manager out-of-band).
+
+# --- Core (project_id/region default correctly; project_number is required) ---
+project_id     = "digital-maturity-assessor"
+project_number = "000000000000" # gcloud projects describe digital-maturity-assessor --format='value(projectNumber)'
+region         = "us-central1"
+
+# --- Terraform remote state bucket (must already exist; also pass via -backend-config at init) ---
+state_bucket = "digital-maturity-assessor-cia-tfstate"
+
+# --- CI/CD (Workload Identity Federation) ---
+github_repo = "dma-lang/main"
+
+# --- Cloud Run service ---
+# For the FIRST apply you may use a placeholder image; the deploy pipeline replaces the running
+# image by digest. After the first deploy, set this to the deployed digest for drift-free plans.
+image_digest = "us-central1-docker.pkg.dev/digital-maturity-assessor/cia/cia@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+# Leave empty to use the deterministic run.app URL (https://cia-<project_number>.us-central1.run.app).
+# Set to a custom domain once mapped.
+service_base_url = ""
+
+llm_mode            = "live" # 'live' = Vertex AI via ADC (no keys); 'hermetic' = stubs (no spend)
+auth_mode           = "live" # fails closed on @zennify.com; never 'dev' in prod
+oauth_hosted_domain = "zennify.com"
+ingress             = "all" # or "internal-and-cloud-load-balancing"
+
+min_instances = 2
+max_instances = 10
+concurrency   = 80
+
+# --- Cloud SQL ---
+db_tier              = "db-custom-2-7680"
+db_availability_type = "REGIONAL"
+db_name              = "cia"
+db_user              = "cia_app"
+
+# --- Scheduler ---
+scheduler_target_version = "active" # or a pinned catalogue version like "v7"
+
+# --- Monitoring / budget ---
+alert_email     = "dma@zennify.com"
+create_budget   = false # set true once billing_account is provided
+billing_account = ""     # "XXXXXX-XXXXXX-XXXXXX"
+monthly_budget  = 2000   # USD; alerts at 80%
+
+# --- Firebase / Identity Platform ---
+# Keep false until Identity Platform is initialized on the project (one-time console step).
+manage_identity_platform_config = false

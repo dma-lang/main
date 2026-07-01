@@ -72,20 +72,35 @@ knowledge_graph:
   # Both >= 2 so G2 (>= 2 supporting items) always passes for a real proposal.
   shares_platform_min_shared: 2
   shares_feature_min_shared: 2
+  shares_offering_min_shared: 2           # R5: cross-cap subcaps sharing >= N offerings -> SHARES_OFFERING
+  same_value_chain_min_shared: 2          # R5: cross-cap subcaps sharing >= N value-chain clusters -> SAME_VALUE_CHAIN
+  # R5 co-delivery association mining over the Jira corpus (control.story_catalogue_link): a CROSS-
+  # capability subcap pair co-delivered by the same client (project_key) AND/OR in the same story,
+  # with market-basket lift = P(A&B)/(P(A)*P(B)) at/above this floor AND a co-count at/above the
+  # minimum -> a CO_DELIVERED proposal (the latent core). Deterministic counts; co_min >= 2 keeps G2.
+  co_delivery_min_lift: 2.0
+  co_delivery_min_count: 3
+  # R5 novelty = strength * (1 - novelty_weight * structural_obviousness): a strong pair that is NOT
+  # already obvious (different pillar, no shared platform) ranks highest in "relationships you may be
+  # missing". novelty_weight in [0,1] tunes how hard obviousness suppresses (1.0 = full).
+  novelty_weight: 1.0
+  # R5 Decision (D16): allow gated CROSS-PILLAR edge proposals (the most non-obvious links). They are
+  # only ever HYPOTHESIS/INFERENCE proposals through G1-G8 + Change Flags, never a committed surface.
+  allow_cross_pillar: true
   max_proposals_per_scan: 200             # bound the run (resilience: bounded everything)
-  # Co-delivery association mining (R5; services/kg._co_delivery_pairs): two CROSS-capability subcaps
-  # delivered together across the 14,406-row Jira corpus far more than chance. lift = P(A&B)/(P(A)P(B))
-  # over client baskets (story.project_key); a pair is a candidate only with real co-delivery VOLUME
-  # AND a lift above chance, so a coincidental co-occurrence is filtered. This is the latent signal the
-  # flat catalogue + the structural layers cannot see.
-  co_delivery_min_lift: 1.5               # delivered together >= 1.5x chance (above coincidence)
-  co_delivery_min_projects: 3             # in >= 3 distinct client engagements (volume floor)
-  shares_offering_min_shared: 1           # >= 1 shared productized offering (curated -> 1 is meaningful)
-  # Novelty (the "what we may not be noticing" rank): an edge's strength discounted by how OBVIOUS the
-  # link already is — same pillar and an existing shared-platform link each reduce novelty, so a strong
-  # but structurally-hidden (cross-pillar, no shared platform) relationship rises to the top.
-  novelty_same_pillar_factor: 0.6         # within one pillar -> less surprising
-  novelty_structural_factor: 0.5          # the pair already shares a platform -> the link isn't hidden
+
+# Use-case gap detector (services/use_case_gaps): surface use cases IMPLIED by delivered Jira stories
+# that the catalogue does NOT yet model, and propose each as a gated, human-approved NEW use case.
+# For each subcap it takes the carried real-Jira stories NOT attributed to any existing use case,
+# embeds + clusters their summaries, and proposes a cluster only when it is BOTH large enough AND
+# genuinely uncovered. STRICT overlap-avoidance so nothing bloats: a cluster whose centroid is
+# >= overlap_max_cosine to any of the subcap's EXISTING use cases (name + description embedded) is
+# SKIPPED as already covered. Config, not code — recalibrated without a deploy.
+use_case_gap:
+  min_stories: 4                # uncovered-delivery volume floor a cluster needs to be a candidate (>= 2 so G2 passes)
+  overlap_max_cosine: 0.82      # cluster centroid >= this cosine to an EXISTING use case -> already covered, skipped (no bloat)
+  cluster_min_cosine: 0.55      # an unmatched story joins a cluster when it is >= this cosine to the cluster seed
+  max_proposals_per_scan: 1000  # bound the run (resilience: bounded everything); high enough to surface every real gap in one pass
 
 # Unscoped-subvertical discovery (clients delivering outside the 9 modelled subverticals).
 # A candidate is proposed only with real volume AND when the client is not already an existing SV.
@@ -126,3 +141,11 @@ offerings:
 use_case_match:
   match_floor: 0.06             # TF-cosine below this -> matched but status='review'
   multi_match: false            # single best match (partition) vs multi-match (a story -> several use cases)
+
+# Cross-version subcap resolution SEMANTIC tier (services/subcap_xref, rule 5): a legacy version
+# (lower than the active version) whose ids AND L1/L2 names drifted is enriched from the standard
+# versions (v5/v7) by MEANING when the lexical rules (id / crosswalk / L2-name) find nothing —
+# deep-learning matching over the subcap + L2 (capability) embeddings. Config, not code.
+xref:
+  semantic_min_cosine: 0.62      # a drifted subcap must embed at least this close to a reference subcap
+  l2_semantic_min_cosine: 0.60   # ...and its L2 name this close to scope the search to that capability

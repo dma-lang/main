@@ -66,3 +66,29 @@ def test_resolve_map_reports_unmapped() -> None:
     mapping, unmapped = subcap_xref.resolve_map(rows, _REF)
     assert mapping == {"P2C3.5.1": "P2C3.5.1", "P1C1.1.9": "P1C1.1.1"}
     assert unmapped == ["P9C9.9.9"]
+
+
+def test_semantic_tier_resolves_drifted_l1_l2_by_meaning() -> None:
+    # A legacy version whose ids AND L1/L2 names drifted: the lexical rules (id / crosswalk /
+    # L2-name) all MISS, but rule 5 maps it to the nearest reference subcap by embedding meaning.
+    ref = subcap_xref.ReferenceIndex.build(
+        [
+            {"id": "P1C1.1.1", "l2": "Strategy Foundation", "descr": "strategy operating model"},
+            {"id": "P2C3.5.1", "l2": "Case Management", "descr": "case intake triage"},
+        ],
+        subcap_emb={"P1C1.1.1": [1.0, 0.0, 0.0], "P2C3.5.1": [0.0, 1.0, 0.0]},
+        l2_emb={"Strategy Foundation": [1.0, 0.0, 0.0], "Case Management": [0.0, 1.0, 0.0]},
+    )
+    got = subcap_xref.resolve(
+        "LEGACY-9",
+        "Strategy Fundamentals",  # renamed L2 -> lexical miss on every rule
+        "operating model design",
+        ref,
+        this_emb=[0.98, 0.02, 0.0],  # embeds near the strategy subcap
+        this_l2_emb=[0.97, 0.03, 0.0],
+        semantic_min=0.6,
+        l2_semantic_min=0.6,
+    )
+    assert got == "P1C1.1.1"  # resolved by MEANING, not spelling
+    # additive: without embeddings + threshold the same drifted subcap stays UNMAPPED (rules 1-4)
+    assert subcap_xref.resolve("LEGACY-9", "Strategy Fundamentals", "x", ref) is None

@@ -1,17 +1,16 @@
-"""kg_edge.detail — carry an accepted edge's basis so the graph can explain "why related"
+"""kg_edge.detail / pending_edge.detail — carry the "why" on a knowledge-graph edge
 
-The KG enrichment (R5) adds explained, weighted relationships (co-delivery lift, shared offering,
-semantic cosine). A pending_edge already carries its basis in the change_flag detail, but once a
-human approves it and it is promoted to a ``kg_edge`` that basis was lost — the read had nothing to
-show on an accepted edge. This adds a ``detail jsonb`` (the compact basis: relation kind, the
-human phrase, the strength), populated on promotion, so every Layer-B edge can render its "why".
-
-Expand-only on the control plane; existing edges default to ``{}`` (the read falls back to deriving
-the basis from the edge kind + weight).
+R5 gives every inferred KG edge a rich basis ("co-delivered in 30 projects, lift 5.2"; "cosine
+0.91 in the shared embedding space"), a unified strength, and its cross-capability / cross-pillar
+reach. That envelope lives on the change_flag today, but a pending_edge PROMOTED to a kg_edge would
+lose it, so an accepted edge could no longer explain itself. This adds an expand-only
+``detail jsonb`` to both control.pending_edge and control.kg_edge; promote_pending_edge copies it
+across, so a confirmed Layer-B edge still shows its "why". Nullable + additive — the downgrade drops
+the columns and existing rows keep working (the endpoint falls back to weight/kind).
 
 Revision ID: 0014_kg_edge_detail
 Revises: 0013_story_use_case_link
-Create Date: 2026-06-30
+Create Date: 2026-07-01
 """
 
 from __future__ import annotations
@@ -25,10 +24,10 @@ depends_on: str | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE control.kg_edge " "ADD COLUMN IF NOT EXISTS detail jsonb NOT NULL DEFAULT '{}'"
-    )
+    op.execute("ALTER TABLE control.pending_edge ADD COLUMN IF NOT EXISTS detail jsonb")
+    op.execute("ALTER TABLE control.kg_edge ADD COLUMN IF NOT EXISTS detail jsonb")
 
 
 def downgrade() -> None:
     op.execute("ALTER TABLE control.kg_edge DROP COLUMN IF EXISTS detail")
+    op.execute("ALTER TABLE control.pending_edge DROP COLUMN IF EXISTS detail")
