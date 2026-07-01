@@ -175,9 +175,32 @@ export interface KgNode {
 export interface KgEdge {
   source: string;
   target: string;
-  kind: string; // relation: uses_platform | maps_to_offering | shares_platform | semantically_similar
+  kind: string; // relation: uses_platform | shares_platform | co_delivered | same_value_chain | …
   layer: string;
-  score?: number | null; // Layer-B proposal confidence (pending_edge.weight)
+  score?: number | null; // legacy alias of strength (Layer-B confidence); null for facts
+  strength?: number | null; // R5 unified 0..1 confidence — edge thickness ∝ strength
+  basis?: string | null; // R5 the "why" (e.g. "co-delivered across 30 client projects, lift 5.2")
+  crosses?: string | null; // R5 cross_capability | cross_pillar (subcap↔subcap edges)
+  novelty?: number | null; // R5 discovery rank (Layer B): strong AND non-obvious ranks top
+  chain?: string | null; // R5 reasoning-chain backlink (Layer B)
+  pending_id?: string | null; // R5 approve/peek the proposal straight from the edge
+}
+
+// R5 "relationships you may be missing" — a gated Layer-B proposal oriented from a focus subcap to
+// the OTHER subcap, ranked by novelty (strong AND non-obvious first: cross-pillar, no shared platform).
+export interface LatentEdge {
+  source: string;
+  source_name: string;
+  target: string;
+  target_name: string;
+  target_pillar: string;
+  kind: string;
+  strength: number;
+  novelty: number;
+  basis: string;
+  crosses: string; // cross_capability | cross_pillar
+  chain?: string | null;
+  pending_id?: string | null;
 }
 
 export interface KgResp {
@@ -187,6 +210,12 @@ export interface KgResp {
   edges: KgEdge[];
   stats: Record<string, number>;
   pending: KgEdge[];
+  latent: LatentEdge[]; // R5 per-subcap novelty-ranked discoveries
+}
+
+export interface KgDiscoverResp {
+  version: string;
+  latent: LatentEdge[]; // R5 version-wide discovery surface
 }
 
 export interface SowDoc {
@@ -514,6 +543,7 @@ export interface ConnectionSignal {
 export interface SubcapConnections {
   siblings: ConnectionSibling[];
   signals: ConnectionSignal[];
+  latent: LatentEdge[]; // R5 gated "relationships you may be missing" that touch this subcap
 }
 
 export interface NewsSource {
@@ -1257,6 +1287,8 @@ export const api = {
     http<TimelineResp>(`/api/catalogue/${v}/subcaps/${id}/timeline`),
   kg: (v: string, subcap: string): Promise<KgResp> =>
     http<KgResp>(`/api/catalogue/${v}/kg?subcap=${encodeURIComponent(subcap)}`),
+  kgDiscover: (v: string, limit = 24): Promise<KgDiscoverResp> =>
+    http<KgDiscoverResp>(`/api/catalogue/${v}/kg/discover?limit=${limit}`),
   whatif: (v: string, subcap: string, action: string): Promise<WhatIfResp> =>
     http<WhatIfResp>(
       `/api/catalogue/${v}/whatif?subcap=${encodeURIComponent(subcap)}&action=${action}`,

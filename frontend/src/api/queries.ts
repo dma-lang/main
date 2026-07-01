@@ -18,6 +18,7 @@ import {
   type SowDetail,
   type SowDoc,
   type KgResp,
+  type KgDiscoverResp,
   type TimelineResp,
   type WhatIfResp,
   type ChangeFlagsResp,
@@ -132,6 +133,14 @@ export const useKg = (version: string, subcap: string | null) =>
     queryKey: ['kg', version, subcap],
     queryFn: () => api.kg(version, subcap ?? ''),
     enabled: !!version && !!subcap,
+  });
+
+// R5 version-wide discovery surface — the "relationships you may be missing" panel on the KG page.
+export const useKgDiscover = (version: string, enabled: boolean) =>
+  useQuery<KgDiscoverResp>({
+    queryKey: ['kg-discover', version],
+    queryFn: () => api.kgDiscover(version),
+    enabled: !!version && enabled,
   });
 
 export const useWhatIf = (version: string, subcap: string, action: string, enabled: boolean) =>

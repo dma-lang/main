@@ -72,6 +72,21 @@ knowledge_graph:
   # Both >= 2 so G2 (>= 2 supporting items) always passes for a real proposal.
   shares_platform_min_shared: 2
   shares_feature_min_shared: 2
+  shares_offering_min_shared: 2           # R5: cross-cap subcaps sharing >= N offerings -> SHARES_OFFERING
+  same_value_chain_min_shared: 2          # R5: cross-cap subcaps sharing >= N value-chain clusters -> SAME_VALUE_CHAIN
+  # R5 co-delivery association mining over the Jira corpus (control.story_catalogue_link): a CROSS-
+  # capability subcap pair co-delivered by the same client (project_key) AND/OR in the same story,
+  # with market-basket lift = P(A&B)/(P(A)*P(B)) at/above this floor AND a co-count at/above the
+  # minimum -> a CO_DELIVERED proposal (the latent core). Deterministic counts; co_min >= 2 keeps G2.
+  co_delivery_min_lift: 2.0
+  co_delivery_min_count: 3
+  # R5 novelty = strength * (1 - novelty_weight * structural_obviousness): a strong pair that is NOT
+  # already obvious (different pillar, no shared platform) ranks highest in "relationships you may be
+  # missing". novelty_weight in [0,1] tunes how hard obviousness suppresses (1.0 = full).
+  novelty_weight: 1.0
+  # R5 Decision (D16): allow gated CROSS-PILLAR edge proposals (the most non-obvious links). They are
+  # only ever HYPOTHESIS/INFERENCE proposals through G1-G8 + Change Flags, never a committed surface.
+  allow_cross_pillar: true
   max_proposals_per_scan: 200             # bound the run (resilience: bounded everything)
 
 # Use-case gap detector (services/use_case_gaps): surface use cases IMPLIED by delivered Jira stories

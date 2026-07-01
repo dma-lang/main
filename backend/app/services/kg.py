@@ -1,12 +1,15 @@
-"""Knowledge-graph Layer B — deterministic STRUCTURAL edge proposals (R2 A2).
+"""Knowledge-graph Layer B — deep subcap↔subcap relationship mining, gated (R2 A2 · R5).
 
 Layer A (the KG endpoint) is a deterministic projection of the catalogue's own link tables — the
 relationships that are already FACTS. Layer B is the relationships the flat catalogue *hides*: two
-subcaps in DIFFERENT capabilities that are delivered on the same platforms, or that serve the same
-personas. Those are not facts — they are AI-proposed (here, deterministic structural co-occurrence;
-live semantic similarity is R2 Phase B). So every Layer-B edge is written as a gated, dashed
-``control.pending_edge`` and queued in the Change-Flags inbox for a human to confirm before it ever
-renders as a kg_edge (CLAUDE.md safeguard 2: nothing AI-derived commits ungated).
+subcaps in DIFFERENT capabilities that share platforms/personas/offerings/value-chain stages, are
+**co-delivered** across the Jira corpus (market-basket lift/PMI — the latent core), or are
+semantically near in the shared embedding space. Those are not facts — they are AI-proposed, each
+scored to one comparable ``strength`` + a ``novelty`` (strength × how non-obvious the pair is) so
+the discovery surface can lead with "relationships you may be missing" (strong but cross-pillar / no
+shared platform). Every Layer-B edge is written as a gated, dashed ``control.pending_edge`` and
+queued in the Change-Flags inbox for a human to confirm before it ever renders as a kg_edge
+(CLAUDE.md safeguard 2: nothing AI-derived commits ungated).
 
 Grounded only (safeguard 4): every proposal traces to real rows in ``subcap_platform`` /
 ``subcap_persona`` (the active version's own, or the reference version's when this one carries no
@@ -33,7 +36,65 @@ from app.versioning import resolve_version
 _KG_EDGE_KIND = "kg_edge_proposal"  # the change_flag kind (also the pending_edge promotion target)
 _SHARES_PLATFORM = "shares_platform"
 _SHARES_FEATURE = "shares_feature"
-_SEMANTIC = "semantically_similar"  # Phase B: cosine-near in the shared vector(768) space
+_SHARES_OFFERING = "shares_offering"  # R5: cross-cap subcaps mapping to the same offering(s)
+_SAME_VALUE_CHAIN = "same_value_chain"  # R5: cross-cap subcaps in the same value-chain cluster(s)
+_CO_DELIVERED = "co_delivered"  # R5: co-delivered across the Jira corpus (the latent core)
+_SEMANTIC = "semantically_similar"  # cosine-near in the shared vector(768) space
+
+# Strongest-evidence first: one edge is proposed per pair (the strongest kind); the others ride
+# along as corroborating signals on it. Co-delivery (a real statistical delivery bond) and
+# shared-platform (a hard catalogue fact) outrank the softer structural / semantic signals.
+_KIND_PRIORITY = {
+    _CO_DELIVERED: 6,
+    _SHARES_PLATFORM: 5,
+    _SHARES_OFFERING: 4,
+    _SAME_VALUE_CHAIN: 3,
+    _SHARES_FEATURE: 2,
+    _SEMANTIC: 1,
+}
+
+# (relation, evidence-phrase, reasoning operation) per kind — the human-readable "why" on the chain.
+_KIND_PROSE: dict[str, tuple[str, str, str]] = {
+    _SHARES_PLATFORM: (
+        "co-occur on shared delivery platforms",
+        "trace to real catalogue link rows",
+        "kg_structural",
+    ),
+    _SHARES_OFFERING: (
+        "map to the same productized offering(s)",
+        "map to the same offering rows",
+        "kg_structural",
+    ),
+    _SAME_VALUE_CHAIN: (
+        "sit in the same value-chain stage(s)",
+        "occupy the same value-chain cluster(s)",
+        "kg_structural",
+    ),
+    _SHARES_FEATURE: (
+        "serve the same personas",
+        "trace to real catalogue link rows",
+        "kg_structural",
+    ),
+    _CO_DELIVERED: (
+        "are co-delivered",
+        "are delivered together across real Jira projects and stories",
+        "kg_codelivery",
+    ),
+    _SEMANTIC: (
+        "are semantically similar",
+        "embed close together in the shared vector(768) space",
+        "kg_semantic",
+    ),
+}
+
+_SHORT = {
+    _SHARES_PLATFORM: "sp",
+    _SHARES_FEATURE: "sf",
+    _SHARES_OFFERING: "so",
+    _SAME_VALUE_CHAIN: "vc",
+    _CO_DELIVERED: "cd",
+    _SEMANTIC: "ss",
+}
 
 
 def _severity(shared: int) -> str:
@@ -41,20 +102,75 @@ def _severity(shared: int) -> str:
     return "MED" if shared >= 4 else "LOW"
 
 
-def _weight(kind: str, shared: int) -> float:
-    """Deterministic confidence for the dashed edge, capped under numeric(4,3)."""
-    base = 0.5 if kind == _SHARES_PLATFORM else 0.4
-    return round(min(0.999, base + 0.08 * shared), 3)
-
-
-_SHORT = {_SHARES_PLATFORM: "sp", _SHARES_FEATURE: "sf", _SEMANTIC: "ss"}
+def _pair_key(a: str, b: str) -> tuple[str, str]:
+    """Order-independent pair key (lo, hi)."""
+    return (a, b) if a <= b else (b, a)
 
 
 def _pair_ref(a: str, b: str, kind: str) -> str:
-    """Stable, order-independent change_flag target_ref for one proposed edge (idempotency key). The
-    per-kind suffix keeps a structural and a semantic edge over the same pair distinct."""
-    lo, hi = sorted((a, b))
+    """Stable, order-independent change_flag target_ref for one proposed edge; the kind suffix
+    records which relationship won. Idempotency is enforced at the PAIR level (see
+    ``_pair_flag_exists``) so a pair is proposed once — a re-mine never queues a second edge."""
+    lo, hi = _pair_key(a, b)
     return f"{lo}>{hi}:{_SHORT.get(kind, 'sf')}"
+
+
+def _strength(p: dict[str, Any]) -> float:
+    """Unified 0..1 confidence across every relationship kind so edges are comparable + rankable
+    (thickness ∝ strength): a squashed market-basket lift for co-delivery, cosine for the semantic
+    layer, a shared-count ramp for the structural kinds. Capped under numeric(4,3)."""
+    kind = p["kind"]
+    if kind == _SEMANTIC:
+        return round(min(0.999, max(0.0, float(p.get("cosine") or 0.0))), 3)
+    if kind == _CO_DELIVERED:
+        lift = float(p.get("lift") or 0.0)
+        return round(min(0.999, max(0.0, 1.0 - 1.0 / lift)) if lift > 1.0 else 0.0, 3)
+    base = {
+        _SHARES_PLATFORM: 0.5,
+        _SHARES_OFFERING: 0.45,
+        _SAME_VALUE_CHAIN: 0.4,
+        _SHARES_FEATURE: 0.4,
+    }.get(kind, 0.4)
+    return round(min(0.999, base + 0.08 * int(p.get("shared") or 0)), 3)
+
+
+def _basis(p: dict[str, Any]) -> str:
+    """The one-line "why" shown on the edge and carried into the reasoning chain."""
+    kind = p["kind"]
+    if kind == _SEMANTIC:
+        return f"cosine {float(p.get('cosine') or 0.0):.3f} in the shared embedding space"
+    if kind == _CO_DELIVERED:
+        parts: list[str] = []
+        cc, cs = int(p.get("co_clients") or 0), int(p.get("co_stories") or 0)
+        if cc:
+            parts.append(f"{cc} client project{'s' if cc != 1 else ''}")
+        if cs:
+            parts.append(f"{cs} shared stor{'ies' if cs != 1 else 'y'}")
+        where = " and ".join(parts) if parts else f"{int(p.get('shared') or 0)} deliveries"
+        return f"co-delivered across {where} (lift {float(p.get('lift') or 0.0):.1f})"
+    unit = {
+        _SHARES_PLATFORM: "shared L3 platforms",
+        _SHARES_OFFERING: "shared offerings",
+        _SAME_VALUE_CHAIN: "shared value-chain stages",
+        _SHARES_FEATURE: "shared personas",
+    }.get(kind, "shared items")
+    return f"{int(p.get('shared') or 0)} {unit}"
+
+
+def _crosses(a: str, b: str) -> str:
+    """A proposed pair is always cross-CAPABILITY (same-cap siblings are Layer A); flag the
+    cross-PILLAR ones (different pillar code) — the most non-obvious links, gated per D16."""
+    return "cross_pillar" if a[:2] != b[:2] else "cross_capability"
+
+
+def _novelty(strength: float, a: str, b: str, shares_plat: bool, weight: float) -> float:
+    """novelty = strength × (1 − w·obviousness). A strong pair the catalogue structure already makes
+    obvious (same pillar, or already sharing a platform) is not a discovery; a strong cross-pillar
+    pair with no shared platform is exactly "what we may not be noticing" — it ranks top."""
+    obviousness = min(
+        1.0, 0.5 * (1.0 if a[:2] == b[:2] else 0.0) + 0.5 * (1.0 if shares_plat else 0.0)
+    )
+    return round(max(0.0, strength * (1.0 - weight * obviousness)), 4)
 
 
 async def _ench_schema(conn: AsyncConnection, schema: str, table: str) -> str:
@@ -124,15 +240,6 @@ async def _edge_evidence(conn: AsyncConnection, a: str, b: str, kind: str) -> UU
     ).first()
     assert created is not None
     return UUID(str(created[0]))
-
-
-async def _flag_exists(conn: AsyncConnection, target_ref: str) -> bool:
-    return (
-        await conn.execute(
-            text("SELECT 1 FROM control.change_flag WHERE kind = :k AND target_ref = :t"),
-            {"k": _KG_EDGE_KIND, "t": target_ref},
-        )
-    ).first() is not None
 
 
 async def _candidate_pairs(
@@ -270,48 +377,312 @@ async def _semantic_pairs(
     ]
 
 
+async def _co_membership_pairs(
+    conn: AsyncConnection, schema: str, off_min: int, vcc_min: int, cap: int
+) -> list[dict[str, Any]]:
+    """Cross-capability subcap pairs co-inhabiting the same structural bucket the flat tree hides:
+    the same productized offering(s) (>= off_min) or the same value-chain cluster(s) (>= vcc_min).
+    Built exactly like the shared-platform projection (inheriting the reference version's enrichment
+    when this one carries none of its own), strongest first, bounded."""
+    off_s = await _ench_schema(conn, schema, "offering_subcap")
+    vcc_s = await _ench_schema(conn, schema, "subcap_vcc")
+    offer = (
+        (
+            await conn.execute(
+                text(
+                    "SELECT os1.subcap_id AS a, os2.subcap_id AS b, s1.name AS a_name, "
+                    "s2.name AS b_name, count(DISTINCT os1.offering_id) AS shared "
+                    f"FROM {off_s}.offering_subcap os1 "
+                    f"JOIN {off_s}.offering_subcap os2 "
+                    "  ON os2.offering_id = os1.offering_id AND os2.subcap_id > os1.subcap_id "
+                    f"JOIN {off_s}.subcap s1 ON s1.subcap_id = os1.subcap_id "
+                    f"JOIN {off_s}.subcap s2 ON s2.subcap_id = os2.subcap_id "
+                    "WHERE s1.capability_id <> s2.capability_id "
+                    "GROUP BY os1.subcap_id, os2.subcap_id, s1.name, s2.name "
+                    "HAVING count(DISTINCT os1.offering_id) >= :m "
+                    "ORDER BY shared DESC, a, b LIMIT :cap"
+                ),
+                {"m": off_min, "cap": cap},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    vcc = (
+        (
+            await conn.execute(
+                text(
+                    "SELECT v1.subcap_id AS a, v2.subcap_id AS b, s1.name AS a_name, "
+                    "s2.name AS b_name, count(DISTINCT v1.vcc_id) AS shared "
+                    f"FROM {vcc_s}.subcap_vcc v1 "
+                    f"JOIN {vcc_s}.subcap_vcc v2 "
+                    "  ON v2.vcc_id = v1.vcc_id AND v2.subcap_id > v1.subcap_id "
+                    f"JOIN {vcc_s}.subcap s1 ON s1.subcap_id = v1.subcap_id "
+                    f"JOIN {vcc_s}.subcap s2 ON s2.subcap_id = v2.subcap_id "
+                    "WHERE s1.capability_id <> s2.capability_id "
+                    "GROUP BY v1.subcap_id, v2.subcap_id, s1.name, s2.name "
+                    "HAVING count(DISTINCT v1.vcc_id) >= :m "
+                    "ORDER BY shared DESC, a, b LIMIT :cap"
+                ),
+                {"m": vcc_min, "cap": cap},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    out: list[dict[str, Any]] = [{**dict(r), "kind": _SHARES_OFFERING} for r in offer]
+    out += [{**dict(r), "kind": _SAME_VALUE_CHAIN} for r in vcc]
+    return out
+
+
+async def _co_delivery_pairs(
+    conn: AsyncConnection, schema: str, version_id: str, min_lift: float, min_count: int, cap: int
+) -> list[dict[str, Any]]:
+    """Market-basket association mining over the Jira delivery corpus (control.story_catalogue_link,
+    Jira-only by construction) — the CROSS-capability subcap pairs actually delivered together, by
+    the same client (project_key basket -> lift/PMI) and/or the same story (tight shared-evidence).
+    lift = P(A&B)/(P(A)*P(B)); a pair co-delivered far above independence is a real, non-obvious
+    delivery bond. Deterministic counts (hermetic-identical to live, zero spend); kept iff, in
+    EITHER basket, lift >= min_lift AND co-count >= min_count; strongest lift first, bounded."""
+    meta = {
+        str(r["id"]): (str(r["name"]), str(r["cap"]))
+        for r in (
+            await conn.execute(
+                text(f"SELECT subcap_id AS id, name, capability_id AS cap FROM {schema}.subcap")
+            )
+        )
+        .mappings()
+        .all()
+    }
+
+    async def _basket(
+        co_sql: str, marg_sql: str, n_sql: str
+    ) -> tuple[list[Any], dict[str, int], int]:
+        co = (
+            (await conn.execute(text(co_sql), {"ver": version_id, "m": min_count})).mappings().all()
+        )
+        marg = {
+            str(r["id"]): int(r["n"])
+            for r in (await conn.execute(text(marg_sql), {"ver": version_id})).mappings().all()
+        }
+        n = int((await conn.execute(text(n_sql), {"ver": version_id})).scalar() or 0)
+        return list(co), marg, n
+
+    _CLIENT_PS = (
+        "WITH ps AS (SELECT DISTINCT s.project_key AS pk, l.subcap_id AS sid "
+        "FROM control.story_catalogue_link l JOIN control.story s ON s.story_key = l.story_key "
+        "WHERE l.version_id = :ver AND s.project_key IS NOT NULL AND s.project_key <> '') "
+    )
+    client_co, client_marg, client_n = await _basket(
+        _CLIENT_PS + "SELECT p1.sid AS a, p2.sid AS b, count(*) AS co FROM ps p1 "
+        "JOIN ps p2 ON p2.pk = p1.pk AND p2.sid > p1.sid "
+        "GROUP BY p1.sid, p2.sid HAVING count(*) >= :m ORDER BY co DESC LIMIT 5000",
+        _CLIENT_PS + "SELECT sid AS id, count(*) AS n FROM ps GROUP BY sid",
+        "SELECT count(DISTINCT s.project_key) FROM control.story_catalogue_link l "
+        "JOIN control.story s ON s.story_key = l.story_key "
+        "WHERE l.version_id = :ver AND s.project_key IS NOT NULL AND s.project_key <> ''",
+    )
+    story_co, story_marg, story_n = await _basket(
+        "SELECT l1.subcap_id AS a, l2.subcap_id AS b, count(DISTINCT l1.story_key) AS co "
+        "FROM control.story_catalogue_link l1 JOIN control.story_catalogue_link l2 "
+        "  ON l2.story_key = l1.story_key AND l2.subcap_id > l1.subcap_id "
+        "WHERE l1.version_id = :ver AND l2.version_id = :ver "
+        "GROUP BY l1.subcap_id, l2.subcap_id "
+        "HAVING count(DISTINCT l1.story_key) >= :m ORDER BY co DESC LIMIT 5000",
+        "SELECT subcap_id AS id, count(DISTINCT story_key) AS n "
+        "FROM control.story_catalogue_link WHERE version_id = :ver GROUP BY subcap_id",
+        "SELECT count(DISTINCT story_key) FROM control.story_catalogue_link "
+        "WHERE version_id = :ver",
+    )
+
+    def _lift(co: int, na: int, nb: int, n: int) -> float:
+        return (co * n) / (na * nb) if na and nb and n else 0.0
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    baskets = (
+        (client_co, client_marg, client_n, "clients"),
+        (story_co, story_marg, story_n, "stories"),
+    )
+    for rows, marg, n, tag in baskets:
+        for r in rows:
+            a, b = str(r["a"]), str(r["b"])
+            if a not in meta or b not in meta or meta[a][1] == meta[b][1]:
+                continue  # unknown id, or same-capability (already Layer A) — skip
+            co = int(r["co"])
+            key = _pair_key(a, b)
+            m = merged.setdefault(
+                key,
+                {
+                    "a": key[0],
+                    "b": key[1],
+                    "co_clients": 0,
+                    "co_stories": 0,
+                    "lift_clients": 0.0,
+                    "lift_stories": 0.0,
+                },
+            )
+            m[f"co_{tag}"] = co
+            m[f"lift_{tag}"] = _lift(co, marg.get(a, 0), marg.get(b, 0), n)
+    out: list[dict[str, Any]] = []
+    for m in merged.values():
+        client_ok = m["co_clients"] >= min_count and m["lift_clients"] >= min_lift
+        story_ok = m["co_stories"] >= min_count and m["lift_stories"] >= min_lift
+        if not (client_ok or story_ok):
+            continue
+        lift = max(m["lift_clients"] if client_ok else 0.0, m["lift_stories"] if story_ok else 0.0)
+        shared = max(m["co_clients"] if client_ok else 0, m["co_stories"] if story_ok else 0)
+        a, b = m["a"], m["b"]
+        out.append(
+            {
+                "a": a,
+                "b": b,
+                "a_name": meta[a][0],
+                "b_name": meta[b][0],
+                "kind": _CO_DELIVERED,
+                "lift": round(lift, 3),
+                "shared": shared,
+                "co_clients": m["co_clients"],
+                "co_stories": m["co_stories"],
+            }
+        )
+    out.sort(key=lambda d: (-float(d["lift"]), -int(d["shared"]), d["a"], d["b"]))
+    return out[:cap]
+
+
+async def _shared_platform_pairs(
+    conn: AsyncConnection, ench_s: str, ids: set[str]
+) -> set[tuple[str, str]]:
+    """The subset of ``ids`` pairs that already share >= 1 L3 platform — the structural obviousness
+    signal for novelty (a strong pair that already shares a platform is not a hidden relationship).
+    """
+    if not ids:
+        return set()
+    rows = (
+        await conn.execute(
+            text(
+                "SELECT DISTINCT sp1.subcap_id AS a, sp2.subcap_id AS b "
+                f"FROM {ench_s}.subcap_platform sp1 "
+                f"JOIN {ench_s}.subcap_platform sp2 "
+                "  ON sp2.l3_id = sp1.l3_id AND sp2.subcap_id > sp1.subcap_id "
+                "WHERE sp1.subcap_id = ANY(:ids) AND sp2.subcap_id = ANY(:ids)"
+            ),
+            {"ids": list(ids)},
+        )
+    ).all()
+    return {_pair_key(str(r[0]), str(r[1])) for r in rows}
+
+
+def _score_and_reduce(
+    raw: list[dict[str, Any]],
+    shares_plat_set: set[tuple[str, str]],
+    novelty_weight: float,
+    allow_cross_pillar: bool,
+) -> list[dict[str, Any]]:
+    """Score every raw pair (strength + basis), reduce to ONE edge per pair (the strongest kind,
+    the rest recorded as corroborating ``signals``), tag cross-capability/-pillar reach, compute
+    novelty, and rank by novelty so the surface leads with "relationships you may be missing"."""
+    by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in raw:
+        a, b = str(r["a"]), str(r["b"])
+        if not allow_cross_pillar and a[:2] != b[:2]:
+            continue  # D16: cross-pillar proposals disabled by config
+        p = {**r, "a": a, "b": b}
+        p["strength"] = _strength(p)
+        p["basis"] = _basis(p)
+        sig = {"kind": p["kind"], "basis": p["basis"], "strength": p["strength"]}
+        key = _pair_key(a, b)
+        cur = by_pair.get(key)
+        if cur is None:
+            p["signals"] = [sig]
+            by_pair[key] = p
+            continue
+        cur["signals"].append(sig)
+        if (_KIND_PRIORITY.get(p["kind"], 0), p["strength"]) > (
+            _KIND_PRIORITY.get(cur["kind"], 0),
+            cur["strength"],
+        ):
+            p["signals"] = cur["signals"]  # keep the strongest kind primary; carry all signals
+            by_pair[key] = p
+    out: list[dict[str, Any]] = []
+    for key, p in by_pair.items():
+        shares_plat = key in shares_plat_set or any(
+            s["kind"] == _SHARES_PLATFORM for s in p["signals"]
+        )
+        p["crosses"] = _crosses(p["a"], p["b"])
+        p["novelty"] = _novelty(float(p["strength"]), p["a"], p["b"], shares_plat, novelty_weight)
+        p["signals"] = sorted(p["signals"], key=lambda s: -float(s["strength"]))
+        out.append(p)
+    out.sort(key=lambda d: (-float(d["novelty"]), -float(d["strength"]), d["a"], d["b"]))
+    return out
+
+
+async def _pair_flag_exists(conn: AsyncConnection, a: str, b: str) -> bool:
+    """Pair-level idempotency: has ANY edge (of any kind) already been proposed for this pair? Exact
+    match against the finite set of per-kind refs (no LIKE wildcard risk)."""
+    lo, hi = _pair_key(a, b)
+    refs = [f"{lo}>{hi}:{s}" for s in set(_SHORT.values())]
+    return (
+        await conn.execute(
+            text(
+                "SELECT 1 FROM control.change_flag "
+                "WHERE kind = :k AND target_ref = ANY(:refs) LIMIT 1"
+            ),
+            {"k": _KG_EDGE_KIND, "refs": refs},
+        )
+    ).first() is not None
+
+
 async def propose_structural_edges(
     version: str,
     shares_platform_min: int | None = None,
     shares_feature_min: int | None = None,
     max_proposals: int | None = None,
     semantic_min_cosine: float | None = None,
+    shares_offering_min: int | None = None,
+    same_value_chain_min: int | None = None,
+    co_delivery_min_count: int | None = None,
+    co_delivery_min_lift: float | None = None,
 ) -> dict[str, Any]:
-    """Compute deterministic structural co-occurrence pairs PLUS (when an embedding space exists)
-    semantic cosine-near pairs, gate G1-G8, and queue each as a dashed ``pending_edge`` + a
-    Change-Flags proposal (kind ``kg_edge_proposal``) with the full trust envelope. Never writes a
-    kg_edge live — approval in the inbox promotes it. Idempotent on the pair key; each layer is
-    bounded by the cap and the semantic layer is deduped against the (stronger) structural pairs.
-    Returns ``{version, created, proposed, candidates, already}``."""
-    cfg_sp, cfg_sf, cfg_cap = gates.knowledge_graph_config()
-    sp_min = cfg_sp if shares_platform_min is None else shares_platform_min
-    sf_min = cfg_sf if shares_feature_min is None else shares_feature_min
-    cap = cfg_cap if max_proposals is None else max_proposals
-    sem_cos = (
-        gates.knowledge_graph_semantic_config()
-        if semantic_min_cosine is None
-        else semantic_min_cosine
-    )
+    """Mine every subcap↔subcap relationship the flat catalogue hides — structural co-occurrence
+    (shared platforms / personas / offerings / value-chain stages), co-delivery association over
+    the Jira corpus (lift/PMI), and (when an embedding space exists) semantic cosine — then unify
+    them to one comparable ``strength`` + ``novelty``, reduce to one edge per pair (strongest kind
+    primary, the rest recorded as signals), rank by novelty, gate G1-G8, and queue each as a dashed
+    ``pending_edge`` + a Change-Flags proposal (kind ``kg_edge_proposal``) with the full trust
+    envelope. Never writes a kg_edge live — approval in the inbox promotes it. Idempotent at the
+    PAIR level; bounded by the cap. Returns ``{version, created, proposed, candidates, already}``.
+    """
+    cfg = gates.knowledge_graph_full_config()
+    sp_min = cfg.shares_platform_min if shares_platform_min is None else shares_platform_min
+    sf_min = cfg.shares_feature_min if shares_feature_min is None else shares_feature_min
+    cap = cfg.max_proposals if max_proposals is None else max_proposals
+    sem_cos = cfg.semantic_min_cosine if semantic_min_cosine is None else semantic_min_cosine
+    off_min = cfg.shares_offering_min if shares_offering_min is None else shares_offering_min
+    vcc_min = cfg.same_value_chain_min if same_value_chain_min is None else same_value_chain_min
+    cd_count = cfg.co_delivery_min_count if co_delivery_min_count is None else co_delivery_min_count
+    cd_lift = cfg.co_delivery_min_lift if co_delivery_min_lift is None else co_delivery_min_lift
     v = await resolve_version(version)
     engine = db.require_engine()
     created = already = 0
     async with engine.begin() as conn:
         ench_s = await _ench_schema(conn, v.schema_name, "subcap_platform")
-        pairs = await _candidate_pairs(conn, ench_s, sp_min, sf_min, cap)
+        # Gather every relationship signal the data supports, then unify + rank (_score_and_reduce).
+        raw = await _candidate_pairs(conn, ench_s, sp_min, sf_min, cap)
+        raw += await _co_membership_pairs(conn, v.schema_name, off_min, vcc_min, cap)
+        raw += await _co_delivery_pairs(conn, v.schema_name, v.version_id, cd_lift, cd_count, cap)
         emb_s = await _embedding_schema(conn, v.schema_name)
         if emb_s is not None:
-            seen = {(p["a"], p["b"]) for p in pairs}
-            for sp in await _semantic_pairs(conn, emb_s, sem_cos, cap):
-                if (sp["a"], sp["b"]) in seen:
-                    continue  # already proposed structurally (the stronger evidence) — dedup
-                seen.add((sp["a"], sp["b"]))
-                pairs.append(sp)
+            raw += await _semantic_pairs(conn, emb_s, sem_cos, cap)
+        ids = {str(p["a"]) for p in raw} | {str(p["b"]) for p in raw}
+        shares_plat_set = await _shared_platform_pairs(conn, ench_s, ids)
+        pairs = _score_and_reduce(raw, shares_plat_set, cfg.novelty_weight, cfg.allow_cross_pillar)[
+            :cap
+        ]
         for p in pairs:
-            ref = _pair_ref(p["a"], p["b"], p["kind"])
-            if await _flag_exists(conn, ref):
-                already += 1  # idempotent: this edge was proposed in a prior run
+            if await _pair_flag_exists(conn, p["a"], p["b"]):
+                already += 1  # idempotent: this pair was proposed in a prior run
                 continue
-            await _create_edge_proposal(conn, v.version_id, p, ref)
+            await _create_edge_proposal(conn, v.version_id, p, _pair_ref(p["a"], p["b"], p["kind"]))
             created += 1
     return {
         "version": v.version_id,
@@ -325,27 +696,20 @@ async def propose_structural_edges(
 async def _create_edge_proposal(
     conn: AsyncConnection, version_id: str, p: dict[str, Any], ref: str
 ) -> None:
-    a, b, kind, shared = p["a"], p["b"], p["kind"], int(p["shared"])
-    a_name, b_name = p["a_name"], p["b_name"]
-    cosine = p.get("cosine")
-    if kind == _SEMANTIC:
-        basis = f"cosine {float(cosine or 0.0):.3f} in the shared embedding space"
-        relation, ev_phrase, operation = (
-            "are semantically similar",
-            "embed close together in the shared vector(768) space",
-            "kg_semantic",
-        )
-    else:
-        unit = "shared L3 platforms" if kind == _SHARES_PLATFORM else "shared personas"
-        basis = f"{shared} {unit}"
-        relation, ev_phrase, operation = (
-            "co-occur structurally",
-            "trace to real catalogue link rows",
-            "kg_structural",
-        )
+    a, b, kind = str(p["a"]), str(p["b"]), p["kind"]
+    a_name, b_name = str(p["a_name"]), str(p["b_name"])
+    shared = int(p.get("shared") or 2)
+    strength = float(p.get("strength") or _strength(p))
+    basis = str(p.get("basis") or _basis(p))
+    crosses = str(p.get("crosses") or _crosses(a, b))
+    novelty = float(p.get("novelty") or 0.0)
+    signals = list(p.get("signals") or [{"kind": kind, "basis": basis, "strength": strength}])
+    relation, ev_phrase, operation = _KIND_PROSE.get(kind, _KIND_PROSE[_SHARES_FEATURE])
+    claim = "HYPOTHESIS" if crosses == "cross_pillar" else "INFERENCE"
+    pillars = " and different pillars" if crosses == "cross_pillar" else ""
     results, verdict = gates.evaluate_suggestion(
         target_exists=True,  # both subcaps exist in the active version; nothing is mutated
-        evidence_count=shared,  # >= 2 by construction (HAVING floor / cosine*100) -> G2 passes
+        evidence_count=max(2, shared),  # >= 2 by construction -> G2 passes
         source_tier="T1",
         cited=True,
         contradicts=False,  # an additional edge contradicts nothing — it is purely additive
@@ -353,21 +717,22 @@ async def _create_edge_proposal(
     )
     title = f"Proposed knowledge-graph edge: {a} ~ {b} ({kind})"
     body = (
-        f"{a} ({a_name}) and {b} ({b_name}) sit in different capabilities yet {relation} — "
-        f"{basis}. The flat catalogue hides this link. Proposed Layer-B edge {kind} (dashed, "
-        "AI-proposed). Approve to confirm it as a knowledge-graph relationship, or reject to keep "
-        "the subcaps unlinked. Nothing is written to the graph as fact until approved."
+        f"{a} ({a_name}) and {b} ({b_name}) sit in different capabilities{pillars} yet {relation} "
+        f"— {basis}. The flat catalogue hides this link. Proposed Layer-B edge {kind} (dashed, "
+        f"AI-{'hypothesis' if claim == 'HYPOTHESIS' else 'inference'}). Approve to confirm it as a "
+        "knowledge-graph relationship, or reject to keep the subcaps unlinked. Nothing is written "
+        "to the graph as fact until approved."
     )
-    summary = f"KG Layer-B edge {a} ~ {b} [{kind}] — {basis}."
+    summary = f"KG Layer-B edge {a} ~ {b} [{kind}] — {basis} (novelty {novelty:.2f})."
     chain_id = (
         await conn.execute(
             text(
                 "INSERT INTO control.reasoning_chain "
                 "(operation, subject_ref, claim_label, summary, model, cost_usd) "
-                "VALUES (:op, :subj, 'INFERENCE', :summary, 'hermetic-stub', 0) "
+                "VALUES (:op, :subj, CAST(:cl AS claim_label), :summary, 'hermetic-stub', 0) "
                 "RETURNING chain_id"
             ),
-            {"op": operation, "subj": ref, "summary": summary},
+            {"op": operation, "subj": ref, "cl": claim, "summary": summary},
         )
     ).scalar_one()
     ev = await _edge_evidence(conn, a, b, kind)
@@ -375,8 +740,9 @@ async def _create_edge_proposal(
         ("retrieve", f"Both {a} and {b} {ev_phrase} ({basis}).", ev),
         (
             "weigh",
-            "They live in different capabilities, so this is not an existing Layer-A sibling edge "
-            "— it is a relationship the flat tree hides.",
+            f"They live in different capabilities{pillars}, so this is not an existing Layer-A "
+            f"sibling edge — it is a relationship the flat tree hides (novelty {novelty:.2f}, "
+            f"strength {strength:.2f}).",
             None,
         ),
         (
@@ -410,34 +776,53 @@ async def _create_edge_proposal(
     )
     from_node = await _node_id(conn, version_id, "subcap", a, a_name)
     to_node = await _node_id(conn, version_id, "subcap", b, b_name)
-    weight = _weight(kind, shared)
-    pending_id = (
-        await conn.execute(
-            text(
-                "INSERT INTO control.pending_edge "
-                "(version_id, from_node, to_node, kind, weight, chain_id, status) "
-                "VALUES (:v, :f, :t, :k, :w, :c, 'pending') RETURNING pending_id"
-            ),
-            {"v": version_id, "f": from_node, "t": to_node, "k": kind, "w": weight, "c": chain_id},
-        )
-    ).scalar_one()
-    detail = {
-        "title": title,
-        "body": body,
-        "version": version_id,
-        "claim_label": "INFERENCE",
-        "source_tier": "T1",
-        "gate_failed": gates.first_failing(results),  # None when the proposal passes G1-G8
-        "verdict": verdict,
+    # The "why" a PROMOTED kg_edge keeps (migration 0014: pending_edge.detail / kg_edge.detail).
+    edge_detail: dict[str, Any] = {
         "kind_edge": kind,
         "from": a,
         "from_name": a_name,
         "to": b,
         "to_name": b_name,
-        "shared": shared,
         "basis": basis,
-        "cosine": float(cosine) if cosine is not None else None,
-        "weight": weight,
+        "strength": strength,
+        "novelty": novelty,
+        "crosses": crosses,
+        "shared": shared,
+        "lift": float(p["lift"]) if p.get("lift") is not None else None,
+        "cosine": float(p["cosine"]) if p.get("cosine") is not None else None,
+        "co_clients": int(p["co_clients"]) if p.get("co_clients") is not None else None,
+        "co_stories": int(p["co_stories"]) if p.get("co_stories") is not None else None,
+        "signals": signals,
+        "claim_label": claim,
+        "source_tier": "T1",
+    }
+    pending_id = (
+        await conn.execute(
+            text(
+                "INSERT INTO control.pending_edge "
+                "(version_id, from_node, to_node, kind, weight, chain_id, status, detail) "
+                "VALUES (:v, :f, :t, :k, :w, :c, 'pending', CAST(:d AS jsonb)) RETURNING pending_id"
+            ),
+            {
+                "v": version_id,
+                "f": from_node,
+                "t": to_node,
+                "k": kind,
+                "w": strength,
+                "c": chain_id,
+                "d": json.dumps(edge_detail),
+            },
+        )
+    ).scalar_one()
+    # The change_flag carries the same "why" PLUS the inbox-render + promotion envelope.
+    flag_detail = {
+        **edge_detail,
+        "title": title,
+        "body": body,
+        "version": version_id,
+        "gate_failed": gates.first_failing(results),  # None when the proposal passes G1-G8
+        "verdict": verdict,
+        "weight": strength,
         "pending_id": str(pending_id),
     }
     await conn.execute(
@@ -449,7 +834,7 @@ async def _create_edge_proposal(
             "k": _KG_EDGE_KIND,
             "sev": _severity(shared),
             "t": ref,
-            "d": json.dumps(detail),
+            "d": json.dumps(flag_detail),
             "c": chain_id,
         },
     )
@@ -462,7 +847,8 @@ async def promote_pending_edge(conn: AsyncConnection, pending_id: str) -> bool:
         (
             await conn.execute(
                 text(
-                    "SELECT version_id, from_node, to_node, kind, weight FROM control.pending_edge "
+                    "SELECT version_id, from_node, to_node, kind, weight, detail::text AS detail "
+                    "FROM control.pending_edge "
                     "WHERE pending_id = :p AND status = 'pending' FOR UPDATE"
                 ),
                 {"p": pending_id},
@@ -479,8 +865,9 @@ async def promote_pending_edge(conn: AsyncConnection, pending_id: str) -> bool:
     )
     await conn.execute(
         text(
-            "INSERT INTO control.kg_edge (version_id, from_node, to_node, kind, layer, weight) "
-            "VALUES (:v, :f, :t, :k, 'B_proposed', :w)"
+            "INSERT INTO control.kg_edge "
+            "(version_id, from_node, to_node, kind, layer, weight, detail) "
+            "VALUES (:v, :f, :t, :k, 'B_proposed', :w, CAST(:d AS jsonb))"
         ),
         {
             "v": pe["version_id"],
@@ -488,6 +875,7 @@ async def promote_pending_edge(conn: AsyncConnection, pending_id: str) -> bool:
             "t": pe["to_node"],
             "k": pe["kind"],
             "w": pe["weight"],
+            "d": pe["detail"],  # the edge's "why" survives promotion (migration 0014)
         },
     )
     return True

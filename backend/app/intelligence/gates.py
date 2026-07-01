@@ -268,6 +268,62 @@ def xref_semantic_config() -> tuple[float, float]:
     return subcap, l2
 
 
+@dataclass(frozen=True)
+class KnowledgeGraphConfig:
+    """The full KG Layer-B mining thresholds (config/gates.yaml: knowledge_graph.*). The R5
+    deep-relationship builders (co-delivery association mining + structural co-membership + the
+    semantic layer) all read these; every floor is >= 2 so G2 (>= 2 supporting items) always
+    passes for a real proposal. Config, not code — recalibrated without a deploy."""
+
+    shares_platform_min: int
+    shares_feature_min: int
+    shares_offering_min: int
+    same_value_chain_min: int
+    co_delivery_min_lift: float
+    co_delivery_min_count: int
+    semantic_min_cosine: float
+    novelty_weight: float
+    allow_cross_pillar: bool
+    max_proposals: int
+
+
+def knowledge_graph_full_config() -> KnowledgeGraphConfig:
+    """Every KG Layer-B threshold as one object (R5): the structural co-occurrence floors
+    (platform / persona / offering / value-chain shared counts), the co-delivery association floors
+    (market-basket lift + co-count over the Jira corpus), the semantic cosine floor, the novelty
+    suppression weight, whether gated cross-pillar proposals are allowed (D16 decision), and the
+    per-scan proposal cap (resilience: bounded everything)."""
+    section = load_gate_config().get("knowledge_graph") or {}
+    cfg = KnowledgeGraphConfig(
+        shares_platform_min=int(section.get("shares_platform_min_shared", 2)),
+        shares_feature_min=int(section.get("shares_feature_min_shared", 2)),
+        shares_offering_min=int(section.get("shares_offering_min_shared", 2)),
+        same_value_chain_min=int(section.get("same_value_chain_min_shared", 2)),
+        co_delivery_min_lift=float(section.get("co_delivery_min_lift", 2.0)),
+        co_delivery_min_count=int(section.get("co_delivery_min_count", 3)),
+        semantic_min_cosine=float(section.get("semantically_similar_min_cosine", 0.85)),
+        novelty_weight=float(section.get("novelty_weight", 1.0)),
+        allow_cross_pillar=bool(section.get("allow_cross_pillar", True)),
+        max_proposals=int(section.get("max_proposals_per_scan", 200)),
+    )
+    floors = (
+        cfg.shares_platform_min,
+        cfg.shares_feature_min,
+        cfg.shares_offering_min,
+        cfg.same_value_chain_min,
+        cfg.co_delivery_min_count,
+    )
+    if any(f < 2 for f in floors):
+        raise ValueError("gates.yaml: knowledge_graph shared/co-count floors must be >= 2 (G2)")
+    if cfg.co_delivery_min_lift <= 1.0:
+        raise ValueError("gates.yaml: co_delivery_min_lift must be > 1.0 (1.0 = independence)")
+    if not 0 < cfg.semantic_min_cosine <= 1:
+        raise ValueError("gates.yaml: semantically_similar_min_cosine must be in (0, 1]")
+    if not 0 <= cfg.novelty_weight <= 1 or cfg.max_proposals < 1:
+        raise ValueError("gates.yaml: invalid knowledge_graph novelty_weight / max_proposals")
+    return cfg
+
+
 def evaluate_chat(retrieval_count: int, citation_count: int) -> tuple[dict[str, Any], str]:
     """Run G5 + G7 over a grounded answer; return the gate_results jsonb and the verdict."""
     g5 = retrieval_count > 0 and citation_count > 0

@@ -5,6 +5,7 @@ Lights up Capability workbench (tree + detail) and Mission control (pillar summa
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from typing import Any
@@ -187,9 +188,30 @@ class ConnectionSignal(BaseModel):
     chain: str | None = None
 
 
+class LatentEdge(BaseModel):
+    """A gated Layer-B relationship (dashed, AI-proposed) oriented from a focus subcap to the OTHER
+    subcap — the "relationships you may be missing" payload. Carries the unified strength, the
+    novelty rank, the human-readable basis, the cross-capability/-pillar reach, a reasoning backlink
+    and the pending_id so the panel can peek / approve in one click."""
+
+    source: str
+    source_name: str
+    target: str
+    target_name: str
+    target_pillar: str
+    kind: str
+    strength: float
+    novelty: float
+    basis: str
+    crosses: str
+    chain: str | None = None
+    pending_id: str | None = None
+
+
 class SubcapConnections(BaseModel):
     siblings: list[ConnectionSibling]
     signals: list[ConnectionSignal]
+    latent: list[LatentEdge] = []  # R5: co-delivered + other non-obvious links you may be missing
 
 
 class PlatformRow(BaseModel):
@@ -951,6 +973,32 @@ async def subcap_connections(
         sigs = (
             (await conn.execute(sig_sql, {"ver": v.version_id, "sid": subcap_id})).mappings().all()
         )
+        # R5: the gated Layer-B "relationships you may be missing" that touch this subcap —
+        # co-delivered / structural / semantic proposals, novelty-ranked (strong AND non-obvious).
+        pend = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT fn.ref_id AS source, coalesce(fn.label, fn.ref_id) AS source_name, "
+                        "tn.ref_id AS target, coalesce(tn.label, tn.ref_id) AS target_name, "
+                        "pe.kind::text AS kind, pe.weight AS strength, "
+                        "coalesce((pe.detail->>'novelty')::float, 0) AS novelty, "
+                        "coalesce(pe.detail->>'basis', '') AS basis, "
+                        "pe.detail->>'crosses' AS crosses, "
+                        "pe.chain_id::text AS chain, pe.pending_id::text AS pending_id "
+                        "FROM control.pending_edge pe "
+                        "JOIN control.kg_node fn ON fn.node_id = pe.from_node "
+                        "JOIN control.kg_node tn ON tn.node_id = pe.to_node "
+                        "WHERE pe.version_id = :ver AND pe.status = 'pending' "
+                        "AND (fn.ref_id = :sid OR tn.ref_id = :sid) "
+                        "ORDER BY novelty DESC, pe.weight DESC LIMIT 8"
+                    ),
+                    {"ver": v.version_id, "sid": subcap_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
     seen = {str(r["id"]) for r in cluster}
     siblings = [
         ConnectionSibling(
@@ -975,9 +1023,36 @@ async def subcap_connections(
                 score=round(float(r["score"]), 3),
             )
         )
+    latent: list[LatentEdge] = []
+    for r in pend:
+        if str(r["source"]) == subcap_id:
+            center_name, other, other_name = r["source_name"], r["target"], r["target_name"]
+        else:
+            center_name, other, other_name = r["target_name"], r["source"], r["source_name"]
+        other = str(other)
+        crosses = r["crosses"] or (
+            "cross_pillar" if other[:2] != subcap_id[:2] else "cross_capability"
+        )
+        latent.append(
+            LatentEdge(
+                source=subcap_id,
+                source_name=str(center_name),
+                target=other,
+                target_name=str(other_name),
+                target_pillar=other[:2],
+                kind=str(r["kind"]),
+                strength=float(r["strength"] or 0.0),
+                novelty=float(r["novelty"] or 0.0),
+                basis=str(r["basis"] or ""),
+                crosses=str(crosses),
+                chain=r["chain"],
+                pending_id=r["pending_id"],
+            )
+        )
     return SubcapConnections(
         siblings=siblings,
         signals=[ConnectionSignal.model_validate(dict(r)) for r in sigs],
+        latent=latent,
     )
 
 
@@ -991,9 +1066,15 @@ class KgNode(BaseModel):
 class KgEdge(BaseModel):
     source: str
     target: str
-    kind: str  # uses_platform | maps_to_offering | shares_platform | semantically_similar
+    kind: str  # uses_platform | maps_to_offering | shares_platform | co_delivered | ...
     layer: str  # A_deterministic | B_proposed
-    score: float | None = None  # Layer-B proposal confidence (pending_edge.weight); None for A
+    score: float | None = None  # legacy alias of strength (Layer-B confidence); None for facts
+    strength: float | None = None  # R5 unified 0..1 confidence — edge thickness ∝ strength
+    basis: str | None = None  # R5 the human-readable "why" (e.g. "co-delivered in 30 projects…")
+    crosses: str | None = None  # R5 cross_capability | cross_pillar (subcap↔subcap edges only)
+    novelty: float | None = None  # R5 discovery rank (Layer-B): strong AND non-obvious ranks top
+    chain: str | None = None  # R5 reasoning-chain backlink (Layer-B)
+    pending_id: str | None = None  # R5 approve/peek the proposal straight from the edge
 
 
 class KgResp(BaseModel):
@@ -1003,6 +1084,7 @@ class KgResp(BaseModel):
     edges: list[KgEdge]
     stats: dict[str, int]
     pending: list[KgEdge]  # Layer B — AI-proposed, gated in Change Flags (dashed, never fact)
+    latent: list[LatentEdge] = []  # R5 novelty-ranked "relationships you may be missing" (this ego)
 
 
 @router.get("/{version}/kg")
@@ -1075,21 +1157,67 @@ async def knowledge_graph(
             .mappings()
             .all()
         )
+        # R5 Layer-A structural projections the flat tree also hides: siblings sharing an OFFERING
+        # or a VALUE-CHAIN stage (same read-time inheritance as platforms). Solid Layer-A edges.
+        off_s = await _enrichment_schema(conn, s, "offering_subcap")
+        off_sibs = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT os2.subcap_id AS id, sc.name, left(os2.subcap_id, 2) AS pillar, "
+                        "count(DISTINCT os2.offering_id) AS shared "
+                        f"FROM {off_s}.offering_subcap os1 "
+                        f"JOIN {off_s}.offering_subcap os2 "
+                        "  ON os2.offering_id = os1.offering_id AND os2.subcap_id <> :sid "
+                        f"JOIN {off_s}.subcap sc ON sc.subcap_id = os2.subcap_id "
+                        "WHERE os1.subcap_id = :sid "
+                        "GROUP BY os2.subcap_id, sc.name ORDER BY shared DESC LIMIT 5"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        vcc_s = await _enrichment_schema(conn, s, "subcap_vcc")
+        vc_sibs = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT v2.subcap_id AS id, sc.name, left(v2.subcap_id, 2) AS pillar, "
+                        "count(DISTINCT v2.vcc_id) AS shared "
+                        f"FROM {vcc_s}.subcap_vcc v1 "
+                        f"JOIN {vcc_s}.subcap_vcc v2 "
+                        "  ON v2.vcc_id = v1.vcc_id AND v2.subcap_id <> :sid "
+                        f"JOIN {vcc_s}.subcap sc ON sc.subcap_id = v2.subcap_id "
+                        "WHERE v1.subcap_id = :sid "
+                        "GROUP BY v2.subcap_id, sc.name ORDER BY shared DESC LIMIT 5"
+                    ),
+                    {"sid": subcap},
+                )
+            )
+            .mappings()
+            .all()
+        )
         # Layer-B pending edges: resolve the kg_node uuids back to their subcap ref_ids (the ids the
-        # graph renders), so a proposed edge connects the centre to a real rendered node.
+        # graph renders), so a proposed edge connects the centre to a real rendered node. R5 also
+        # carries the detail envelope (strength/basis/novelty/crosses), the chain + pending_id.
         pend = (
             (
                 await conn.execute(
                     text(
                         "SELECT fn.ref_id AS source, fn.label AS source_label, "
                         "tn.ref_id AS target, tn.label AS target_label, pe.kind::text AS kind, "
-                        "pe.weight AS score "
+                        "pe.weight AS score, pe.detail::text AS detail, "
+                        "pe.chain_id::text AS chain, pe.pending_id::text AS pending_id "
                         "FROM control.pending_edge pe "
                         "JOIN control.kg_node fn ON fn.node_id = pe.from_node "
                         "JOIN control.kg_node tn ON tn.node_id = pe.to_node "
                         "WHERE pe.version_id = :ver "
                         "AND (fn.ref_id = :sid OR tn.ref_id = :sid) "
-                        "AND pe.status = 'pending' LIMIT 10"
+                        "AND pe.status = 'pending' "
+                        "ORDER BY coalesce((pe.detail->>'novelty')::float, pe.weight) DESC "
+                        "LIMIT 12"
                     ),
                     params,
                 )
@@ -1097,33 +1225,82 @@ async def knowledge_graph(
             .mappings()
             .all()
         )
-    nodes: list[KgNode] = [KgNode(id=subcap, kind="subcap", label=str(name[0]), pillar=subcap[:2])]
+    center_name = str(name[0])
+    nodes: list[KgNode] = [KgNode(id=subcap, kind="subcap", label=center_name, pillar=subcap[:2])]
     edges: list[KgEdge] = []
+    existing_ids = {subcap}
     for p in plats:
-        nodes.append(KgNode(id=p["id"], kind="platform", label=p["name"]))
+        if p["id"] not in existing_ids:
+            nodes.append(KgNode(id=p["id"], kind="platform", label=p["name"]))
+            existing_ids.add(p["id"])
         edges.append(
-            KgEdge(source=subcap, target=p["id"], kind="uses_platform", layer="A_deterministic")
+            KgEdge(
+                source=subcap,
+                target=p["id"],
+                kind="uses_platform",
+                layer="A_deterministic",
+                strength=1.0,
+                basis=f"delivered on {p['name']}",
+            )
         )
     for o in offs:
-        nodes.append(KgNode(id=o["id"], kind="offering", label=o["name"]))
+        if o["id"] not in existing_ids:
+            nodes.append(KgNode(id=o["id"], kind="offering", label=o["name"]))
+            existing_ids.add(o["id"])
         edges.append(
-            KgEdge(source=subcap, target=o["id"], kind="maps_to_offering", layer="A_deterministic")
+            KgEdge(
+                source=subcap,
+                target=o["id"],
+                kind="maps_to_offering",
+                layer="A_deterministic",
+                strength=1.0,
+                basis=f"packaged in {o['name']}",
+            )
         )
-    for sb in sibs:
-        nodes.append(KgNode(id=sb["id"], kind="subcap", label=sb["name"], pillar=sb["pillar"]))
-        edges.append(
-            KgEdge(source=subcap, target=sb["id"], kind="shares_platform", layer="A_deterministic")
-        )
+    # shared-platform / shared-offering / same-value-chain siblings — each a solid Layer-A edge with
+    # its own strength (∝ shared count) + basis; crosses flags the cross-pillar ones.
+    sib_specs = (
+        (sibs, "shares_platform", 0.5, "shared L3 platform"),
+        (off_sibs, "shares_offering", 0.45, "shared offering"),
+        (vc_sibs, "same_value_chain", 0.4, "shared value-chain stage"),
+    )
+    for rows, kind, base, unit in sib_specs:
+        for sb in rows:
+            if sb["id"] not in existing_ids:
+                nodes.append(
+                    KgNode(id=sb["id"], kind="subcap", label=sb["name"], pillar=sb["pillar"])
+                )
+                existing_ids.add(sb["id"])
+            n = int(sb["shared"])
+            edges.append(
+                KgEdge(
+                    source=subcap,
+                    target=sb["id"],
+                    kind=kind,
+                    layer="A_deterministic",
+                    strength=round(min(0.999, base + 0.08 * n), 3),
+                    basis=f"{n} {unit}{'s' if n != 1 else ''}",
+                    crosses="cross_pillar" if sb["pillar"] != subcap[:2] else "cross_capability",
+                )
+            )
     pending: list[KgEdge] = []
-    existing_ids = {n.id for n in nodes}
+    latent: list[LatentEdge] = []
     for p in pend:
+        det = json.loads(p["detail"]) if p["detail"] else {}
+        strength = float(p["score"]) if p["score"] is not None else det.get("strength")
         pending.append(
             KgEdge(
                 source=p["source"],
                 target=p["target"],
                 kind=p["kind"],
                 layer="B_proposed",
-                score=float(p["score"]) if p["score"] is not None else None,
+                score=strength,
+                strength=strength,
+                basis=det.get("basis"),
+                crosses=det.get("crosses"),
+                novelty=det.get("novelty"),
+                chain=p["chain"],
+                pending_id=p["pending_id"],
             )
         )
         # add the proposed neighbour subcap node(s) so the dashed edge connects to a drawn node
@@ -1131,15 +1308,90 @@ async def knowledge_graph(
             if ref != subcap and ref not in existing_ids:
                 nodes.append(KgNode(id=ref, kind="subcap", label=str(label), pillar=ref[:2]))
                 existing_ids.add(ref)
+        # orient centre -> other for the per-subcap "relationships you may be missing" panel
+        if p["source"] == subcap:
+            other, other_label = p["target"], p["target_label"]
+        else:
+            other, other_label = p["source"], p["source_label"]
+        latent.append(
+            LatentEdge(
+                source=subcap,
+                source_name=center_name,
+                target=other,
+                target_name=str(other_label),
+                target_pillar=other[:2],
+                kind=p["kind"],
+                strength=float(strength or 0.0),
+                novelty=float(det.get("novelty") or 0.0),
+                basis=str(det.get("basis") or ""),
+                crosses=str(
+                    det.get("crosses")
+                    or ("cross_pillar" if other[:2] != subcap[:2] else "cross_capability")
+                ),
+                chain=p["chain"],
+                pending_id=p["pending_id"],
+            )
+        )
+    latent.sort(key=lambda e: -e.novelty)
     stats = {
         "platforms": len(plats),
         "offerings": len(offs),
-        "siblings": len(sibs),
+        "siblings": len(sibs) + len(off_sibs) + len(vc_sibs),
         "pending": len(pending),
     }
     return KgResp(
-        center=subcap, name=str(name[0]), nodes=nodes, edges=edges, stats=stats, pending=pending
+        center=subcap,
+        name=center_name,
+        nodes=nodes,
+        edges=edges,
+        stats=stats,
+        pending=pending,
+        latent=latent,
     )
+
+
+class KgDiscoverResp(BaseModel):
+    version: str
+    latent: list[LatentEdge]
+
+
+@router.get("/{version}/kg/discover")
+async def kg_discover(
+    version: str, limit: int = 24, _user: dict[str, Any] = Depends(get_current_user)
+) -> KgDiscoverResp:
+    """R5 global discovery — the version-wide "relationships you may be missing". Every gated
+    Layer-B proposal ranked by NOVELTY (strong AND non-obvious first: cross-pillar, no shared
+    platform), each with its basis, unified strength, reasoning backlink and pending_id so the
+    panel peeks / approves in one click. Read-only — nothing is a committed fact until approved."""
+    v = await resolve_version(version)
+    async with _engine().connect() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT fn.ref_id AS source, coalesce(fn.label, fn.ref_id) AS source_name, "
+                        "tn.ref_id AS target, coalesce(tn.label, tn.ref_id) AS target_name, "
+                        "left(tn.ref_id, 2) AS target_pillar, pe.kind::text AS kind, "
+                        "pe.weight AS strength, "
+                        "coalesce((pe.detail->>'novelty')::float, 0) AS novelty, "
+                        "coalesce(pe.detail->>'basis', '') AS basis, "
+                        "coalesce(pe.detail->>'crosses', CASE WHEN left(fn.ref_id, 2) <> "
+                        "left(tn.ref_id, 2) THEN 'cross_pillar' ELSE 'cross_capability' END) "
+                        "AS crosses, pe.chain_id::text AS chain, pe.pending_id::text AS pending_id "
+                        "FROM control.pending_edge pe "
+                        "JOIN control.kg_node fn ON fn.node_id = pe.from_node "
+                        "JOIN control.kg_node tn ON tn.node_id = pe.to_node "
+                        "WHERE pe.version_id = :ver AND pe.status = 'pending' "
+                        "ORDER BY novelty DESC, pe.weight DESC LIMIT :lim"
+                    ),
+                    {"ver": v.version_id, "lim": limit},
+                )
+            )
+            .mappings()
+            .all()
+        )
+    latent = [LatentEdge(**{**dict(r), "strength": float(r["strength"] or 0.0)}) for r in rows]
+    return KgDiscoverResp(version=v.version_id, latent=latent)
 
 
 class WhatIfRef(BaseModel):
