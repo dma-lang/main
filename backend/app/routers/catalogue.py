@@ -100,6 +100,12 @@ class StoryRow(BaseModel):
     reusability_layer: str | None = None
     population: str | None = None
     is_synthetic: bool = False
+    # R8 rich detail — the resolved client, the synthesized narrative + facets, and the raw text
+    client_name: str | None = None
+    narrative: str | None = None
+    facets: dict[str, Any] | None = None
+    ac_text: str | None = None
+    solution_design_text: str | None = None
 
 
 # The carried-delivery source for a subcap. The analysis-grade default is JIRA-ONLY (matches the
@@ -513,7 +519,8 @@ async def subcap_stories(
         "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
         "st.delivery_score::float AS delivery_score, st.epic_key, st.cap_name, "
         "st.category_name, st.reusability_layer, st.population, "
-        "st.story_sv_code, st.tier, st.is_synthetic "
+        "st.story_sv_code, st.tier, st.is_synthetic, "
+        "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text "
         + where
         + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
     )
@@ -594,10 +601,12 @@ async def subcap_delivery(
     )
     top_sql = text(
         "SELECT story_key, project_key, summary, confidence_level, composite_score, ac_score, "
-        "sd_score, story_score, story_sv_code, tier, is_synthetic FROM ("
+        "sd_score, story_score, story_sv_code, tier, is_synthetic, "
+        "client_name, narrative, facets, ac_text, solution_design_text FROM ("
         "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
         "st.composite_score::float, st.ac_score::float, st.sd_score::float, "
         "st.story_score::float, st.story_sv_code, st.tier, st.is_synthetic, "
+        "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text, "
         "row_number() OVER (PARTITION BY coalesce(st.project_key, '(no project)') "
         "ORDER BY st.composite_score DESC NULLS LAST, st.story_key) AS rn " + link + ") t "
         "WHERE rn <= 3"
@@ -2758,7 +2767,8 @@ async def use_case_stories(
         "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
         "st.delivery_score::float AS delivery_score, st.epic_key, st.cap_name, "
         "st.category_name, st.reusability_layer, st.population, "
-        "st.story_sv_code, st.tier, st.is_synthetic "
+        "st.story_sv_code, st.tier, st.is_synthetic, "
+        "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text "
         + where
         + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
     )

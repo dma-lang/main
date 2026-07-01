@@ -32,6 +32,13 @@ class StoryLibraryRow(BaseModel):
     story_score: float | None = None
     is_synthetic: bool = False
     source_system: str | None = None
+    # R8 rich detail — resolved client + synthesized narrative/facets + raw text
+    client_name: str | None = None
+    project_key: str | None = None
+    narrative: str | None = None
+    facets: dict[str, Any] | None = None
+    ac_text: str | None = None
+    solution_design_text: str | None = None
 
 
 class StoryLibraryPage(BaseModel):
@@ -55,7 +62,9 @@ _WHERE = (
     "AND (:conf = '' OR confidence_level::text = :conf) "
     "AND (:sv = '' OR story_sv_code = :sv) "
     "AND coalesce(composite_score, 0) >= :minc "
-    "AND (:q = '' OR summary ILIKE :qlike OR story_key ILIKE :qlike OR sub_cap_name ILIKE :qlike)"
+    # R8: search the client name + the raw description too, not just summary / key / subcap name
+    "AND (:q = '' OR summary ILIKE :qlike OR story_key ILIKE :qlike OR sub_cap_name ILIKE :qlike "
+    "OR client_name ILIKE :qlike OR description ILIKE :qlike)"
 )
 
 
@@ -101,7 +110,8 @@ async def list_stories(
         "pillar_id AS pillar, story_sv_code AS sv, composite_score::float AS composite_score, "
         "confidence_level::text AS confidence_level, ac_score::float AS ac_score, "
         "sd_score::float AS sd_score, story_score::float AS story_score, "
-        "is_synthetic, source_system "
+        "is_synthetic, source_system, client_name, project_key, narrative, facets, "
+        "ac_text, solution_design_text "
         "FROM control.story" + _WHERE + " ORDER BY composite_score DESC NULLS LAST, story_key "
         "LIMIT :size OFFSET :off"
     )
