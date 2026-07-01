@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { StoryLibraryRow } from '../api/client';
 import { useStoryLibrary } from '../api/queries';
 import { Bar, Dropdown, Empty, Page } from '../components/primitives';
+import { ClientChip, StoryDetail } from '../components/StoryDetail';
 import { go } from '../lib/events';
 import { PILLAR_COLORS } from '../lib/helpers';
 import { Icon } from '../lib/icons';
@@ -43,6 +44,8 @@ function StoryDrill({ s }: { s: StoryLibraryRow }) {
   return (
     <div className="fade-in" style={{ padding: '12px 16px', background: 'var(--surface-raised)' }}>
       <div className="row gap8" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
+        {/* the resolved client leads the drill; story_key is the id, project_key secondary */}
+        <ClientChip story={s} />
         <span className={'chip ' + confClass(s.confidence_level)}>{s.confidence_level} confidence</span>
         {s.is_synthetic && (
           <span className="chip orange" title={'Source: ' + (s.source_system ?? 'synthetic')}>
@@ -57,6 +60,10 @@ function StoryDrill({ s }: { s: StoryLibraryRow }) {
         <span className="muted mono" style={{ fontSize: 10.5 }}>
           {s.source_system ?? (s.is_synthetic ? 'synthetic' : 'jira')}
         </span>
+      </div>
+      {/* narrative + collapsible acceptance-criteria / solution-design (client already shown above) */}
+      <div style={{ marginBottom: 12 }}>
+        <StoryDetail story={s} showClient={false} />
       </div>
       <div className="row gap16" style={{ maxWidth: 520, marginBottom: 12 }}>
         {scores.map(([label, v]) => (
@@ -133,7 +140,7 @@ export function StoryLibrary() {
           <div className="searchbox" style={{ marginBottom: 14 }}>
             <Icon n="search" s={16} />
             <input
-              placeholder="Search story key, summary or subcap name…"
+              placeholder="Search story key, summary, client or subcap name…"
               value={qInput}
               onChange={(e) => setQInput(e.target.value)}
             />
@@ -212,6 +219,7 @@ export function StoryLibrary() {
             <thead>
               <tr>
                 <th style={{ width: 104 }}>Story</th>
+                <th style={{ width: 150 }}>Client</th>
                 <th>User story</th>
                 <th style={{ width: 132 }}>Subcap</th>
                 <th style={{ width: 54 }}>SV</th>
@@ -231,6 +239,30 @@ export function StoryLibrary() {
                   >
                     <td className="mono" style={{ fontSize: 11, color: 'var(--text-primary)' }}>
                       {s.story_key}
+                    </td>
+                    <td>
+                      {/* the resolved client — client_name (or the project_key proxy); story_key
+                          stays the id in the Story column */}
+                      {s.client_name ? (
+                        <span
+                          className="chip teal"
+                          style={{ fontSize: 10, maxWidth: 138, overflow: 'hidden' }}
+                          title={s.project_key ? `Jira project ${s.project_key}` : 'Client'}
+                        >
+                          <Icon n="building" s={11} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {s.client_name}
+                          </span>
+                        </span>
+                      ) : s.project_key ? (
+                        <span className="chip soft" style={{ fontSize: 10 }} title="Jira project (client proxy)">
+                          {s.project_key}
+                        </span>
+                      ) : (
+                        <span className="muted" style={{ fontSize: 11 }}>
+                          —
+                        </span>
+                      )}
                     </td>
                     <td>
                       <div className="row gap8" style={{ flexWrap: 'nowrap' }}>
@@ -277,7 +309,7 @@ export function StoryLibrary() {
                   </tr>,
                   isOpen ? (
                     <tr key={s.story_key + '-d'}>
-                      <td colSpan={7} style={{ padding: 0 }}>
+                      <td colSpan={8} style={{ padding: 0 }}>
                         <StoryDrill s={s} />
                       </td>
                     </tr>

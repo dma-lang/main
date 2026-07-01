@@ -283,10 +283,14 @@ export interface SowDetail {
 }
 
 export interface ClientRow {
-  key: string;
+  key: string; // the client identity — a resolved client_name, or a project_key fallback
+  client_name: string | null; // the resolved client (e.g. "Academy Bank"); null on unmatched keys
+  salesforce_account_id: string | null;
+  client_match_confidence: number | null; // 0..1 resolution confidence
   sows: number;
   scope_items: number;
   stories: number;
+  projects: number; // distinct Jira project keys rolled up under this client
   subcaps_touched: number;
   last_sow: string | null;
 }
@@ -317,7 +321,10 @@ export interface MappingResp {
 }
 
 export interface ClientJourney {
-  key: string;
+  key: string; // the client identity (a resolved client_name, or a project_key fallback)
+  client_name: string | null; // the resolved client; null on an unmatched key
+  salesforce_account_id: string | null;
+  client_match_confidence: number | null; // 0..1 resolution confidence
   stories: number;
   sows: { sow_id: string; title: string; sv_code: string | null; signed_date: string | null; status: string }[];
   matches: {
@@ -442,6 +449,17 @@ export interface SubcapDetail {
   n_platforms: number;
 }
 
+// R8 structured story detail — the user-story shape (role/goal/benefit), the acceptance OUTCOMES and
+// the solution APPROACH, all parsed deterministically from the raw Jira text. Any field can be null /
+// empty when the source did not carry it; render nothing rather than "null".
+export interface StoryFacets {
+  role: string | null;
+  goal: string | null;
+  benefit: string | null;
+  acceptance: string[];
+  approach: string[];
+}
+
 export interface StoryRow {
   story_key: string;
   project_key: string | null;
@@ -460,6 +478,13 @@ export interface StoryRow {
   reusability_layer?: string | null;
   population?: string | null;
   is_synthetic?: boolean;
+  // R8 rich detail — the resolved client, the synthesized narrative + structured facets, and the
+  // raw acceptance-criteria / solution-design text (the fallback when facets are absent).
+  client_name?: string | null;
+  narrative?: string | null;
+  facets?: StoryFacets | null;
+  ac_text?: string | null;
+  solution_design_text?: string | null;
 }
 
 export interface StoryPage {
@@ -566,6 +591,26 @@ export interface SubcapConnections {
   siblings: ConnectionSibling[];
   signals: ConnectionSignal[];
   latent: LatentEdge[]; // R5 gated "relationships you may be missing" that touch this subcap
+}
+
+// R8 productized-offering coverage for one subcap. A subcap MAY be tackled by several offerings;
+// when `multi` is true the deep-dive shows all of them side by side, each with its match score, the
+// capability that drove it, the aligned use-case chips, a grounded explanation and evidence stories.
+export interface OfferingAlignment {
+  offering_id: string;
+  name: string;
+  category: string | null;
+  score: number; // the matcher's confidence that this offering tackles the subcap
+  capability: string; // the offering capability that drove the match (the "why")
+  aligned_use_cases: { use_case_id: string; name: string }[];
+  explanation: string; // grounded, plain-language WHY this offering applies
+  evidence_story_keys: string[]; // top delivered stories on the subcap
+}
+
+export interface SubcapOfferingCoverage {
+  subcap_id: string;
+  multi: boolean; // a subcap tackled by >= 2 productized offerings
+  offerings: OfferingAlignment[];
 }
 
 export interface NewsSource {
@@ -1130,6 +1175,14 @@ export interface StoryLibraryRow {
   story_score: number | null;
   is_synthetic: boolean;
   source_system: string | null; // jira | gen_stories_v1 | gen_synthesized_gap_fill | …
+  // R8 rich detail — the resolved client (+ its Jira project), the synthesized narrative + facets
+  // and the raw acceptance / solution-design text.
+  client_name?: string | null;
+  project_key?: string | null;
+  narrative?: string | null;
+  facets?: StoryFacets | null;
+  ac_text?: string | null;
+  solution_design_text?: string | null;
 }
 
 export interface StoryLibraryPage {
@@ -1325,6 +1378,8 @@ export const api = {
     http<SubcapEnrichment>(`/api/catalogue/${v}/subcaps/${id}/enrichment`),
   subcapConnections: (v: string, id: string): Promise<SubcapConnections> =>
     http<SubcapConnections>(`/api/catalogue/${v}/subcaps/${id}/connections`),
+  subcapOfferings: (v: string, id: string): Promise<SubcapOfferingCoverage> =>
+    http<SubcapOfferingCoverage>(`/api/catalogue/${v}/subcaps/${id}/offerings`),
   platforms: (v: string): Promise<PlatformRow[]> =>
     http<PlatformRow[]>(`/api/catalogue/${v}/platforms`),
   platform: (v: string, id: string): Promise<PlatformDetail> =>

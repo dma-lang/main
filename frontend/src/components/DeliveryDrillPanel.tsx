@@ -10,6 +10,7 @@ import type { StoryRow } from '../api/client';
 import { useSubcapDelivery } from '../api/queries';
 import { Icon } from '../lib/icons';
 import { Bar } from './primitives';
+import { ClientChip, StoryDetail } from './StoryDetail';
 
 function scoreColor(v: number): string {
   return v >= 3 ? 'var(--interactive)' : v >= 2 ? 'var(--z-blue)' : 'var(--z-orange)';
@@ -21,11 +22,16 @@ const SUBSCORES: [string, keyof Pick<StoryRow, 'ac_score' | 'sd_score' | 'story_
   ['Story score', 'story_score'],
 ];
 
-// One concrete story, expandable to its real sub-scores — the "specific story details".
-function StoryLine({ st, showClient }: { st: StoryRow; showClient?: boolean }) {
+// One concrete story, expandable to its rich detail — the resolved client, the narrative, the
+// collapsible AC / solution-design (shared StoryDetail), and its real sub-scores. The header always
+// leads with the client (name, story_key id, project secondary) so a client is shown everywhere.
+function StoryLine({ st }: { st: StoryRow }) {
   const [open, setOpen] = useState(false);
   const cs = st.composite_score ?? 0;
   const hasSub = st.ac_score != null || st.sd_score != null || st.story_score != null;
+  const meta = [st.story_sv_code, st.confidence_level ? `confidence ${st.confidence_level}` : null]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <div className="card" style={{ overflow: 'hidden', background: 'var(--surface-base)' }}>
       <div
@@ -34,18 +40,11 @@ function StoryLine({ st, showClient }: { st: StoryRow; showClient?: boolean }) {
         onClick={() => setOpen(!open)}
       >
         <div className="row gap8" style={{ minWidth: 0 }}>
-          <Icon n={open ? 'chevD' : 'chevR'} s={12} style={{ color: 'var(--text-tertiary)' }} />
-          <span className="mono" style={{ fontSize: 10.5, flex: 'none' }}>
-            {st.story_key}
-          </span>
+          <Icon n={open ? 'chevD' : 'chevR'} s={12} style={{ color: 'var(--text-tertiary)', flex: 'none' }} />
+          <ClientChip story={st} idFirst size={9} />
           {st.is_synthetic && (
             <span className="chip orange" style={{ fontSize: 8.5, flex: 'none' }} title="synthetic story (not real Jira delivery)">
               synthetic
-            </span>
-          )}
-          {showClient && st.project_key && (
-            <span className="chip soft" style={{ fontSize: 9, flex: 'none' }}>
-              {st.project_key}
             </span>
           )}
           <span
@@ -69,33 +68,36 @@ function StoryLine({ st, showClient }: { st: StoryRow; showClient?: boolean }) {
           className="fade-in"
           style={{ padding: '8px 12px 12px', borderTop: '1px solid var(--border-subtle)' }}
         >
-          <div className="muted" style={{ fontSize: 11, marginBottom: hasSub ? 8 : 0 }}>
-            {st.project_key ? (
+          {/* client is already in the header row above → showClient={false} to avoid duplication */}
+          <StoryDetail
+            story={st}
+            showClient={false}
+            extra={
               <>
-                Delivered under Jira project <b>{st.project_key}</b>
-              </>
-            ) : (
-              'No Jira project recorded'
-            )}
-            {st.story_sv_code ? ` · ${st.story_sv_code}` : ''}
-            {st.confidence_level ? ` · confidence ${st.confidence_level}` : ''}
-          </div>
-          {hasSub && (
-            <div className="row gap12" style={{ maxWidth: 420 }}>
-              {SUBSCORES.map(([label, key]) => {
-                const v = st[key];
-                return (
-                  <div key={key} style={{ flex: 1 }}>
-                    <div className="between" style={{ fontSize: 10.5, marginBottom: 3 }}>
-                      <span className="muted">{label}</span>
-                      <b className="num">{v != null ? v.toFixed(1) : 'n/a'}</b>
-                    </div>
-                    <Bar v={v ?? 0} max={5} color={scoreColor(v ?? 0)} />
+                {meta && (
+                  <div className="muted" style={{ fontSize: 10.5 }}>
+                    {meta}
                   </div>
-                );
-              })}
-            </div>
-          )}
+                )}
+                {hasSub && (
+                  <div className="row gap12" style={{ maxWidth: 420 }}>
+                    {SUBSCORES.map(([label, key]) => {
+                      const v = st[key];
+                      return (
+                        <div key={key} style={{ flex: 1 }}>
+                          <div className="between" style={{ fontSize: 10.5, marginBottom: 3 }}>
+                            <span className="muted">{label}</span>
+                            <b className="num">{v != null ? v.toFixed(1) : 'n/a'}</b>
+                          </div>
+                          <Bar v={v ?? 0} max={5} color={scoreColor(v ?? 0)} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            }
+          />
         </div>
       )}
     </div>
@@ -334,7 +336,7 @@ export function DeliveryDrillPanel({
                     }}
                   >
                     {cl.sample.map((st) => (
-                      <StoryLine key={st.story_key} st={st} showClient />
+                      <StoryLine key={st.story_key} st={st} />
                     ))}
                   </div>
                 )}
