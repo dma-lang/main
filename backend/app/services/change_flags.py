@@ -253,6 +253,7 @@ _DECAY_KIND = "decay_missing_subcap"  # removed-from-previous (kept stable for e
 _DECAY_NO_DELIVERY = "decay_no_delivery"  # in this version but zero real Jira stories
 _UNSCOPED_KIND = "unscoped_subvertical"  # proposed new subvertical (services/subverticals.py)
 _KG_EDGE_KIND = "kg_edge_proposal"  # proposed structural KG Layer-B edge (services/kg.py)
+_USE_CASE_GAP_KIND = "use_case_gap"  # proposed NEW use case from delivery (use_case_gaps.py)
 _INACTIVE_STATE = "dead"  # "mark inactive" target lifecycle
 _LIVE_STATES = ("emerging", "rising", "stable")  # believed active -> decay is the real decision
 _NO_DELIVERY_CAP = 1000  # generous: surface ALL decayed subcaps (v7 ~765) in one scan
@@ -644,6 +645,9 @@ async def approve(flag_id: str, actor: str) -> FlagResult:
             )
             return FlagResult(resolved=True, status="approved")
 
+        if flag["kind"] == _USE_CASE_GAP_KIND:
+            return await _approve_use_case_gap(conn, flag_id, actor, detail, flag["chain_id"])
+
         if flag["kind"] not in (_KIND, _DECAY_NO_DELIVERY):
             # Evidence-gate failures (F7 ingest) have no lifecycle correction to apply; the
             # source must be fixed or the item rejected. Stays open, failing gate named, and
@@ -747,6 +751,106 @@ async def approve(flag_id: str, actor: str) -> FlagResult:
             {"id": flag_id},
         )
     return FlagResult(resolved=True, status="approved", before=before, after=after)
+
+
+async def _approve_use_case_gap(
+    conn: AsyncConnection,
+    flag_id: str,
+    actor: str,
+    detail: dict[str, Any],
+    chain_id: Any,
+) -> FlagResult:
+    """Approve a proposed NEW use case: RE-GATE server-side (deterministic inputs -> pass), then
+    INSERT it into ``cat_<v>.use_case`` (a generated use_case_id, the proposed subcap/name/
+    description/archetype, ``is_new=true``) with an immutable audit_log row, in ONE transaction. A
+    failed re-gate (e.g. the subcap no longer exists) writes nothing and keeps the flag open with
+    the failing gate named. Idempotent: a duplicate id (already inserted) is a no-op that still
+    resolves the flag."""
+    version_id = str(detail.get("version") or "")
+    subcap_id = str(detail.get("subcap_id") or "")
+    name = str(detail.get("name") or "").strip()
+    description = str(detail.get("description") or "").strip() or None
+    archetype = str(detail.get("archetype") or "").strip() or None
+    v = await resolve_version(version_id)
+    schema = v.schema_name
+    if not _SCHEMA_RE.match(schema):
+        raise ValueError("invalid version schema")
+    # Grounded self-check: the target subcap must still exist to hang a use case off (G1). The
+    # supporting delivery count (>= 2 by construction) satisfies G2; nothing contradicts (a new use
+    # case is additive). Re-gated exactly as the detector gated it, server-side, before any write.
+    target_exists = (
+        await conn.execute(
+            text(f"SELECT 1 FROM {schema}.subcap WHERE subcap_id = :s"),
+            {"s": subcap_id},
+        )
+    ).first() is not None
+    results, verdict = gates.evaluate_suggestion(
+        target_exists=target_exists,
+        evidence_count=int(detail.get("stories", 2)),
+        source_tier=str(detail.get("source_tier", "T1")),
+        cited=True,
+        contradicts=False,
+        cost_usd=float(detail.get("cost", 0.0)),
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO control.validation_gate_run "
+            "(chain_id, target_ref, gate_results, verdict) "
+            "VALUES (:c, :t, CAST(:r AS jsonb), CAST(:v AS gate_verdict))"
+        ),
+        {
+            "c": chain_id,
+            "t": str(detail.get("subcap_id") or flag_id),
+            "r": json.dumps(results),
+            "v": verdict,
+        },
+    )
+    if verdict != "pass":
+        # Failed re-gate writes nothing; the flag stays open, naming the new failing gate.
+        return FlagResult(resolved=False, status="open", gate_failed=gates.first_failing(results))
+
+    # A collision-safe, deterministic use_case_id under the subcap (the flag id keeps it unique).
+    use_case_id = f"UC-GAP-{subcap_id}-{flag_id[:8]}".upper()
+    await conn.execute(
+        text(
+            f"INSERT INTO {schema}.use_case "
+            "(use_case_id, subcap_id, archetype, name, description, is_new) "
+            "VALUES (:id, :sub, :arch, :name, :desc, true) "
+            "ON CONFLICT (use_case_id) DO NOTHING"
+        ),
+        {
+            "id": use_case_id,
+            "sub": subcap_id,
+            "arch": archetype,
+            "name": name or f"Use case for {subcap_id}",
+            "desc": description,
+        },
+    )
+    await _audit(
+        conn,
+        actor,
+        "change_flag.approve",
+        subcap_id,
+        {
+            "flag_id": flag_id,
+            "accepted": "use_case_gap",
+            "use_case_id": use_case_id,
+            "subcap_id": subcap_id,
+            "name": name,
+            "archetype": archetype,
+            "verdict": verdict,
+            "version": version_id,
+            "snapshot_ref": f"audit:use_case:{use_case_id}",
+        },
+    )
+    await conn.execute(
+        text(
+            "UPDATE control.change_flag SET status = 'approved', resolved_at = now() "
+            "WHERE flag_id = :id"
+        ),
+        {"id": flag_id},
+    )
+    return FlagResult(resolved=True, status="approved")
 
 
 async def _flag_for_update(conn: AsyncConnection, flag_id: str) -> Any:

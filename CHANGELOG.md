@@ -118,6 +118,20 @@ All notable changes to this project are documented here. The format is based on
   `dist` itself).
 
 ### Added
+- **Use-case gap detector (`services/use_case_gaps`)**: surfaces use cases IMPLIED by delivered Jira
+  stories that the catalogue does not yet model, and proposes each as a gated, human-approved NEW use
+  case — modelled exactly on the unscoped-subvertical detector. For each subcap it takes the carried
+  real-Jira stories NOT attributed to any existing use case (`control.story_use_case_link`), embeds +
+  greedily clusters the uncovered summaries, and — with STRICT overlap-avoidance so nothing bloats —
+  SKIPS any cluster whose centroid embeds `>= overlap_max_cosine` to one of the subcap's EXISTING use
+  cases (already covered). Each survivor is named/described/archetyped by the single Gemini wrapper
+  (`infer_use_case_name`; hermetic = a deterministic, delivery-grounded stub, no spend), gated
+  G1-G8, and queued in the Change-Flags inbox with the full trust envelope (claim label HYPOTHESIS,
+  source tier T1, ERS, reasoning chain + citation + gate run). Idempotent on `(kind, <subcap>:<sig>)`,
+  bounded by `max_proposals_per_scan`. Approving a proposal re-gates server-side and inserts the use
+  case into `cat_<v>.use_case` (`is_new=true`) with an audit row; nothing auto-applies. Admin trigger
+  `POST /api/admin/use-case-gaps/{version}` + the weekly `use_case_gap_detect` schedule (Mon 06:55
+  UTC). Thresholds in `config/gates.yaml::use_case_gap`. Covered by `tests/test_use_case_gaps.py`.
 - **Pillar-wise workbook parser (FR-1, real)**: `services/workbooks.py` parses an uploaded ZIP of
   per-pillar .xlsx capability maps into the provisioning seed — tolerant header aliasing across the
   v5/v7 variants (incl. the v5 Pillar-3 layout), consolidated/archived files ignored, unparseable

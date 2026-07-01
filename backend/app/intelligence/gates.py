@@ -194,6 +194,41 @@ def use_case_match_config() -> tuple[float, bool]:
     return floor, multi
 
 
+@dataclass(frozen=True)
+class UseCaseGapConfig:
+    """Use-case gap detector thresholds (config/gates.yaml: use_case_gap.*)."""
+
+    min_stories: int
+    overlap_max_cosine: float
+    cluster_min_cosine: float
+    max_proposals_per_scan: int
+
+
+def use_case_gap_config() -> UseCaseGapConfig:
+    """Thresholds for the use-case gap detector (services/use_case_gaps): the volume floor a cluster
+    of uncovered delivery must clear to be a candidate NEW use case (``min_stories``); the cosine
+    at/above which the cluster is judged ALREADY covered by an existing use case, so it is skipped
+    to avoid bloating the catalogue (``overlap_max_cosine``); the cosine an unmatched story shares
+    with a cluster seed to join it (``cluster_min_cosine``); and the per-scan proposal cap
+    (resilience: bounded everything). Config, not code — recalibrated without a deploy."""
+    section = load_gate_config().get("use_case_gap") or {}
+    cfg = UseCaseGapConfig(
+        min_stories=int(section.get("min_stories", 4)),
+        overlap_max_cosine=float(section.get("overlap_max_cosine", 0.82)),
+        cluster_min_cosine=float(section.get("cluster_min_cosine", 0.55)),
+        max_proposals_per_scan=int(section.get("max_proposals_per_scan", 200)),
+    )
+    if cfg.min_stories < 2:
+        raise ValueError("gates.yaml: use_case_gap.min_stories must be >= 2 (G2 needs >= 2)")
+    if not 0 < cfg.overlap_max_cosine <= 1:
+        raise ValueError("gates.yaml: use_case_gap.overlap_max_cosine must be in (0, 1]")
+    if not 0 < cfg.cluster_min_cosine <= 1:
+        raise ValueError("gates.yaml: use_case_gap.cluster_min_cosine must be in (0, 1]")
+    if cfg.max_proposals_per_scan < 1:
+        raise ValueError("gates.yaml: use_case_gap.max_proposals_per_scan must be >= 1")
+    return cfg
+
+
 def knowledge_graph_config() -> tuple[int, int, int]:
     """(shares_platform_min, shares_feature_min, max_proposals) for the deterministic KG Layer-B
     structural builder: how many distinct L3 platforms two cross-capability subcaps must share to

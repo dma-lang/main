@@ -74,6 +74,19 @@ knowledge_graph:
   shares_feature_min_shared: 2
   max_proposals_per_scan: 200             # bound the run (resilience: bounded everything)
 
+# Use-case gap detector (services/use_case_gaps): surface use cases IMPLIED by delivered Jira stories
+# that the catalogue does NOT yet model, and propose each as a gated, human-approved NEW use case.
+# For each subcap it takes the carried real-Jira stories NOT attributed to any existing use case,
+# embeds + clusters their summaries, and proposes a cluster only when it is BOTH large enough AND
+# genuinely uncovered. STRICT overlap-avoidance so nothing bloats: a cluster whose centroid is
+# >= overlap_max_cosine to any of the subcap's EXISTING use cases (name + description embedded) is
+# SKIPPED as already covered. Config, not code — recalibrated without a deploy.
+use_case_gap:
+  min_stories: 4                # uncovered-delivery volume floor a cluster needs to be a candidate (>= 2 so G2 passes)
+  overlap_max_cosine: 0.82      # cluster centroid >= this cosine to an EXISTING use case -> already covered, skipped (no bloat)
+  cluster_min_cosine: 0.55      # an unmatched story joins a cluster when it is >= this cosine to the cluster seed
+  max_proposals_per_scan: 1000  # bound the run (resilience: bounded everything); high enough to surface every real gap in one pass
+
 # Unscoped-subvertical discovery (clients delivering outside the 9 modelled subverticals).
 # A candidate is proposed only with real volume AND when the client is not already an existing SV.
 unscoped_subverticals:
