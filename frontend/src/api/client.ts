@@ -990,12 +990,18 @@ export interface ChangeFlagsResp {
   counts: Record<string, number>;
 }
 
+export interface FlagPropagation {
+  saved: { version: string; subcap: string; use_case_id: string }[];
+  skipped: { version: string; reason: string }[];
+}
+
 export interface FlagActionOut {
   resolved: boolean;
   status: string;
   gate_failed: string | null;
   before: string | null;
   after: string | null;
+  propagated?: FlagPropagation | null; // R7: cross-version fan-out summary (saved to / skipped)
 }
 
 export interface LifecycleSubcap {

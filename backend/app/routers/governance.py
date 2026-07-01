@@ -208,6 +208,7 @@ class FlagActionOut(BaseModel):
     gate_failed: str | None = None
     before: str | None = None
     after: str | None = None
+    propagated: dict[str, Any] | None = None  # R7: {saved:[...], skipped:[...]} across versions
 
 
 class FlagRejectBody(BaseModel):

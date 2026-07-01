@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -22,6 +23,8 @@ from app import db
 from app.services import subcap_xref
 from app.services.sv_aliases import normalize_sv_code, normalize_tier
 from app.services.value_chain import clean_stage_name
+
+logger = logging.getLogger(__name__)
 
 _BACKEND = Path(__file__).resolve().parents[2]  # backend/ (app/services/provision.py -> backend)
 _SEED_DIR = _BACKEND / "seed"
@@ -486,6 +489,55 @@ async def _seed_value_chain(
     }
 
 
+async def _gate_inherited_use_cases(
+    conn: AsyncConnection, schema: str, version_id: str, drifted: set[str]
+) -> int:
+    """R7: after enrichment is inherited, gate the use cases copied onto DRIFTED (non-exact-mapped)
+    subcaps (the risky ones) and DROP any the deep-NLP gate judges do not belong (a loose semantic
+    subcap mapping importing an irrelevant use case), so a version is never enriched with the wrong
+    things. Exact-id subcaps (the shared 851-subcap core) are trusted (same subcap = belongs) and
+    skip the gate, so the common inherit stays cheap. Cached, so a re-provision reuses the verdicts
+    (no repeat spend). Returns the number dropped."""
+    if not drifted:
+        return 0
+    from app.services import enrichment_relevance
+
+    rows = (
+        (
+            await conn.execute(
+                text(
+                    "SELECT use_case_id, subcap_id, name, coalesce(description, '') AS d, "
+                    f"coalesce(archetype, '') AS a FROM {schema}.use_case "
+                    "WHERE subcap_id = ANY(:subs)"
+                ),
+                {"subs": list(drifted)},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    dropped = 0
+    for r in rows:
+        enrichment_text = f"{r['name']}. {r['d']} [{r['a']}]".strip()
+        verdict = await enrichment_relevance.relevance(
+            conn,
+            kind="use_case",
+            enrichment_key=str(r["use_case_id"]),
+            enrichment_text=enrichment_text,
+            target_version=version_id,
+            target_schema=schema,
+            target_subcap=str(r["subcap_id"]),
+            exclude_key=str(r["use_case_id"]),  # do not let it match ITSELF as a duplicate
+        )
+        if not verdict.relevant:
+            await conn.execute(
+                text(f"DELETE FROM {schema}.use_case WHERE use_case_id = :id"),
+                {"id": r["use_case_id"]},
+            )
+            dropped += 1
+    return dropped
+
+
 async def _inherit_enrichment(
     conn: AsyncConnection, schema: str, version_id: str
 ) -> dict[str, Any]:
@@ -618,6 +670,20 @@ async def _inherit_enrichment(
             f"JOIN {src_schema}.maturity_descriptor md ON md.subcap_id = m.src_sub"
         )
     )
+    # R7 necessity gate: drop use cases inherited onto DRIFTED (non-exact-mapped) subcaps that the
+    # deep-NLP relevance gate judges do not belong here, so a loose semantic mapping never enriches
+    # the wrong things. Exact-id subcaps are trusted, skip the gate (cached, re-provision is free).
+    # In a SAVEPOINT + fail-OPEN: the gate is additive safety, so any error rolls back only its own
+    # drops and keeps every inherited use case rather than fail the whole provision (safeguard 9).
+    drifted = {m["this_sub"] for m in mapping if m["this_sub"] != m["src_sub"]}
+    dropped = 0
+    if drifted:
+        try:
+            async with conn.begin_nested():
+                dropped = await _gate_inherited_use_cases(conn, schema, version_id, drifted)
+        except Exception:  # noqa: BLE001 - fail open, never break provision
+            logger.exception("inherited use-case gate failed for %s (kept all)", version_id)
+            dropped = 0
     enriched = (
         await conn.execute(text(f"SELECT count(DISTINCT subcap_id) FROM {schema}.subcap_platform"))
     ).scalar() or 0
@@ -626,6 +692,7 @@ async def _inherit_enrichment(
         "inherited_subcaps": len(mapping),
         "enrichment_unmapped": len(unmapped),
         "subcaps_with_platforms": int(enriched),
+        "skipped_not_relevant": dropped,
     }
 
 

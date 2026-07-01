@@ -154,6 +154,25 @@ class RelationshipVerdict:
     cost_usd: float
 
 
+@dataclass(frozen=True)
+class RelevanceVerdict:
+    """Whether an ENRICHMENT (e.g. a new use case) genuinely BELONGS under a subcap in a target
+    version's catalogue — the R7 necessity gate, weighed deeply by NLP.
+
+    ``relevant`` False means the enrichment is not necessary/relevant HERE (a duplicate of an
+    existing one, or a poor fit for the mapped subcap's meaning) and must NOT be written into that
+    version — avoiding "enriching the wrong things". Always carries a grounded ``rationale``; the
+    verdict is cached (control.enrichment_relevance) so a re-provision reuses it with no repeat
+    spend."""
+
+    relevant: bool
+    confidence: float
+    rationale: str
+    claim_label: str
+    model: str
+    cost_usd: float
+
+
 _TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 _CLIENT: Any = None
 
@@ -703,6 +722,81 @@ class Gemini:
             )
         return RelationshipVerdict(
             refuted=refuted, reason=reason or "adversary verdict", model=model, cost_usd=cost
+        )
+
+    async def infer_relevance(self, payload: dict[str, Any]) -> RelevanceVerdict:
+        """Judge whether an ENRICHMENT belongs under a subcap in a target version's catalogue
+        necessity gate). ``payload`` carries the enrichment text (``enrichment``), the target subcap
+        (``subcap_name``/``subcap_desc``), a sample of that subcap's EXISTING enrichments
+        (``existing``), and the grounded signals (``subcap_cosine`` = enrichment vs the subcap;
+        ``overlap_cosine`` = enrichment vs its nearest existing one). Live reads the context on
+        the pinned *enrich* model (a duplicate or a poor fit -> not relevant); hermetic (and a spent
+        envelope) decide deterministically from the cosines (no Vertex, no spend)."""
+        if self._settings.is_hermetic or await cost_meter.over_throttle():
+            return self._hermetic_infer_relevance(payload)
+        return await self._infer_relevance_live(payload)
+
+    @staticmethod
+    def _hermetic_infer_relevance(payload: dict[str, Any]) -> RelevanceVerdict:
+        """Deterministic stand-in: an enrichment is RELEVANT when it fits the mapped subcap
+        (subcap cosine high) AND adds something new (not near-identical to an existing enrichment).
+        """
+        subcap_cos = float(payload.get("subcap_cosine") or 0.0)
+        overlap_cos = float(payload.get("overlap_cosine") or 0.0)
+        name = str(payload.get("subcap_name") or payload.get("target_subcap") or "the subcap")
+        # relevant iff at least as close to the subcap as to any existing enrichment, clearing a
+        # minimal fit bar; a near-duplicate (overlap >= subcap fit) is NOT necessary here.
+        relevant = subcap_cos >= 0.4 and subcap_cos >= overlap_cos
+        conf = round(min(0.99, max(0.0, subcap_cos - 0.5 * overlap_cos + 0.3)), 3)
+        rationale = (
+            f"Fits {name} (similarity {subcap_cos:.0%}) and is "
+            + ("distinct from" if relevant else "too close to")
+            + f" its existing enrichments (nearest {overlap_cos:.0%}) — "
+            + ("a relevant addition" if relevant else "already covered / a poor fit, not added")
+            + ". Signal-derived; the live model reads the descriptions to confirm."
+        )
+        return RelevanceVerdict(
+            relevant=relevant,
+            confidence=conf,
+            rationale=rationale,
+            claim_label="INFERENCE",
+            model="hermetic-stub",
+            cost_usd=0.0,
+        )
+
+    async def _infer_relevance_live(self, payload: dict[str, Any]) -> RelevanceVerdict:
+        model = model_config.model_for("enrich")
+        name = str(payload.get("subcap_name") or payload.get("target_subcap") or "")
+        existing = "; ".join(str(e) for e in (payload.get("existing") or [])[:6])
+        system = (
+            "You decide whether a proposed ENRICHMENT (a use case) genuinely BELONGS under a "
+            "capability sub-capability: it must FIT the sub-capability's meaning and ADD what "
+            "its existing use cases do not already cover. Say NOT relevant if it is a "
+            "near-duplicate of an existing one or a poor fit. Return ONLY JSON "
+            '{"relevant": <true|false>, "confidence": <0..1>, "rationale": "<1-2 sentences>"}.'
+        )
+        user = (
+            f"Sub-capability: {name}: {payload.get('subcap_desc', '')}\n"
+            f"Existing use cases: {existing}\n"
+            f"Proposed enrichment: {payload.get('enrichment', '')}\n"
+            f"Signals: fit_cosine={payload.get('subcap_cosine', 0)}, "
+            f"nearest_existing_cosine={payload.get('overlap_cosine', 0)}"
+        )
+        text_out, cost = await self._generate(model, system, user, as_json=True)
+        try:
+            data = json.loads(text_out)
+            relevant = bool(data["relevant"])
+            confidence = float(data.get("confidence", 0.0))
+            rationale = str(data.get("rationale", "")).strip()
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return self._hermetic_infer_relevance(payload)  # bad parse -> deterministic fallback
+        return RelevanceVerdict(
+            relevant=relevant,
+            confidence=max(0.0, min(1.0, confidence)),
+            rationale=rationale or "Judged by the live enrich model from the descriptions.",
+            claim_label="INFERENCE",
+            model=model,
+            cost_usd=cost,
         )
 
     async def _generate(

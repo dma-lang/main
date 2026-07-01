@@ -284,6 +284,41 @@ def xref_semantic_config() -> tuple[float, float]:
 
 
 @dataclass(frozen=True)
+class EnrichmentRelevanceConfig:
+    """R7 necessity-gate thresholds (config/gates.yaml: enrichment_relevance.*). Weigh whether an
+    enrichment BELONGS in a target version — fit the subcap AND add something new — before it is
+    saved (propagation) or inherited (provision). Config, not code."""
+
+    relevance_min_cosine: float  # the enrichment must fit the target subcap at least this closely
+    overlap_max_cosine: float  # ...and be below this to the nearest existing enrichment (else dup)
+    deep_nlp: bool  # true = live infer_relevance judges the borderline band; false = cosine-only
+    prefilter_low: float  # subcap fit below this -> auto NOT relevant (no model call)
+    prefilter_high: float  # subcap fit at/above this + not a dup -> auto relevant (no model call)
+    min_confidence: float  # a 'relevant' verdict below this confidence is treated as not relevant
+
+
+def enrichment_relevance_config() -> EnrichmentRelevanceConfig:
+    """The R7 enrichment-necessity thresholds as one object (deep-NLP gate + cheap cosine prefilter
+    bands + the duplicate/fit floors). Recalibrated without a deploy."""
+    section = load_gate_config().get("enrichment_relevance") or {}
+    cfg = EnrichmentRelevanceConfig(
+        relevance_min_cosine=float(section.get("relevance_min_cosine", 0.45)),
+        overlap_max_cosine=float(section.get("overlap_max_cosine", 0.82)),
+        deep_nlp=bool(section.get("deep_nlp", True)),
+        prefilter_low=float(section.get("prefilter_low", 0.30)),
+        prefilter_high=float(section.get("prefilter_high", 0.90)),
+        min_confidence=float(section.get("min_confidence", 0.5)),
+    )
+    if not 0 <= cfg.relevance_min_cosine <= 1 or not 0 < cfg.overlap_max_cosine <= 1:
+        raise ValueError("gates.yaml: invalid enrichment_relevance cosine floors")
+    if not 0 <= cfg.prefilter_low <= cfg.prefilter_high <= 1:
+        raise ValueError("gates.yaml: enrichment_relevance prefilter bands must be 0<=low<=high<=1")
+    if not 0 <= cfg.min_confidence <= 1:
+        raise ValueError("gates.yaml: enrichment_relevance.min_confidence must be in [0, 1]")
+    return cfg
+
+
+@dataclass(frozen=True)
 class KnowledgeGraphConfig:
     """The full KG Layer-B mining thresholds (config/gates.yaml: knowledge_graph.*). The R5
     deep-relationship builders (co-delivery association mining + structural co-membership + the
