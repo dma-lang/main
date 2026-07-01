@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app import db
 from app.intelligence import gates
+from app.intelligence.gemini import Gemini
 from app.versioning import resolve_version
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,26 @@ logger = logging.getLogger(__name__)
 _SCHEMA_RE = re.compile(r"^cat_[a-z0-9_]+$")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _INSERT_BATCH = 1000
+_EMB_BATCH = 256  # embed use-case texts + story summaries in bounded chunks (resilience: bounded)
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine of two dense embedding vectors (already the embedding space's output)."""
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+async def _embed_all(texts: list[str]) -> list[list[float]]:
+    """Embed ``texts`` in bounded batches (gemini-embedding-001; hermetic = deterministic token-
+    hash, zero spend). Deduped by the caller so each distinct text is embedded once."""
+    gem = Gemini()
+    out: list[list[float]] = []
+    for i in range(0, len(texts), _EMB_BATCH):
+        out.extend(await gem.embed(texts[i : i + _EMB_BATCH]))
+    return out
+
 
 # Lightweight English/Jira stopwords — dropped so the cosine reflects CONTENT-word overlap, not
 # boilerplate ("the system shall enable the user to ..."). Kept small + deterministic.
@@ -132,6 +153,7 @@ async def match_use_cases(version: str = "v7") -> dict[str, Any]:
     if not _SCHEMA_RE.match(schema):
         raise ValueError("invalid version schema")
     floor, multi = gates.use_case_match_config()
+    sem_w, sem_floor = gates.use_case_match_hybrid()  # R6 hybrid: dense weight + attribution floor
     engine = db.require_engine()
 
     matched = review = 0
@@ -151,12 +173,20 @@ async def match_use_cases(version: str = "v7") -> dict[str, Any]:
                 )
             )
         ).all()
+        uc_text: dict[str, str] = {}
         for sub, ucid, name, desc, arch in uc_rows:
-            raw.setdefault(str(sub), []).append((str(ucid), _tokens(f"{name} {desc} {arch}")))
+            txt = f"{name} {desc} {arch}"
+            raw.setdefault(str(sub), []).append((str(ucid), _tokens(txt)))
+            uc_text[str(ucid)] = txt
         uc_by_subcap: dict[str, list[tuple[str, dict[str, float], float]]] = {}
         for sub, items in raw.items():
             vecs, norms = _tfidf([d for _, d in items])
             uc_by_subcap[sub] = [(items[i][0], vecs[i], norms[i]) for i in range(len(items))]
+        # R6 HYBRID — dense embeddings of the use-case texts, keyed by use_case_id (the semantic
+        # half); gemini.embed is the deterministic token-hash stub under hermetic (no spend).
+        uc_ids = list(uc_text)
+        uc_vecs = await _embed_all([uc_text[u] for u in uc_ids]) if uc_ids else []
+        uc_emb = {uc_ids[i]: uc_vecs[i] for i in range(len(uc_ids))}
 
         # every carried (story, subcap) pair in THIS version, with the story summary text
         story_rows = (
@@ -170,6 +200,10 @@ async def match_use_cases(version: str = "v7") -> dict[str, Any]:
                 {"ver": v.version_id},
             )
         ).all()
+        # dense embeddings of the DISTINCT story summaries (each embedded once) — the story half.
+        distinct = sorted({str(s) for _, _, s in story_rows if str(s).strip()})
+        sum_vecs = await _embed_all(distinct) if distinct else []
+        s_emb = {distinct[i]: sum_vecs[i] for i in range(len(distinct))}
 
         await conn.execute(
             text("DELETE FROM control.story_use_case_carry WHERE target_version = :ver"),
@@ -187,16 +221,22 @@ async def match_use_cases(version: str = "v7") -> dict[str, Any]:
             else:
                 svec = _tokens(summary)
                 snorm = math.sqrt(sum(n * n for n in svec.values()))
-                scored = sorted(
-                    ((_score(svec, snorm, vec, norm), ucid) for ucid, vec, norm in ucs),
-                    key=lambda kv: (-kv[0], kv[1]),  # best score, then lowest id (deterministic)
-                )
-                # grounded only: attribute solely when a real discriminating term overlaps; else the
-                # story is general subcap delivery, never force-pinned onto a use case.
+                svemb = s_emb.get(str(summary))
+                cand: list[tuple[float, str]] = []
+                for ucid, vec, norm in ucs:
+                    lex = _score(svec, snorm, vec, norm)  # lexical TF-IDF cosine
+                    emb = _cosine(svemb, uc_emb[ucid]) if svemb and ucid in uc_emb else 0.0
+                    combined = (1.0 - sem_w) * lex + sem_w * emb
+                    # attribute on a shared discriminating TERM (preserves the unmatched set the
+                    # gap detector needs) OR a STRONG semantic match (a summary that MEANS the same
+                    # as a use case without sharing a word); baseline embedding noise stays out.
+                    if lex > 0.0 or emb >= sem_floor:
+                        cand.append((combined, ucid))
+                cand.sort(key=lambda kv: (-kv[0], kv[1]))  # best combined, then lowest id
                 picks = (
-                    [(uid, sc) for sc, uid in scored if sc > 0.0]
+                    [(uid, sc) for sc, uid in cand]
                     if multi
-                    else ([(scored[0][1], scored[0][0])] if scored[0][0] > 0.0 else [])
+                    else ([(cand[0][1], cand[0][0])] if cand else [])
                 )
             if not picks:
                 unmatched += 1
@@ -212,7 +252,7 @@ async def match_use_cases(version: str = "v7") -> dict[str, Any]:
                         "use_case_id": ucid,
                         "subcap_id": str(sub),
                         "score": round(float(sc), 4),
-                        "via": "use_case_tfidf",
+                        "via": "use_case_hybrid",
                         "status": status,
                     }
                 )

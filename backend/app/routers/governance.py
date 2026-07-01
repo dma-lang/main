@@ -217,9 +217,10 @@ class FlagRejectBody(BaseModel):
 @router.get("/change-flags")
 async def change_flags(
     status_filter: str = Query("open", alias="status"),
+    severity: str | None = Query(None, description="BLOCKING | HIGH | MED | LOW (unset = all)"),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> ChangeFlagsOut:
-    result = await flags_svc.list_flags(status_filter)
+    result = await flags_svc.list_flags(status_filter, severity)
     return ChangeFlagsOut(
         flags=[ChangeFlagOut(**vars(f)) for f in result.flags], counts=result.counts
     )
@@ -265,6 +266,19 @@ async def propose_kg_edges(
     cross-capability subcaps that co-occur structurally (shared L3 platforms / personas), each
     gated G1-G8 and queued in the Change-Flags inbox for human approval — never written live."""
     return await kg_svc.propose_structural_edges(version)
+
+
+@router.post("/admin/kg/directional/{version}")
+async def propose_kg_directional(
+    version: str, _admin: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """R6 NLP DIRECTIONAL relationship discovery: read the connected cross-capability subcap pairs'
+    DESCRIPTIONS into a typed, directional relation (one enables/precedes/depends_on/affects the
+    other), DUAL-verify each (adversarial refutation + Jira-corpus corroboration), and queue the
+    survivors as gated, dashed directional ``pending_edge``s in the Change-Flags inbox for human
+    approval — never written live. Live spend (enrich + adversarial models), metered + G8-gated;
+    hermetic = deterministic, zero spend."""
+    return await kg_svc.propose_directional_edges(version)
 
 
 @router.post("/admin/use-case-gaps/{version}")

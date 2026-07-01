@@ -190,17 +190,33 @@ async def refresh_data_plane(rebuilt_out: list[str] | None = None) -> int:
     return rc
 
 
+async def _active_version(conn: AsyncConnection) -> str | None:
+    """The version users see by default (status='active'), so its proposal box is refreshed on
+    EVERY redeploy even when the marker skipped its rebuild."""
+    return (
+        await conn.execute(
+            text(
+                "SELECT version_id FROM control.catalogue_version "
+                "WHERE status = 'active' ORDER BY version_id LIMIT 1"
+            )
+        )
+    ).scalar()
+
+
 async def run_discovery(versions: list[str]) -> None:
     """Surface each version's GATED discovery proposals after its data plane is refreshed, so a
     redeploy also brings the Change-Flags / Notifications proposal box back in step (never stale):
-    NEW use cases implied by delivery (``use_case_gaps``), knowledge-graph latent edges
+    NEW use cases implied by delivery (``use_case_gaps``), knowledge-graph structural latent edges
     (``kg.propose_structural_edges``), and unscoped subverticals. Every detector is IDEMPOTENT
-    (dedupes on its own target_ref / pair — a re-run over unchanged delivery proposes nothing new),
-    hermetic-safe (deterministic, zero spend), gated + bounded, and BEST-EFFORT: a detector raising
-    is logged and never fails the deploy (the data plane is already live; discovery is purely
-    additive). Only the ``versions`` actually rebuilt this deploy are scanned."""
-    if not versions:
-        return
+    (dedupes on its own target_ref / pair — a re-run over unchanged delivery proposes nothing new,
+    so a same-image redeploy adds nothing and spends nothing beyond cached embeddings),
+    hermetic-safe
+    (deterministic, zero spend), gated + bounded, and BEST-EFFORT: a detector raising is logged and
+    never fails the deploy (the data plane is already live; discovery is purely additive). Scans the
+    ``versions`` rebuilt this deploy PLUS the ACTIVE version (even if the marker skipped rebuild),
+    so the surface users look at always refreshes. The LIVE NLP directional engine
+    (``kg.propose_directional_edges``) is deliberately NOT run here — it stays on the metered weekly
+    schedule so a redeploy never triggers its enrich+adversarial spend."""
     if db.init_engine() is None:
         return
     # Imported here, not at module load, so importing app.refresh never eagerly drags in the whole
@@ -215,7 +231,14 @@ async def run_discovery(versions: list[str]) -> None:
         ("unscoped_subverticals", subverticals_svc.detect_unscoped_subverticals),
     )
     try:
-        for version_id in versions:
+        engine = db.require_engine()
+        async with engine.connect() as conn:
+            active = await _active_version(conn)
+        # rebuilt versions + the active one (dedup, order-stable) — active surface always refreshes
+        targets = list(dict.fromkeys([*versions, *([str(active)] if active else [])]))
+        if not targets:
+            return
+        for version_id in targets:
             for name, fn in detectors:
                 try:
                     result = await fn(version_id)

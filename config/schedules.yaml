@@ -39,6 +39,12 @@ schedules:
     job: weekly_kg_structural
     batch: true
 
+  kg_directional_propose:
+    description: Weekly R6 NLP directional relationship mining -> read descriptions into typed directional edges, dual-verify (adversary + corpus) -> gated Change Flags.
+    cron: "5 7 * * MON"           # Monday 07:05 UTC (after the structural KG scan; live enrich + adversarial spend, metered)
+    job: weekly_kg_directional
+    batch: true
+
   use_case_gap_detect:
     description: Weekly scan for use cases IMPLIED by delivery but not yet in the catalogue -> infer + gate a NEW use case -> Change Flags.
     cron: "55 6 * * MON"          # Monday 06:55 UTC (after the KG scan; needs story->use-case links)

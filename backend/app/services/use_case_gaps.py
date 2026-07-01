@@ -44,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app import db
 from app.intelligence import gates
 from app.intelligence.gemini import Gemini
-from app.services.change_flags import _severity  # volume->severity, shared with the other flags
+from app.services.change_flags import proposal_severity  # proposal-scaled volume -> severity
 from app.services.evidence import compute_ers
 from app.versioning import resolve_version
 
@@ -523,7 +523,7 @@ async def _create_use_case_flag(
         ),
         {
             "k": _KIND,
-            "sev": _severity(stories),
+            "sev": proposal_severity(stories),
             "t": ref,
             "d": json.dumps(detail),
             "c": chain_id,

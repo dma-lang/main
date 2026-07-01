@@ -48,6 +48,19 @@ def _severity(stories: int) -> str:
     return "LOW"
 
 
+def proposal_severity(count: int) -> str:
+    """Severity for a NEW-thing PROPOSAL (use-case gap / KG edge) — scaled to proposal volumes, not
+    the far larger contradicted-delivery volumes ``_severity`` grades. A sizeable uncovered-delivery
+    cluster is genuinely notable, so it reaches MED/HIGH instead of being buried at LOW (which, with
+    the bell counting MED now, is why 'no use-case flags showed'). Low thresholds; the bell +
+    severity filter make these visible."""
+    if count >= 40:
+        return "HIGH"
+    if count >= 12:
+        return "MED"
+    return "LOW"
+
+
 def _age(seconds: float | int | None) -> str:
     """Human-readable relative age (matches the prototype's '5m' / '1h' / '2d')."""
     s = int(seconds or 0)
@@ -493,11 +506,26 @@ def _flag_row(m: dict[str, Any]) -> FlagRow:
     )
 
 
-async def list_flags(status: str = "open") -> FlagList:
+async def list_flags(status: str = "open", severity: str | None = None) -> FlagList:
+    """List change flags, optionally filtered by ``status`` and by ``severity`` (BLOCKING / HIGH /
+    MED / LOW). The ``counts`` returned are ALWAYS the full per-severity tally of open flags (not
+    the filtered subset), so the UI can render the severity toggle with live counts even while a
+    single band is selected."""
     engine = db.get_engine()
     if engine is None:
         return FlagList(flags=[], counts={"BLOCKING": 0, "HIGH": 0, "MED": 0, "LOW": 0})
-    where = "WHERE status = :s" if status else ""
+    sev = (severity or "").strip().upper() or None
+    if sev is not None and sev not in ("BLOCKING", "HIGH", "MED", "LOW"):
+        sev = None  # ignore an unrecognised band rather than erroring -> shows all
+    clauses = []
+    params: dict[str, Any] = {}
+    if status:
+        clauses.append("status = :s")
+        params["s"] = status
+    if sev is not None:
+        clauses.append("severity = :sev")
+        params["sev"] = sev
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     async with engine.connect() as conn:
         rows = (
             (
@@ -509,7 +537,7 @@ async def list_flags(status: str = "open") -> FlagList:
                         "ORDER BY CASE severity WHEN 'BLOCKING' THEN 0 WHEN 'HIGH' THEN 1 "
                         "WHEN 'MED' THEN 2 ELSE 3 END, created_at DESC"
                     ),
-                    {"s": status} if status else {},
+                    params,
                 )
             )
             .mappings()

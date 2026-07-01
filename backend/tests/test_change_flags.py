@@ -141,6 +141,23 @@ def test_change_flag_lifecycle(client: TestClient) -> None:
 
 
 @needs_db
+def test_severity_filter_returns_only_that_band(client: TestClient) -> None:
+    """R6: /api/change-flags?severity=<band> returns only flags of that severity, while the counts
+    stay the FULL per-severity tally (so the UI toggle shows live counts). This is the filter that
+    (with the bell now counting MED) surfaces the MED/LOW proposal flags users could not see."""
+    client.post("/api/admin/change-flags/scan/v7")
+    counts = client.get("/api/change-flags?status=open").json()["counts"]
+    for band, n in counts.items():
+        body = client.get(f"/api/change-flags?status=open&severity={band}").json()
+        assert all(f["sev"] == band for f in body["flags"])  # only this band
+        assert len(body["flags"]) == n  # matches the band's count
+        assert body["counts"] == counts  # counts are the full tally, not the filtered subset
+    # an unrecognised band is ignored (returns all), never an error
+    allf = client.get("/api/change-flags?status=open").json()["flags"]
+    bogus = client.get("/api/change-flags?status=open&severity=NOPE").json()["flags"]
+    assert len(bogus) == len(allf)
+
+
 def test_decay_no_delivery_flags_let_admin_mark_inactive(client: TestClient) -> None:
     """Decay (user definition): a subcap with no real Jira story is flagged for the admin, who can
     APPROVE to mark it inactive (lifecycle -> 'dead'), gated + audited. v7's corpus covers ~87 of

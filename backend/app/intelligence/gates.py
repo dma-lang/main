@@ -194,6 +194,21 @@ def use_case_match_config() -> tuple[float, bool]:
     return floor, multi
 
 
+def use_case_match_hybrid() -> tuple[float, float]:
+    """R6 hybrid knobs for the matcher: ``(semantic_weight, semantic_match_floor)``. semantic_weight
+    = fraction of the score from the DENSE embedding cosine (the rest is lexical TF-IDF).
+    ``semantic_match_floor`` = embedding cosine at/above which a story is attributed even with no
+    shared term (a semantically-equivalent summary is caught, baseline noise is not)."""
+    section = load_gate_config().get("use_case_match") or {}
+    w = float(section.get("semantic_weight", 0.5))
+    floor = float(section.get("semantic_match_floor", 0.82))
+    if not 0 <= w <= 1:
+        raise ValueError("gates.yaml: use_case_match.semantic_weight must be in [0, 1]")
+    if not 0 < floor <= 1:
+        raise ValueError("gates.yaml: use_case_match.semantic_match_floor must be in (0, 1]")
+    return w, floor
+
+
 @dataclass(frozen=True)
 class UseCaseGapConfig:
     """Use-case gap detector thresholds (config/gates.yaml: use_case_gap.*)."""
@@ -321,6 +336,48 @@ def knowledge_graph_full_config() -> KnowledgeGraphConfig:
         raise ValueError("gates.yaml: semantically_similar_min_cosine must be in (0, 1]")
     if not 0 <= cfg.novelty_weight <= 1 or cfg.max_proposals < 1:
         raise ValueError("gates.yaml: invalid knowledge_graph novelty_weight / max_proposals")
+    return cfg
+
+
+@dataclass(frozen=True)
+class KnowledgeGraphDirectionalConfig:
+    """R6 thresholds for the NLP directional relationship engine
+    (config/gates.yaml: knowledge_graph.directional_*). The engine reads two subcaps' descriptions
+    into a TYPED, DIRECTIONAL relation, then dual-verifies (adversary + Jira-corpus corroboration).
+    All bounds keep the LIVE spend metered + capped. Config, not code — recalibrated without a
+    deploy."""
+
+    candidate_cap: int  # max candidate partners scored per subcap (bounds live spend)
+    semantic_knn: int  # nearest semantic neighbours seeded per subcap
+    confidence_floor: float  # drop an inferred relation below this confidence
+    verify_passes: int  # adversarial refutation passes (live); majority refutes
+    corroboration_lift: float  # co-delivery lift a depends_on/complements must clear (corpus gate)
+    max_per_scan: int  # bound the whole directional run
+    novelty_weight: float  # reuse the KG novelty suppression weight
+    allow_cross_pillar: bool  # reuse the D16 cross-pillar decision
+
+
+def knowledge_graph_directional_config() -> KnowledgeGraphDirectionalConfig:
+    """The R6 directional-engine thresholds as one object. Reuses ``novelty_weight`` +
+    ``allow_cross_pillar`` from the shared knowledge_graph block so the directional surface ranks +
+    gates exactly like the structural one."""
+    section = load_gate_config().get("knowledge_graph") or {}
+    cfg = KnowledgeGraphDirectionalConfig(
+        candidate_cap=int(section.get("directional_candidate_cap", 12)),
+        semantic_knn=int(section.get("directional_semantic_knn", 8)),
+        confidence_floor=float(section.get("directional_confidence_floor", 0.45)),
+        verify_passes=int(section.get("directional_verify_passes", 3)),
+        corroboration_lift=float(section.get("directional_corroboration_lift", 1.5)),
+        max_per_scan=int(section.get("directional_max_per_scan", 150)),
+        novelty_weight=float(section.get("novelty_weight", 1.0)),
+        allow_cross_pillar=bool(section.get("allow_cross_pillar", True)),
+    )
+    if cfg.candidate_cap < 1 or cfg.semantic_knn < 1 or cfg.max_per_scan < 1:
+        raise ValueError("gates.yaml: directional candidate_cap / semantic_knn / max_per_scan >= 1")
+    if not 0 <= cfg.confidence_floor <= 1:
+        raise ValueError("gates.yaml: directional_confidence_floor must be in [0, 1]")
+    if cfg.verify_passes < 1 or cfg.corroboration_lift <= 0:
+        raise ValueError("gates.yaml: directional_verify_passes >= 1 and corroboration_lift > 0")
     return cfg
 
 
