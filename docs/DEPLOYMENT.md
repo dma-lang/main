@@ -143,8 +143,11 @@ prints `cia-database-url` and `cia-hmac-key`.
 
 ## A6. Create the "Sign in with Google" client (OAuth — in the browser, once)
 
-The app uses plain Google sign-in (no Firebase, no passwords are ever stored). It needs one
-public identifier: an **OAuth web client ID**. Follow exactly:
+The app uses the OAuth 2.0 **Authorization-Code** flow: a full-page redirect to Google and back,
+with the backend exchanging the code **server-to-server using the client secret** and minting its
+own signed session cookie (no browser-side Google Identity Services, so there are **no "Authorized
+JavaScript origins"** — only one **Authorized redirect URI** to register). It needs the client
+**ID + secret**. Follow exactly:
 
 1. Open **[https://console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)**
    (project `digital-maturity-assessor`, your `@zennify.com` account).
@@ -153,10 +156,11 @@ public identifier: an **OAuth web client ID**. Follow exactly:
    continue** through the steps (no scopes needed) → back to **Credentials**.
 3. Click **+ Create credentials → OAuth client ID** → Application type **Web application** →
    Name `cia-web`.
-4. Leave **Authorized JavaScript origins** empty for now (you add the run.app address at the end
-   of A7, when you know it) → **Create**.
-5. A dialog shows **Your Client ID** — it looks like
-   `1234567890-abc123.apps.googleusercontent.com`. **Copy it**; A7 passes it to the service.
+4. Leave **Authorized redirect URIs** empty for now — you add `<SERVICE_URL>/api/auth/callback`
+   at the end of A7, once you know the URL → **Create**.
+5. A dialog shows **Your Client ID** (`1234567890-abc123.apps.googleusercontent.com`) **and Client
+   secret** — **copy BOTH**. A7 stores the secret in Secret Manager and passes the ID to the
+   service. (You can re-open both later from the client's page.)
 
 **Check:** the Credentials page lists `cia-web` under *OAuth 2.0 Client IDs*.
 
@@ -175,6 +179,13 @@ The `ls` must print the four names and the count should be roughly **80–120** 
 files sent to the builder; bulky build artifacts and spec documents are excluded by
 `.gcloudignore`). If the count is near zero or `ls` fails — go back to A1.
 
+First store the OAuth **client secret** from A6 in Secret Manager (paste yours in place of the
+placeholder — it is never written to a file):
+
+```bash
+printf '%s' 'PASTE_YOUR_CLIENT_SECRET_FROM_A6' | gcloud secrets create cia-oauth-client-secret --data-file=-
+```
+
 Now deploy. Google's builder runs this repo's `Dockerfile` for you (you don't install anything):
 
 ```bash
@@ -183,8 +194,8 @@ gcloud run deploy cia \
   --region "$REGION" \
   --allow-unauthenticated \
   --add-cloudsql-instances "$SQL_CONN" \
-  --set-secrets "DATABASE_URL=cia-database-url:latest,HMAC_KEY=cia-hmac-key:latest" \
-  --set-env-vars "LLM_MODE=live,GOOGLE_CLIENT_ID=PASTE_YOUR_CLIENT_ID_FROM_A6" \
+  --set-secrets "DATABASE_URL=cia-database-url:latest,HMAC_KEY=cia-hmac-key:latest,GOOGLE_OAUTH_CLIENT_SECRET=cia-oauth-client-secret:latest" \
+  --set-env-vars "LLM_MODE=live,AUTH_MODE=live,GOOGLE_OAUTH_CLIENT_ID=PASTE_YOUR_CLIENT_ID_FROM_A6" \
   --min-instances 1 \
   --max-instances 8 \
   --cpu 1 \
@@ -216,10 +227,18 @@ curl -s "$URL/healthz"
 **Check:** the health line shows `"status":"ok"`. (`"db":"down"` is expected right now — the
 tables don't exist until A9.)
 
-Last bit of A7 — allow Google sign-in on the new address: back in **GCP Console → APIs &
-Services → Credentials → `cia-web`** → under **Authorized JavaScript origins** click
-**+ Add URI** → paste your full URL (e.g. `https://cia-abc123-uc.a.run.app`, no trailing slash)
-→ **Save**. (Origins take a few minutes to propagate.)
+Last bit of A7 — pin the app to this URL and authorize the sign-in redirect:
+
+```bash
+gcloud run services update cia --region "$REGION" --update-env-vars "PUBLIC_BASE_URL=$URL"
+```
+
+Then in **GCP Console → APIs & Services → Credentials → `cia-web`** → under **Authorized redirect
+URIs** click **+ Add URI** → paste **`$URL/api/auth/callback`** (your full service URL + that path,
+no trailing slash) → **Save**. (Changes take a few minutes to propagate.) `PUBLIC_BASE_URL` pins
+the whole OAuth round-trip to one hostname, so Google's registered-redirect-URI check is satisfied
+for every user (Cloud Run answers on two hostnames, which otherwise makes the redirect a moving
+target).
 
 ## A8. Give the app its permissions
 
@@ -367,13 +386,16 @@ pick a green one, then
    `^main$` → build type **Dockerfile** → Save. Service name `cia`, region `us-central1`,
    **Allow unauthenticated invocations**. Expand *Containers, Volumes, Networking, Security*:
    CPU `1`, Memory `1 GiB`, concurrency `40`, timeout `300`, min `1` / max `8` instances;
-   **Variables**: add `LLM_MODE` = `live` (that's the only one);
+   **Variables**: `LLM_MODE` = `live`, `AUTH_MODE` = `live`, `GOOGLE_OAUTH_CLIENT_ID` = your A6
+   client ID, and (after the URL is known) `PUBLIC_BASE_URL` = the service URL;
    **Secrets exposed as environment variables**: `DATABASE_URL` → `cia-database-url:latest`,
-   `HMAC_KEY` → `cia-hmac-key:latest`; **Cloud SQL connections → Add connection → `cia-pg`**.
-   **Create** — the first build takes 5–8 minutes. Copy the URL and add its host under
-   GCP Console → APIs & Services → Credentials → `cia-web` → **Authorized JavaScript
-   origins**. (This path also redeploys
-   automatically on every push to `main`.)
+   `HMAC_KEY` → `cia-hmac-key:latest`, `GOOGLE_OAUTH_CLIENT_SECRET` → `cia-oauth-client-secret:latest`
+   (create that secret from your A6 client secret first); **Cloud SQL connections → Add connection →
+   `cia-pg`**.
+   **Create** — the first build takes 5–8 minutes. Copy the URL, then add `<URL>/api/auth/callback`
+   under GCP Console → APIs & Services → Credentials → `cia-web` → **Authorized redirect URIs**, and
+   set `PUBLIC_BASE_URL` = the URL on the service. (This path also redeploys automatically on every
+   push to `main`.)
 6. **IAM** — IAM & Admin → IAM → find `PROJECT_NUMBER-compute@developer.gserviceaccount.com` →
    pencil icon → add roles **Cloud SQL Client**, **Secret Manager Secret Accessor**,
    **Vertex AI User** → Save. Then Cloud Run → `cia` → *Edit & deploy new revision* → Deploy
@@ -399,7 +421,8 @@ pick a green one, then
 | `-bash: --some-flag: command not found` while pasting | a comment after a `\` split the command | paste the blocks from this guide verbatim — they contain no inline comments |
 | `jobs create` → `unrecognized arguments: --add-cloudsql-instances` (and then `jobs execute` → NOT_FOUND) | jobs use a different flag family than services | use `--set-cloudsql-instances` on `jobs create` (A9); the NOT_FOUND clears once the job is created |
 | `healthz` shows `"db":"down"` | migration not run yet, wrong secret value, or missing Cloud SQL connection / IAM role | run A9; re-check the A5 secret, the `--add-cloudsql-instances` flag, the A8 roles |
-| sign-in button shows an origin error | the service URL isn't an authorized JavaScript origin on the OAuth client | GCP Console → APIs & Services → Credentials → `cia-web` → add `https://…run.app` under Authorized JavaScript origins |
+| sign-in bounces back / `redirect_uri_mismatch` | the service URL + `/api/auth/callback` isn't a registered redirect URI, or `PUBLIC_BASE_URL` isn't set (Cloud Run's two hostnames make the redirect a moving target) | add `$URL/api/auth/callback` under the OAuth client's **Authorized redirect URIs**, and set `PUBLIC_BASE_URL=$URL` on the service (A7) |
+| `login refused: OAuth not configured` | the client **secret** isn't set | store it as `cia-oauth-client-secret` and expose it as `GOOGLE_OAUTH_CLIENT_SECRET` (A7) |
 | `403 account not permitted` after Google sign-in | not a verified `@zennify.com` account | sign in with a verified `@zennify.com` Google account |
 | Mission control is empty | data not loaded yet | A10: Settings → Catalogue setup → Provision, then Carry stories |
 | a Scan button says "source disabled" | that source is switched off | Settings → Ingestion source registry → toggle it on |
@@ -417,4 +440,17 @@ pick a green one, then
 - **`scripts/dev_up.sh`** — full local stack (Docker + Postgres/pgvector + migrations + UI),
   hermetic and free: run with `LLM_MODE=hermetic AUTH_MODE=dev`.
 
-Terraform will codify this setup in a later stage; until then this guide is the source of truth.
+**Terraform** now codifies this whole setup under `terraform/` (project services incl. Vertex AI;
+least-privilege service accounts with `roles/aiplatform.user`; **Workload Identity Federation** for
+keyless CI/deploy; Cloud SQL PG16 private-IP + PITR; Secret Manager; Artifact Registry; GCS; the
+Cloud Run service + `cia-migrate` job + Cloud Scheduler). See `terraform/README.md` for the gated
+apply order and which values go into which secret. `.github/workflows/deploy.yml` runs the vetted
+`scripts/deploy_cloudrun.sh` via WIF (no keys) on manual dispatch. This guide remains the
+click-by-click path and the source of truth for the runtime env.
+
+> **Live AI (Vertex).** `LLM_MODE=live` makes the app call **Vertex AI Gemini** via the runtime
+> service account's ADC — there is **no** API key or OAuth client for the models (the OAuth client
+> above is only for the `@zennify.com` user login). The `cia-migrate`/refresh job then builds the
+> **real** `gemini-embedding-001` vectors for each version (metered, G8-budget-gated), which power
+> the knowledge-graph semantic edges, the legacy-version automap, and the use-case-gap clustering.
+> Grant the runtime SA `roles/aiplatform.user` (A8 / Terraform) or model calls 403.

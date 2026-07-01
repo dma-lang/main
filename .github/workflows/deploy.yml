@@ -1,0 +1,59 @@
+name: Deploy (Cloud Run · prod)
+
+# HUMAN-GATED (CLAUDE.md §8/§10): deploying performs paid, prod-affecting actions, so this workflow
+# is manual-dispatch only — an operator triggers it after `terraform apply` has stood up the infra
+# (service accounts, Cloud SQL, Artifact Registry, secrets, WIF). It authenticates via Workload
+# Identity Federation (NO service-account JSON key) and runs the vetted scripts/deploy_cloudrun.sh,
+# which builds + pushes by digest, runs the one-shot cia-migrate Job to completion BEFORE traffic,
+# starts the new revision with --no-traffic, and shifts traffic only after /healthz passes
+# (auto-rollback on failure). The Cloud Run service's env (LLM_MODE=live, AUTH_MODE=live, secrets,
+# service account cia-run with roles/aiplatform.user) is managed by Terraform, not here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      canary_percent:
+        description: "Canary traffic % (blank = straight to 100 after healthz)"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false # never interrupt an in-flight migration/deploy
+
+permissions:
+  contents: read
+  id-token: write # required for Workload Identity Federation (OIDC) — no keys
+
+jobs:
+  deploy:
+    name: build-by-digest · migrate · canary · promote
+    runs-on: ubuntu-latest
+    # Optional GitHub Environment gate: add required reviewers on "production" for a second §10 pause.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # deploy script stamps the image + refresh marker by git SHA
+
+      # Keyless auth: impersonate cia-deployer via the WIF provider (both from Terraform outputs,
+      # stored as repo/environment variables — never a JSON key).
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Deploy (build-by-digest → migrate Job → canary → promote → verify)
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          CANARY_PERCENT: ${{ inputs.canary_percent }}
+        run: ./scripts/deploy_cloudrun.sh
