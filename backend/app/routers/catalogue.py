@@ -2120,7 +2120,16 @@ _VC_CLEAN = r"regexp_replace(vcl.name, '\s*\([^()]*\)\s*$', '')"
 # Fold a legacy SV suffix in the tier at READ time (config alias map) so the Tier-coverage lens
 # shows e.g. T2-RIA — not a stale T2-PEN — even on a version (v5) provisioned before the fold; two
 # raw tiers then merge into one row under GROUP BY. Same intent as _VC_CLEAN for stage names.
-_MATURITY_TIER = _sv_aliases.legacy_suffix_fold_sql("coalesce(sc.tier,'untiered')")
+_TIER_FOLD = _sv_aliases.legacy_suffix_fold_sql("coalesce(sc.tier,'untiered')")
+# A subcap tier with NO subvertical suffix (plain "T2"/"T1" — the SV-agnostic base capabilities) is
+# mapped to the subvertical of its DELIVERY (the story's story_sv_code), so the lens shows "T2-CL"
+# etc. instead of a generic "T2" row. A tier already carrying an SV suffix (T2-RIA) is kept as-is,
+# and delivery with no story SV stays on the plain tier. Shared by the heatmap and its drill.
+_MATURITY_TIER = (
+    f"CASE WHEN ({_TIER_FOLD}) ~ '-[A-Za-z]' THEN ({_TIER_FOLD}) "
+    f"WHEN st.story_sv_code IS NOT NULL AND st.story_sv_code <> '' "
+    f"THEN ({_TIER_FOLD}) || '-' || st.story_sv_code ELSE ({_TIER_FOLD}) END"
+)
 _LENS_GROUP: dict[str, tuple[str, str, str]] = {
     # lens -> (group-key expr, label expr, extra FROM/JOIN)
     "pillar": ("sc.subcap_id", "sc.name", ""),  # rows = most-delivered subcaps

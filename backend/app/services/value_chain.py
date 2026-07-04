@@ -72,6 +72,30 @@ def lead_stage_key(name: str) -> str:
     return toks[0] if toks else n.lower().strip()
 
 
+def canonical_stage_map(weighted: list[tuple[str, int]]) -> dict[str, str]:
+    """Fold value-chain stage labels that share >= _MERGE_JACCARD token overlap into ONE canonical
+    label, using the SAME merge the atlas build uses — so provisioning writes merged stage names and
+    the mission-control value-chain lens (and its drill) show the same merged stages as the Value
+    Chain page ("Loan Origination" + "Loan Origination & Underwriting" -> one row). ``weighted`` is
+    ``(clean_stage_name, subcap_count)``; the heaviest / longest spelling in a group is canonical.
+    Deterministic. Returns ``{label: canonical}``."""
+    merged: list[dict[str, Any]] = []  # {tokens: frozenset, members: [(label, weight)]}
+    for label, weight in sorted(weighted, key=lambda lw: (-lw[1], lw[0])):  # heavier absorbs
+        toks = frozenset(_tokens(label))
+        target = next((m for m in merged if _jaccard(m["tokens"], toks) >= _MERGE_JACCARD), None)
+        if target is None:
+            merged.append({"tokens": toks, "members": [(label, weight)]})
+        else:
+            target["tokens"] = target["tokens"] | toks
+            target["members"].append((label, weight))
+    out: dict[str, str] = {}
+    for m in merged:
+        canonical = max(m["members"], key=lambda lw: (lw[1], len(lw[0]), lw[0]))[0]
+        for label, _w in m["members"]:
+            out[label] = canonical
+    return out
+
+
 def clean_stage_name(name: str) -> str:
     """Strip trailing parenthetical explanations from a value-chain stage label, leaving the bare
     stage name (e.g. "AUTOMATION COE (SV-Specific: P3C1.3.RB1)" -> "AUTOMATION COE"). Repeats so

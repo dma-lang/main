@@ -12,6 +12,7 @@ import gzip
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app import db
 from app.services import subcap_xref
 from app.services.sv_aliases import normalize_sv_code, normalize_tier
-from app.services.value_chain import clean_stage_name
+from app.services.value_chain import canonical_stage_map, clean_stage_name
 
 logger = logging.getLogger(__name__)
 
@@ -440,9 +441,12 @@ async def _seed_value_chain(
     if not rows:
         return {"vc_stages": 0, "vc_links": 0, "vc_cascaded_from": vc.get("cascaded_from")}
     # Stage labels carry trailing "(SV-Specific: …)"/"(Ag)"-style explanations the atlas must not
-    # show; strip them to the bare stage name and MERGE variants that share one (so e.g. three
-    # "AUTOMATION COE (SV-Specific: …)" rows collapse to a single ordered "AUTOMATION COE" stage).
-    names = sorted({clean_stage_name(s) for m in rows for s in m["stages"]})
+    # show; strip them, then MERGE token-overlapping variants into ONE canonical stage — the SAME
+    # merge the atlas build uses — so the value-chain LENS + its drill show merged stages ("Loan
+    # Origination" + "Loan Origination & Underwriting" -> one row), not near-duplicates.
+    _clean_counts = Counter(clean_stage_name(s) for m in rows for s in m["stages"])
+    canon = canonical_stage_map(list(_clean_counts.items()))  # clean spelling -> canonical merged
+    names = sorted(set(canon.values()))
     vcc_by_name = {n: f"VCC-{i + 1:02d}" for i, n in enumerate(names)}
     await conn.execute(
         text(f"INSERT INTO {schema}.value_chain_cluster (vcc_id, name) VALUES (:v, :n)"),
@@ -452,7 +456,8 @@ async def _seed_value_chain(
     for sv, order in (vc.get("stage_order") or {}).items():
         nsv = normalize_sv_code(sv) or sv
         for i, st in enumerate(order):
-            okey = (nsv, clean_stage_name(st))
+            cn = clean_stage_name(st)
+            okey = (nsv, canon.get(cn, cn))  # order keyed by the MERGED canonical stage
             if okey not in ord_by_sv or i < ord_by_sv[okey]:
                 ord_by_sv[okey] = i  # earliest position among the merged variants
     links: list[dict[str, Any]] = []
@@ -460,7 +465,8 @@ async def _seed_value_chain(
     for m in rows:
         svn = normalize_sv_code(str(m["sv"])) or str(m["sv"])  # legacy SV (e.g. PEN) -> canonical
         for st in m["stages"]:
-            cst = clean_stage_name(st)
+            cn = clean_stage_name(st)
+            cst = canon.get(cn, cn)  # the merged canonical stage this variant folds into
             vcc = vcc_by_name[cst]
             key = (m["subcap_id"], vcc, svn)
             if key in seen:
