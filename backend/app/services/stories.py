@@ -272,6 +272,78 @@ async def _nearest_neighbour_pass(
         )
 
 
+async def _relatedness_gate(
+    conn: Any, schema: str, stories: list[dict[str, Any]], carries: list[dict[str, Any]]
+) -> dict[str, int]:
+    """QA the NATIVE id-carries against the capability DEFINITIONS (services/story_relatedness). A
+    native ``sub_cap_id`` hit is auto-confirmed at 1.0 with no text check, but the source ids are
+    noisy — many stories sit under a capability they do not concern. This scores each native carry's
+    story text (lexical TF-IDF over the target catalogue's subcap definitions) and, for the HIGH-
+    PRECISION 'misrouted' case only (weak on the assigned capability AND a genuinely better-fitting
+    sibling in the same pillar), demotes the carry to 'review' (kept, never dropped) and records the
+    real relatedness as the similarity, so the delivery surfaces stop showing a story that clearly
+    belongs to a different capability as confident delivery. The far larger 'orphan' case (weak on
+    the assigned capability but fitting nothing lexically) is LEFT confirmed here: separating orphan
+    garbage from a vocabulary-gap true match needs the DENSE embedding half (live), which this gate
+    is built to blend in — the deterministic lexical pass alone would over-demote. Config-gated
+    (matching.relatedness); best-effort — a failure leaves the id-carry intact, never blocks."""
+    from app.intelligence import gates
+    from app.services.story_relatedness import RelatednessIndex, story_doc
+
+    cfg = gates.story_relatedness_config()
+    if not cfg.enabled:
+        return {"relatedness_reviewed": 0}
+
+    rows = (
+        (
+            await conn.execute(
+                text(
+                    f"SELECT s.subcap_id AS id, s.name AS name, cap.name AS l2, "
+                    f"coalesce(s.description, '') AS description "
+                    f"FROM {schema}.subcap s "
+                    f"JOIN {schema}.capability cap ON cap.capability_id = s.capability_id"
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+    defs = [
+        {
+            "id": str(r["id"]),
+            "name": r["name"],
+            "l2": r["l2"],
+            "description": r["description"],
+            "pillar": str(r["id"])[:2],
+        }
+        for r in rows
+    ]
+    if not defs:
+        return {"relatedness_reviewed": 0}
+    index = RelatednessIndex(defs)
+    by_key = {s["k"]: s for s in stories}
+    reviewed = 0
+    for c in carries:
+        if c["status"] != "confirmed" or c["via"] != "native" or not c["carried_to_subcap"]:
+            continue
+        srow = by_key.get(c["story_key"])
+        if srow is None:
+            continue
+        verdict = index.classify(
+            story_doc(srow),
+            str(c["carried_to_subcap"]),
+            floor=cfg.floor,
+            margin=cfg.margin,
+            strong_sibling=cfg.strong_sibling,
+        )
+        if verdict.verdict == "misrouted":
+            c["status"] = "review"
+            c["similarity"] = round(verdict.assigned, 4)
+            c["via"] = "relatedness_review"
+            reviewed += 1
+    return {"relatedness_reviewed": reviewed}
+
+
 async def carry_forward(
     target_version: str = "v7", source_version: str | None = None
 ) -> dict[str, Any]:
@@ -316,6 +388,14 @@ async def carry_forward(
         # over the TARGET catalogue (config matching bands; review unless strongly grounded) so a
         # renamed/restructured version (e.g. v5) still lands carries instead of dropping them.
         await _nearest_neighbour_pass(conn, schema, stories, carries)
+        # RELATEDNESS QA: a native id-carry is auto-confirmed with no text check, but the source ids
+        # are noisy; demote the clearly-misrouted native carries (story fits a different capability
+        # far better) to 'review' before they land. Best-effort — never blocks the carry.
+        try:
+            rel_stats = await _relatedness_gate(conn, schema, stories, carries)
+        except Exception as exc:  # noqa: BLE001 - QA is advisory; a failure keeps the id-carries
+            logger.warning("relatedness gate unavailable for %s: %s", target_version, exc)
+            rel_stats = {"relatedness_reviewed": 0}
         await conn.execute(_CARRY, carries)
         if synthetic:
             await conn.execute(_INGEST_SYN, [_syn_ingest_row(r) for r in synthetic])
@@ -397,6 +477,7 @@ async def carry_forward(
         "distinct_subcaps": distinct,
         **ref_stats,
         **inherit_stats,
+        **rel_stats,
     }
 
 
