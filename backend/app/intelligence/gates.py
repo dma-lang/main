@@ -69,6 +69,35 @@ def matching_qa() -> tuple[float, bool]:
 
 
 @dataclass(frozen=True)
+class RelatednessConfig:
+    """Story<->capability relatedness gate knobs (config/gates.yaml: matching.relatedness.*)."""
+
+    enabled: bool
+    floor: float
+    margin: float
+    strong_sibling: float
+    dense_rescue_min_cosine: float
+
+
+def story_relatedness_config() -> RelatednessConfig:
+    """Config for the carry-forward relatedness gate (services/story_relatedness): whether it runs,
+    the lexical floor below which a story is weak on its assigned capability, the sibling margin +
+    absolute bar for a re-route, and the DENSE cosine that rescues a lexically-weak true match.
+    Config, not code — the operator tunes it against the real run without a deploy."""
+    section = (load_gate_config().get("matching") or {}).get("relatedness") or {}
+    cfg = RelatednessConfig(
+        enabled=bool(section.get("enabled", True)),
+        floor=float(section.get("floor", 0.05)),
+        margin=float(section.get("margin", 0.15)),
+        strong_sibling=float(section.get("strong_sibling", 0.25)),
+        dense_rescue_min_cosine=float(section.get("dense_rescue_min_cosine", 0.72)),
+    )
+    if not 0 <= cfg.floor <= 1 or not 0 < cfg.dense_rescue_min_cosine <= 1:
+        raise ValueError("gates.yaml: matching.relatedness floors must be in range")
+    return cfg
+
+
+@dataclass(frozen=True)
 class TrendConfig:
     """Trend signal weights + emergence cutoff + cluster floors (config/gates.yaml: trends.*)."""
 

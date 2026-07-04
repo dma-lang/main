@@ -63,6 +63,20 @@ matching:
   # flagged for review, never auto-confirmed.
   dense_corroboration_min_cosine: 0.82
   require_pillar_for_confirm: true
+  # Story<->capability RELATEDNESS gate (services/story_relatedness). A native id-carry is auto-
+  # confirmed at similarity 1.0 with NO check that the story TEXT concerns the assigned capability;
+  # the source ids are noisy (many stories sit under a capability they do not relate to). This gate
+  # scores each native carry's story text against the assigned capability DEFINITION (lexical TF-IDF,
+  # blended with the DENSE embedding cosine live) and, when BOTH halves are weak, demotes it to
+  # 'review' (never dropped) and records the real relatedness as the carry similarity — so the
+  # delivery surfaces stop showing an unrelated story as confident delivery.
+  relatedness:
+    enabled: true
+    floor: 0.05                    # lexical relatedness below this = weak on the assigned capability
+    margin: 0.15                   # a sibling must beat the assigned by this to count as a re-route
+    strong_sibling: 0.25           # ...and clear this absolute bar (a genuinely better home)
+    dense_rescue_min_cosine: 0.72  # DENSE cosine to the assigned subcap at/above which a lexically
+                                   # weak match is KEPT (a vocabulary-gap true match is never demoted)
 
 # Knowledge-graph Layer B proposal thresholds (pending_edge; gated + human-approved before commit).
 knowledge_graph:
