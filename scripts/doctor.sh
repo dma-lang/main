@@ -29,6 +29,16 @@
 #
 set -euo pipefail
 
+# The managed credential broker prints a benign, non-fatal line to stderr on most gcloud calls —
+# "Regional Access Boundary HTTP request failed after retries: ... Account not found for email:
+# <session>|<you>" — because it scopes the brokered token, the synthetic principal 404s, and it
+# then falls back (every call still succeeds). Drop ONLY that exact line from our stderr so the
+# check/heal report stays readable; real gcloud errors and our own warnings pass through untouched.
+# Some lines stay glued to gcloud's progress spinner (same line) and can't be split off. QUIET_BROKER=0 disables.
+if [ "${QUIET_BROKER:-1}" = "1" ]; then
+  exec 2> >(grep --line-buffered -v 'Regional Access Boundary HTTP request failed' >&2)
+fi
+
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-cia}"
 JOB="${JOB:-cia-migrate}"
@@ -245,12 +255,18 @@ IMAGE="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='va
 # app.refresh = alembic upgrade head THEN re-provision + re-carry every cat_<v>, so a deploy never
 # serves stale catalogue / delivery. REFRESH_BUILD_ID makes a same-image re-run a no-op (no rebuild,
 # no embedding spend); the longer task timeout covers the extra carry/offerings/embeddings work.
+# MEMORY: the R8 rich re-ingest grew the story seed ~16x (~34MB / 14,406 rows, loaded whole); the
+# Cloud Run 512Mi default OOM-kills this job (SIGKILL leaves NO app error log — the classic empty
+# "migration error" block below). 4Gi/2CPU gives headroom; MIGRATE_MEM raises it further on an OOM
+# heal. `jobs update` re-converges an EXISTING job's memory, so re-running the doctor fixes a job
+# that was created too small.
+MIGRATE_MEM="${MIGRATE_MEM:-4Gi}"
 JOB_ARGS=(--image "$IMAGE" --region "$REGION"
           --set-cloudsql-instances "$SQL_CONN"
           --set-secrets "DATABASE_URL=${DB_SECRET}:latest"
           --command uv --args run,python,-m,app.refresh
           --update-env-vars "REFRESH_BUILD_ID=${IMAGE}"
-          --max-retries 1 --task-timeout 1800)
+          --memory "$MIGRATE_MEM" --cpu 2 --max-retries 1 --task-timeout 3600)
 if gcloud run jobs describe "$JOB" --region "$REGION" >/dev/null 2>&1; then
   gcloud run jobs update "$JOB" "${JOB_ARGS[@]}" --quiet && ok "job converged to fresh image + SQL attach"
 else
@@ -262,6 +278,17 @@ ATTACH="$(gcloud run jobs describe "$JOB" --region "$REGION" --format=yaml | gre
 migrate_logs() {
   gcloud logging read "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${JOB}\" AND severity>=ERROR" \
     --freshness=15m --limit 40 --format='value(textPayload)'
+}
+# All-severity job logs + the execution's terminal condition — an OOM/SIGKILL emits NO app ERROR
+# log, so ``migrate_logs`` comes back empty; these give the operator something to see and let the
+# heal loop recognise the out-of-memory case.
+migrate_logs_any() {
+  gcloud logging read "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${JOB}\"" \
+    --freshness=15m --limit 60 --format='value(textPayload)' 2>/dev/null || true
+}
+migrate_terminated() {
+  gcloud run jobs executions list --job="$JOB" --region="$REGION" --limit=1 \
+    --format='value(status.conditions.message)' 2>/dev/null || true
 }
 for attempt in 1 2 3; do
   if gcloud run jobs execute "$JOB" --region "$REGION" --wait --quiet; then
@@ -281,9 +308,18 @@ for attempt in 1 2 3; do
     gcloud sql databases create "$DB_NAME" --instance="$SQL_INSTANCE" --quiet || true
   elif grep -qiE 'server closed the connection unexpectedly|connection timeout|not reachable after' <<<"$LOGS"; then
     warn "attempt ${attempt}: transient connectivity (proxy/instance) — retrying"
+  elif grep -qiE 'oom|out of memory|memory limit|cannot allocate|memoryerror|signal 9|code 137' \
+         <<<"$LOGS$(migrate_terminated)" || [ -z "${LOGS//[[:space:]]/}" ]; then
+    # OOM/SIGKILL leaves NO application error log, so an EMPTY error-log after a hard failure IS the
+    # out-of-memory signature (the R8 rich seed loads whole into memory). Raise the job's memory and
+    # retry — the next iteration executes the re-converged, larger job.
+    case "$MIGRATE_MEM" in 4Gi) MIGRATE_MEM=8Gi ;; 8Gi) MIGRATE_MEM=16Gi ;; *) MIGRATE_MEM=16Gi ;; esac
+    warn "attempt ${attempt}: no application error log after a hard failure = OOM/SIGKILL (the rich R8 story seed exceeds the container memory). Raising job memory to ${MIGRATE_MEM} and retrying."
+    gcloud run jobs update "$JOB" --region "$REGION" --memory "$MIGRATE_MEM" --cpu 2 --quiet
+    fixed "migrate job memory -> ${MIGRATE_MEM}"
   else
-    step "unrecognised failure — the job's own error lines:"
-    grep -E '^(psycopg|sqlalchemy|alembic|RuntimeError|TimeoutError|FileNotFoundError)' <<<"$LOGS" | sort -u | head -8
+    step "unrecognised failure — the job's own log lines (all severities):"
+    migrate_logs_any | tail -25 | sed 's/^/    /'
     die "migration failed for a reason the doctor does not auto-heal (see lines above)"
   fi
 done

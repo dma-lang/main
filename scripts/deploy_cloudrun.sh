@@ -97,12 +97,18 @@ log "image by digest: ${IMAGE_DIGEST}"
 # BEFORE traffic moves. REFRESH_BUILD_ID=<digest> makes a re-run of the same image skip the rebuild
 # (idempotent, no embedding spend); a genuinely new image refreshes exactly once. Bump the task
 # timeout because the refresh does more than a bare migration (re-carry + offerings + embeddings).
+# MEMORY: the R8 rich re-ingest grew the story seed ~16x (472KB -> 7.9MB gz, ~34MB / 14,406 rows
+# loaded whole via json.load); the Cloud Run 512Mi default OOM-kills the job (SIGKILL, no app log).
+# 4Gi/2CPU gives headroom for the parsed corpus + insert batches + synthesis; override via env.
+MIGRATE_MEM="${MIGRATE_MEM:-4Gi}"
+MIGRATE_CPU="${MIGRATE_CPU:-2}"
 log "migrate + data-plane refresh job (advisory-locked; re-provision + re-carry) BEFORE any traffic moves"
 retry "deploy job converge" 3 gcloud run jobs update "$MIGRATE_JOB" \
   --region "$REGION" --image "$IMAGE_DIGEST" \
   --command uv --args run,python,-m,app.refresh \
   --update-env-vars "REFRESH_BUILD_ID=${IMAGE_DIGEST}" \
-  --task-timeout=1800 --quiet
+  --memory="$MIGRATE_MEM" --cpu="$MIGRATE_CPU" \
+  --task-timeout=3600 --quiet
 retry "deploy job execute" 2 gcloud run jobs execute "$MIGRATE_JOB" \
   --region "$REGION" --wait --quiet
 log "migration + data-plane refresh complete"
