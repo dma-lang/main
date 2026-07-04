@@ -322,7 +322,7 @@ async def _relatedness_gate(
         return {"relatedness_reviewed": 0}
     index = RelatednessIndex(defs)
     by_key = {s["k"]: s for s in stories}
-    reviewed = 0
+    reviewed = rerouted = 0
     for c in carries:
         if c["status"] != "confirmed" or c["via"] != "native" or not c["carried_to_subcap"]:
             continue
@@ -336,12 +336,27 @@ async def _relatedness_gate(
             margin=cfg.margin,
             strong_sibling=cfg.strong_sibling,
         )
-        if verdict.verdict == "misrouted":
+        if verdict.verdict != "misrouted":
+            continue
+        if cfg.reroute and verdict.reroute:
+            # the story clearly concerns a DIFFERENT capability — re-map the carry to the best-fit
+            # sibling and flag it 'review' (an NLP re-map is human-checkable; the source id was
+            # wrong). The delivery then shows the story under the capability it actually addresses.
+            base, _sv = normalize_id(verdict.reroute)
+            c["carried_to_subcap"] = verdict.reroute
+            c["base_subcap"] = base
+            c["similarity"] = round(verdict.best, 4)
+            c["status"] = "review"
+            c["via"] = "relatedness_reroute"
+            rerouted += 1
+        else:
+            # re-route disabled (or no clear target): keep the id-carry but demote off 'confirmed'
+            # so a mis-mapped story is not counted as confident delivery under the wrong capability.
             c["status"] = "review"
             c["similarity"] = round(verdict.assigned, 4)
             c["via"] = "relatedness_review"
             reviewed += 1
-    return {"relatedness_reviewed": reviewed}
+    return {"relatedness_reviewed": reviewed, "relatedness_rerouted": rerouted}
 
 
 async def carry_forward(
