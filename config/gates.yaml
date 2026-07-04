@@ -76,6 +76,13 @@ matching:
                                    # demoting it); the source sub_cap_id is authoritatively wrong for
                                    # ~a quarter of stories, so re-routing puts delivery under the
                                    # capability the story actually addresses (flagged 'review')
+    batch_dump: true               # a subcap whose carried stories are almost all weak-fit is a
+                                   # wholesale source dumping ground (e.g. Innovation Vision — 100%
+                                   # weak, all Knowledge-Base tasks); demote its ORPHAN carries off
+                                   # 'confirmed'. Gated on the ratio so a healthy subcap with a few
+                                   # vocabulary-gap orphans is spared (dense-half territory).
+    batch_dump_min_ratio: 0.8      # >= this fraction of a subcap's carries weak-fit => it's a dump
+    batch_dump_min_stories: 5      # ...and it must carry at least this many stories
     floor: 0.05                    # lexical relatedness below this = weak on the assigned capability
     margin: 0.15                   # a sibling must beat the assigned by this to count as a re-route
     strong_sibling: 0.25           # ...and clear this absolute bar (a genuinely better home)
