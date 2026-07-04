@@ -322,6 +322,8 @@ async def _relatedness_gate(
         return {"relatedness_reviewed": 0}
     index = RelatednessIndex(defs)
     by_key = {s["k"]: s for s in stories}
+    per_subcap: dict[str, list[int]] = {}  # ORIGINAL subcap -> [carried, weak-fit]
+    orphans: list[tuple[dict[str, Any], str, float]] = []  # (carry, orig_subcap, assigned)
     reviewed = rerouted = 0
     for c in carries:
         if c["status"] != "confirmed" or c["via"] != "native" or not c["carried_to_subcap"]:
@@ -329,34 +331,62 @@ async def _relatedness_gate(
         srow = by_key.get(c["story_key"])
         if srow is None:
             continue
+        orig = str(c["carried_to_subcap"])
         verdict = index.classify(
             story_doc(srow),
-            str(c["carried_to_subcap"]),
+            orig,
             floor=cfg.floor,
             margin=cfg.margin,
             strong_sibling=cfg.strong_sibling,
         )
-        if verdict.verdict != "misrouted":
-            continue
-        if cfg.reroute and verdict.reroute:
-            # the story clearly concerns a DIFFERENT capability — re-map the carry to the best-fit
-            # sibling and flag it 'review' (an NLP re-map is human-checkable; the source id was
-            # wrong). The delivery then shows the story under the capability it actually addresses.
-            base, _sv = normalize_id(verdict.reroute)
-            c["carried_to_subcap"] = verdict.reroute
-            c["base_subcap"] = base
-            c["similarity"] = round(verdict.best, 4)
-            c["status"] = "review"
-            c["via"] = "relatedness_reroute"
-            rerouted += 1
-        else:
-            # re-route disabled (or no clear target): keep the id-carry but demote off 'confirmed'
-            # so a mis-mapped story is not counted as confident delivery under the wrong capability.
-            c["status"] = "review"
-            c["similarity"] = round(verdict.assigned, 4)
-            c["via"] = "relatedness_review"
-            reviewed += 1
-    return {"relatedness_reviewed": reviewed, "relatedness_rerouted": rerouted}
+        stat = per_subcap.setdefault(orig, [0, 0])
+        stat[0] += 1
+        weak = verdict.assigned < cfg.floor
+        stat[1] += int(weak)
+        if verdict.verdict == "misrouted":
+            if cfg.reroute and verdict.reroute:
+                # the story clearly concerns a DIFFERENT capability — re-map the carry to the best-
+                # fit sibling and flag it 'review' (an NLP re-map is human-checkable; the source id
+                # was wrong). Delivery then shows the story under the capability it addresses.
+                base, _sv = normalize_id(verdict.reroute)
+                c["carried_to_subcap"] = verdict.reroute
+                c["base_subcap"] = base
+                c["similarity"] = round(verdict.best, 4)
+                c["status"] = "review"
+                c["via"] = "relatedness_reroute"
+                rerouted += 1
+            else:
+                c["status"] = "review"
+                c["similarity"] = round(verdict.assigned, 4)
+                c["via"] = "relatedness_review"
+                reviewed += 1
+        elif weak:
+            # an ORPHAN (weak on its capability, no clearly-better home) — deferred to the batch-
+            # dump pass, which only demotes it if its WHOLE subcap is a source dumping ground.
+            orphans.append((c, orig, verdict.assigned))
+    # BATCH-DUMP: a subcap whose carries are >= threshold weak-fit is a wholesale source mis-map
+    # (e.g. Innovation Vision — 100% weak, all Knowledge-Base tasks). Demote its remaining orphan
+    # carries off 'confirmed' so they stop counting as confident delivery under a capability they do
+    # not concern; the 'fit' minority stays. Gated on the per-subcap ratio, so a healthy subcap with
+    # a few vocabulary-gap orphans is spared (that separation otherwise needs the live dense half).
+    dumped = 0
+    if cfg.batch_dump:
+        for c, orig, assigned in orphans:
+            carried, weak_n = per_subcap[orig]
+            is_dump = (
+                carried >= cfg.batch_dump_min_stories
+                and weak_n / carried >= cfg.batch_dump_min_ratio
+            )
+            if is_dump:
+                c["status"] = "review"
+                c["similarity"] = round(assigned, 4)
+                c["via"] = "relatedness_batch_dump"
+                dumped += 1
+    return {
+        "relatedness_reviewed": reviewed,
+        "relatedness_rerouted": rerouted,
+        "relatedness_batch_dumped": dumped,
+    }
 
 
 async def carry_forward(

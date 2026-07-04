@@ -74,6 +74,9 @@ class RelatednessConfig:
 
     enabled: bool
     reroute: bool
+    batch_dump: bool
+    batch_dump_min_ratio: float
+    batch_dump_min_stories: int
     floor: float
     margin: float
     strong_sibling: float
@@ -90,6 +93,9 @@ def story_relatedness_config() -> RelatednessConfig:
     cfg = RelatednessConfig(
         enabled=bool(section.get("enabled", True)),
         reroute=bool(section.get("reroute", True)),
+        batch_dump=bool(section.get("batch_dump", True)),
+        batch_dump_min_ratio=float(section.get("batch_dump_min_ratio", 0.8)),
+        batch_dump_min_stories=int(section.get("batch_dump_min_stories", 5)),
         floor=float(section.get("floor", 0.05)),
         margin=float(section.get("margin", 0.15)),
         strong_sibling=float(section.get("strong_sibling", 0.25)),
