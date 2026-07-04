@@ -17,6 +17,7 @@ roles:
 # generic substitutions for the other bracketed technical placeholders in the raw text
 # ([OBJECT_NAME], [FIELD_NAME], [FLOW_NAME], ...) so the narrative never leaks a raw token.
 placeholders:
+  CLIENT_ORG: "client organisation"  # "As a [CLIENT_ORG] user, …" -> "As a client organisation user"
   OBJECT_NAME: "the relevant object"
   FIELD_NAME: "the relevant field"
   FLOW_NAME: "the configured flow"

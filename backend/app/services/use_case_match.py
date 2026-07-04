@@ -67,12 +67,16 @@ async def _embed_all(texts: list[str]) -> list[list[float]]:
 
 
 # Lightweight English/Jira stopwords — dropped so the cosine reflects CONTENT-word overlap, not
-# boilerplate ("the system shall enable the user to ..."). Kept small + deterministic.
+# boilerplate ("the system shall enable the user to ..."). Kept small + deterministic. The R8 rich
+# match doc folds in description + AC text, so the user-story/gherkin scaffolding ("I want to be
+# able to", "Given/When/Then") is stopped too — scaffolding shared by every story must never count
+# as a discriminating term.
 _STOP = frozenset(
     (
         "a an and are as at be by for from has have in into is it its of on or that the their this "
         "to with will shall can able user users system systems story epic feature support supports "
-        "provide provides using use used via per across enable enables allow allows new existing"
+        "provide provides using use used via per across enable enables allow allows new existing "
+        "want wants need needs must should would could ability like given then so that when"
     ).split()
 )
 

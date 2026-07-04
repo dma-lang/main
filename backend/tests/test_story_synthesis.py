@@ -30,8 +30,9 @@ _SD = (
 
 def test_role_goal_benefit_parsed_and_role_substituted() -> None:
     r = ss.synthesize("Extend covenant due date", _DESC, _AC, _SD, "T2-CL", "CL")
-    # [CLIENT_ROLE] rendered in the subvertical's language (Commercial Lending)
-    assert r.role == "a commercial lending officer"
+    # [CLIENT_ROLE] rendered in the subvertical's language (Commercial Lending); the role facet is
+    # article-less (the weave restores the article)
+    assert r.role == "commercial lending officer"
     assert "extend the Due Date" in (r.goal or "")
     assert r.benefit and "Next Evaluation Date" in r.benefit
 
@@ -55,7 +56,8 @@ def test_narrative_is_cohesive_third_person_and_bounded() -> None:
     r = ss.synthesize("Extend covenant due date", _DESC, _AC, _SD, "T2-CL", "CL")
     n = r.narrative
     assert n.startswith("Extend covenant due date.")
-    assert "a commercial lending officer" in n
+    # the parsed story weaves as a GRAMMATICAL third-person sentence, subject + conjugated verb
+    assert "A commercial lending officer wants to extend the Due Date" in n
     assert "so that they don't have to" in n  # first-person benefit re-voiced to third person
     assert "[CLIENT_ROLE]" not in n and "[" not in n  # no placeholder leaks
     assert len(n) <= ss._NARRATIVE_CAP
@@ -71,13 +73,13 @@ def test_tbd_solution_degrades_gracefully() -> None:
         "RB",
     )
     assert r.approach == ()  # a TBD/empty solution design yields no approach, never invented
-    assert r.role == "a retail banking operations lead"
+    assert r.role == "retail banking operations lead"
     assert r.narrative and "TBD" not in r.narrative
 
 
 def test_unknown_sv_falls_back_to_default_role() -> None:
     r = ss.synthesize("x", "As a [CLIENT_ROLE], I want a thing", "", "", None, "ZZ")
-    assert r.role == "a financial-services stakeholder"
+    assert r.role == "financial-services stakeholder"
 
 
 def test_no_user_story_shape_uses_first_sentence_as_goal() -> None:
