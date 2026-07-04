@@ -612,7 +612,8 @@ async def subcap_delivery(
         "WHERE rn <= 3"
     )
     scan_sql = text(
-        "SELECT st.story_key, st.project_key, st.summary, st.composite_score::float "
+        "SELECT st.story_key, st.project_key, st.client_name, st.summary, "
+        "st.composite_score::float "
         + link
         + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :cap"
     )
@@ -654,6 +655,7 @@ async def subcap_delivery(
                 StoryRow(
                     story_key=str(m["story_key"]),
                     project_key=m.get("project_key"),
+                    client_name=m.get("client_name"),
                     summary=m.get("summary"),
                     composite_score=m.get("composite_score"),
                 )
