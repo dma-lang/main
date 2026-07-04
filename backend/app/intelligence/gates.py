@@ -73,6 +73,7 @@ class RelatednessConfig:
     """Story<->capability relatedness gate knobs (config/gates.yaml: matching.relatedness.*)."""
 
     enabled: bool
+    reroute: bool
     floor: float
     margin: float
     strong_sibling: float
@@ -81,12 +82,14 @@ class RelatednessConfig:
 
 def story_relatedness_config() -> RelatednessConfig:
     """Config for the carry-forward relatedness gate (services/story_relatedness): whether it runs,
-    the lexical floor below which a story is weak on its assigned capability, the sibling margin +
+    whether a clearly-misrouted story is RE-ROUTED to its best-fit subcap (vs only demoted), the
+    lexical floor below which a story is weak on its assigned capability, the sibling margin +
     absolute bar for a re-route, and the DENSE cosine that rescues a lexically-weak true match.
     Config, not code — the operator tunes it against the real run without a deploy."""
     section = (load_gate_config().get("matching") or {}).get("relatedness") or {}
     cfg = RelatednessConfig(
         enabled=bool(section.get("enabled", True)),
+        reroute=bool(section.get("reroute", True)),
         floor=float(section.get("floor", 0.05)),
         margin=float(section.get("margin", 0.15)),
         strong_sibling=float(section.get("strong_sibling", 0.25)),

@@ -72,6 +72,10 @@ matching:
   # delivery surfaces stop showing an unrelated story as confident delivery.
   relatedness:
     enabled: true
+    reroute: true                  # re-map a clearly-misrouted story to its best-fit subcap (vs only
+                                   # demoting it); the source sub_cap_id is authoritatively wrong for
+                                   # ~a quarter of stories, so re-routing puts delivery under the
+                                   # capability the story actually addresses (flagged 'review')
     floor: 0.05                    # lexical relatedness below this = weak on the assigned capability
     margin: 0.15                   # a sibling must beat the assigned by this to count as a re-route
     strong_sibling: 0.25           # ...and clear this absolute bar (a genuinely better home)
