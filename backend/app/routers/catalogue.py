@@ -100,6 +100,12 @@ class StoryRow(BaseModel):
     reusability_layer: str | None = None
     population: str | None = None
     is_synthetic: bool = False
+    # R8 rich detail — the resolved client, the synthesized narrative + facets, and the raw text
+    client_name: str | None = None
+    narrative: str | None = None
+    facets: dict[str, Any] | None = None
+    ac_text: str | None = None
+    solution_design_text: str | None = None
 
 
 # The carried-delivery source for a subcap. The analysis-grade default is JIRA-ONLY (matches the
@@ -513,7 +519,8 @@ async def subcap_stories(
         "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
         "st.delivery_score::float AS delivery_score, st.epic_key, st.cap_name, "
         "st.category_name, st.reusability_layer, st.population, "
-        "st.story_sv_code, st.tier, st.is_synthetic "
+        "st.story_sv_code, st.tier, st.is_synthetic, "
+        "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text "
         + where
         + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
     )
@@ -594,10 +601,12 @@ async def subcap_delivery(
     )
     top_sql = text(
         "SELECT story_key, project_key, summary, confidence_level, composite_score, ac_score, "
-        "sd_score, story_score, story_sv_code, tier, is_synthetic FROM ("
+        "sd_score, story_score, story_sv_code, tier, is_synthetic, "
+        "client_name, narrative, facets, ac_text, solution_design_text FROM ("
         "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
         "st.composite_score::float, st.ac_score::float, st.sd_score::float, "
         "st.story_score::float, st.story_sv_code, st.tier, st.is_synthetic, "
+        "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text, "
         "row_number() OVER (PARTITION BY coalesce(st.project_key, '(no project)') "
         "ORDER BY st.composite_score DESC NULLS LAST, st.story_key) AS rn " + link + ") t "
         "WHERE rn <= 3"
@@ -922,6 +931,168 @@ async def subcap_enrichment(
         maturity=[Maturity.model_validate(r) for r in maturity],
         offerings=[OfferingRef.model_validate(r) for r in offerings],
         inherited_from=inherited_from,
+    )
+
+
+class OfferingAlignment(BaseModel):
+    offering_id: str
+    name: str
+    category: str | None = None
+    score: float  # the matcher's confidence that this offering tackles the subcap
+    capability: str  # the offering capability that drove the match (the "why")
+    aligned_use_cases: list[dict[str, str]]  # the subcap's use cases this offering's scope covers
+    explanation: str  # grounded, plain-language WHY this offering applies
+    evidence_story_keys: list[str]  # top delivered stories on the subcap
+
+
+class SubcapOfferingCoverage(BaseModel):
+    subcap_id: str
+    multi: bool  # a subcap tackled by >= 2 productized offerings
+    offerings: list[OfferingAlignment]
+
+
+@router.get("/{version}/subcaps/{subcap_id}/offerings")
+async def subcap_offerings(
+    version: str, subcap_id: str, _user: dict[str, Any] = Depends(get_current_user)
+) -> SubcapOfferingCoverage:
+    """Every productized offering that tackles this subcap, and — when MORE THAN ONE does — a
+    grounded explanation of each: the capability that drove the match, the subcap's use cases that
+    offering's scope aligns with (deterministic TF-IDF between the offering capability and each use
+    case), and the delivered stories that evidence it. A subcap MAY be tackled by several offerings;
+    this surfaces and explains that instead of hiding it."""
+    import math
+    import re as _re
+
+    from app.services.use_case_match import _score, _tfidf, _tokens
+
+    v = await resolve_version(version)
+    s = _schema(v)
+    async with _engine().connect() as conn:
+        off_s = await _enrichment_schema(conn, s, "offering_subcap")
+        uc_s = await _enrichment_schema(conn, s, "use_case")
+        offs = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT o.offering_id, o.name, o.category, "
+                        "os.mapping_rationale AS rationale, os.maturity_lift AS lift "
+                        f"FROM {off_s}.offering_subcap os "
+                        f"JOIN {off_s}.offering o ON o.offering_id = os.offering_id "
+                        "WHERE os.subcap_id = :sid ORDER BY o.name"
+                    ),
+                    {"sid": subcap_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        ucs = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT use_case_id, name, coalesce(description, '') AS d, "
+                        f"coalesce(archetype, '') AS a FROM {uc_s}.use_case "
+                        "WHERE subcap_id = :sid ORDER BY use_case_id"
+                    ),
+                    {"sid": subcap_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        evidence = [
+            str(r[0])
+            for r in (
+                await conn.execute(
+                    text(
+                        "SELECT scl.story_key FROM control.story_catalogue_link scl "
+                        "JOIN control.story st ON st.story_key = scl.story_key "
+                        "WHERE scl.version_id = :ver AND scl.subcap_id = :sid "
+                        "ORDER BY st.composite_score DESC NULLS LAST, scl.story_key LIMIT 6"
+                    ),
+                    {"ver": v.version_id, "sid": subcap_id},
+                )
+            ).all()
+        ]
+
+    uc_toks = [_tokens(f"{u['name']} {u['d']} {u['a'].replace('_', ' ')}") for u in ucs]
+    uc_vecs, uc_norms = _tfidf(uc_toks) if uc_toks else ([], [])
+    out: list[OfferingAlignment] = []
+    for o in offs:
+        cap = _offering_capability(o["rationale"])
+        m = _re.search(r"score\s+([\d.]+)", o["rationale"] or "")
+        score = float(m.group(1)) if m else float(o["lift"] or 0.0)
+        q = _tokens(f"{o['name']} {cap}")
+        qn = math.sqrt(sum(n * n for n in q.values()))
+        aligned = sorted(
+            ((_score(q, qn, uc_vecs[i], uc_norms[i]), ucs[i]) for i in range(len(ucs))),
+            key=lambda kv: -kv[0],
+        )
+        picks = [
+            {"use_case_id": str(u["use_case_id"]), "name": str(u["name"])}
+            for sc, u in aligned
+            if sc > 0.0
+        ][:4]
+        uc_names = ", ".join(p["name"] for p in picks) or "its use cases"
+        explanation = (
+            f"{o['name']} applies here via its '{cap or o['name']}' capability "
+            f"(match {score:.0%}); the subcap's {uc_names} and {len(evidence)} delivered "
+            "stories align with this offering's scope."
+        )
+        out.append(
+            OfferingAlignment(
+                offering_id=str(o["offering_id"]),
+                name=str(o["name"]),
+                category=o["category"],
+                score=round(score, 3),
+                capability=cap,
+                aligned_use_cases=picks,
+                explanation=explanation,
+                evidence_story_keys=evidence,
+            )
+        )
+    out.sort(key=lambda a: -a.score)
+    return SubcapOfferingCoverage(subcap_id=subcap_id, multi=len(out) >= 2, offerings=out)
+
+
+class SubcapSvSummary(BaseModel):
+    subvertical: str  # the SV this rollup is for ('' = the all-SV canonical fallback)
+    story_count: int
+    client_count: int
+    rep_story_keys: list[str]  # the SV's representative delivered stories (top by composite)
+    narrative: str | None = None  # SV-tailored delivery narrative (all-SV when no lens)
+
+
+@router.get("/{version}/subcaps/{subcap_id}/sv-summary")
+async def subcap_sv_summary(
+    version: str,
+    subcap_id: str,
+    sv: str = Query(""),
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> SubcapSvSummary:
+    """The subcap's delivery TAILORED to the active subvertical lens (its own representative stories
+    + an SV narrative), falling back to the all-SV canonical rollup when no lens is set. Backed by
+    the precomputed control.sv_rollup."""
+    import json as _json
+
+    from app.services import sv_rollups
+
+    v = await resolve_version(version)
+    async with _engine().connect() as conn:
+        r = await sv_rollups.get(conn, v.version_id, "subcap", subcap_id, sv or None)
+    if r is None:
+        return SubcapSvSummary(
+            subvertical="", story_count=0, client_count=0, rep_story_keys=[], narrative=None
+        )
+    reps = r["rep_story_keys"]
+    if isinstance(reps, str):
+        reps = _json.loads(reps)
+    return SubcapSvSummary(
+        subvertical=str(r["subvertical"]),
+        story_count=int(r["story_count"]),
+        client_count=int(r["client_count"]),
+        rep_story_keys=[str(k) for k in reps],
+        narrative=r["narrative"],
     )
 
 
@@ -2637,7 +2808,8 @@ async def use_case_stories(
         "st.sd_score::float AS sd_score, st.story_score::float AS story_score, "
         "st.delivery_score::float AS delivery_score, st.epic_key, st.cap_name, "
         "st.category_name, st.reusability_layer, st.population, "
-        "st.story_sv_code, st.tier, st.is_synthetic "
+        "st.story_sv_code, st.tier, st.is_synthetic, "
+        "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text "
         + where
         + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
     )

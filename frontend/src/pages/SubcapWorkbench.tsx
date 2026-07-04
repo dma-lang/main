@@ -6,16 +6,18 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 
-import type { SubcapDetail, SubcapEnrichment, SubcapNode } from '../api/client';
+import type { OfferingAlignment, SubcapDetail, SubcapEnrichment, SubcapNode } from '../api/client';
 import {
   useSubcap,
   useSubcapConnections,
   useSubcapEnrichment,
+  useSubcapOfferings,
   useSubcaps,
   useSubcapStories,
 } from '../api/queries';
 import { DeliveryDrillPanel } from '../components/DeliveryDrillPanel';
 import { Bar, Claim, Empty, LifeChip, Mag, PillarDot, Tier } from '../components/primitives';
+import { ClientChip, StoryDetail } from '../components/StoryDetail';
 import { go, openOffering, openReasoning, toast } from '../lib/events';
 import { clamp, LIFE_COLORS, PILLAR_COLORS, PILLAR_SHORT } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
@@ -462,18 +464,12 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
                 onClick={() => setOpen(isOpen ? null : st.story_key)}
               >
                 <div className="row gap8" style={{ minWidth: 0 }}>
-                  <Icon n={isOpen ? 'chevD' : 'chevR'} s={13} style={{ color: 'var(--text-tertiary)' }} />
-                  <span className="mono" style={{ fontSize: 11, color: 'var(--text-primary)', flex: 'none' }}>
-                    {st.story_key}
-                  </span>
+                  <Icon n={isOpen ? 'chevD' : 'chevR'} s={13} style={{ color: 'var(--text-tertiary)', flex: 'none' }} />
+                  {/* resolved client leads: client_name + story_key id + project secondary */}
+                  <ClientChip story={st} idFirst size={9} />
                   {st.is_synthetic && (
                     <span className="chip orange" style={{ fontSize: 8.5, flex: 'none' }} title="synthetic story (not real Jira delivery)">
                       synthetic
-                    </span>
-                  )}
-                  {st.project_key && (
-                    <span className="chip soft" style={{ fontSize: 9, flex: 'none' }} title="Jira project (client proxy)">
-                      {st.project_key}
                     </span>
                   )}
                   <span
@@ -503,16 +499,15 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
                   >
                     {st.summary || 'No summary recorded.'}
                   </div>
-                  {/* delivery metadata pulled from the Jira corpus */}
+                  {/* narrative + collapsible acceptance-criteria / solution-design (client in header) */}
+                  <div style={{ marginBottom: 10 }}>
+                    <StoryDetail story={st} showClient={false} />
+                  </div>
+                  {/* delivery metadata pulled from the Jira corpus (project shown in the header chip) */}
                   <div className="row wrap gap6" style={{ marginBottom: 10 }}>
                     {st.epic_key && (
                       <span className="chip soft" style={{ fontSize: 9.5 }} title="Jira epic">
                         epic {st.epic_key}
-                      </span>
-                    )}
-                    {st.project_key && (
-                      <span className="chip soft" style={{ fontSize: 9.5 }} title="Jira project (client proxy)">
-                        {st.project_key}
                       </span>
                     )}
                     {st.story_sv_code && (
@@ -595,6 +590,119 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
   );
 }
 
+// One productized offering's alignment card — its match score, the capability that drove it, the
+// aligned use-case chips, the grounded explanation and the evidence story keys.
+function OfferingCard({ o }: { o: OfferingAlignment }) {
+  return (
+    <div className="card" style={{ padding: '11px 13px' }}>
+      <div className="between" style={{ marginBottom: 6 }}>
+        <button
+          className="row gap8 sclink"
+          style={{ minWidth: 0, border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}
+          title={'Open ' + o.name + ' — matched subcaps & capabilities'}
+          onClick={() => openOffering(o.offering_id)}
+        >
+          <Icon n="package" s={13} style={{ color: 'var(--interactive)', flex: 'none' }} />
+          <span style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {o.name}
+          </span>
+        </button>
+        <span
+          className="num"
+          style={{ fontSize: 11.5, flex: 'none', color: scoreColor(o.score * 4) }}
+          title="matcher confidence this offering tackles the subcap"
+        >
+          {o.score.toFixed(2)}
+        </span>
+      </div>
+      <div className="row wrap gap6" style={{ marginBottom: 6 }}>
+        {o.category && (
+          <span className="chip soft" style={{ fontSize: 9.5 }}>
+            {o.category}
+          </span>
+        )}
+        {o.capability && (
+          <span className="chip blue" style={{ fontSize: 9.5 }} title="the offering capability that drove the match">
+            {o.capability}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 8 }}>
+        {o.explanation}
+      </div>
+      {o.aligned_use_cases.length > 0 && (
+        <div style={{ marginBottom: o.evidence_story_keys.length ? 8 : 0 }}>
+          <div className="eyebrow" style={{ fontSize: 9, marginBottom: 4 }}>
+            Aligned use cases · {o.aligned_use_cases.length}
+          </div>
+          <div className="row wrap gap6">
+            {o.aligned_use_cases.map((u) => (
+              <span key={u.use_case_id} className="chip outline" style={{ fontSize: 9.5 }} title={u.use_case_id}>
+                {u.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {o.evidence_story_keys.length > 0 && (
+        <div>
+          <div className="eyebrow" style={{ fontSize: 9, marginBottom: 4 }}>
+            Evidence stories · {o.evidence_story_keys.length}
+          </div>
+          <div className="row wrap gap6">
+            {o.evidence_story_keys.map((k) => (
+              <span key={k} className="chip soft mono" style={{ fontSize: 9.5 }}>
+                {k}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Productized offerings (R8) — every offering that tackles this subcap. When MORE THAN ONE does
+// (`multi`), they render side by side, each grounded with its score, capability, aligned use cases,
+// explanation and evidence stories, so a multi-offering subcap is surfaced and explained, not hidden.
+function OfferingsSection({ version, node }: { version: string; node: SubcapNode }) {
+  const cov = useSubcapOfferings(version, node.id);
+  const offerings = cov.data?.offerings ?? [];
+  if (cov.isLoading) {
+    return (
+      <div className="muted" style={{ fontSize: 12, marginBottom: 16 }}>
+        Aligning productized offerings…
+      </div>
+    );
+  }
+  if (!offerings.length) return null;
+  return (
+    <>
+      <div className="between" style={{ marginBottom: 8 }}>
+        <div className="eyebrow">Productized offerings · {offerings.length}</div>
+        {cov.data?.multi && (
+          <span className="chip teal" style={{ fontSize: 9.5 }} title="this subcap is tackled by more than one offering">
+            multi-offering
+          </span>
+        )}
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: offerings.length > 1 ? 'repeat(auto-fit, minmax(260px, 1fr))' : '1fr',
+          gap: 8,
+          marginBottom: 16,
+          alignItems: 'start',
+        }}
+      >
+        {offerings.map((o) => (
+          <OfferingCard key={o.offering_id} o={o} />
+        ))}
+      </div>
+    </>
+  );
+}
+
 // Connections tab — KG Layer-A siblings (same-capability subcaps, ranked by shared L3 platforms),
 // a deterministic projection of the link tables, plus recent gated news signals (F7) with the
 // full trust envelope (Mag · Tier · Claim · ERS) and a reasoning backlink.
@@ -605,6 +713,7 @@ function ConnTab({ version, node }: { version: string; node: SubcapNode }) {
   const latent = conn.data?.latent ?? [];
   return (
     <div className="fade-in">
+      <OfferingsSection version={version} node={node} />
       <div className="eyebrow" style={{ marginBottom: 8 }}>
         Related subcaps · same capability (Layer A) + nearest by meaning (semantic)
       </div>

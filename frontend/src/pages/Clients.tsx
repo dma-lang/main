@@ -11,6 +11,19 @@ import { go, openReasoning, toast } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 
+// Entity-resolution confidence for the client identity — text, not colour-only (WCAG). Absent when
+// the key carries no resolved-client confidence (e.g. a SOW-only account).
+function ConfChip({ v }: { v: number | null | undefined }) {
+  if (v == null) return null;
+  const pct = Math.round(v * 100);
+  const cls = v >= 0.8 ? 'teal' : v >= 0.5 ? 'soft' : 'orange';
+  return (
+    <span className={'chip ' + cls} style={{ fontSize: 10 }} title="entity-resolution confidence for this client identity">
+      match {pct}%
+    </span>
+  );
+}
+
 export function Clients() {
   const ui = useUi();
   const [sel, setSel] = useState<string | null>(null);
@@ -62,18 +75,27 @@ export function Clients() {
                   background: active === c.key ? 'var(--surface-overlay)' : 'var(--surface-base)',
                 }}
               >
-                <div className="row gap8">
-                  <b className="mono" style={{ fontSize: 12 }}>
-                    {c.key}
+                <div className="row gap8" style={{ minWidth: 0 }}>
+                  {/* the resolved client NAME is the prominent title; the key/project is secondary */}
+                  <b
+                    style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {c.client_name ?? c.key}
                   </b>
-                  <span className="muted" style={{ fontSize: 10.5, marginLeft: 'auto' }}>
+                  <span className="muted" style={{ fontSize: 10.5, marginLeft: 'auto', flex: 'none' }}>
                     {c.last_sow ?? ''}
                   </span>
                 </div>
-                <div className="row gap8 mt8" style={{ fontSize: 10.5 }}>
+                {c.client_name && c.client_name !== c.key && (
+                  <div className="mono muted" style={{ fontSize: 10, marginTop: 2 }}>
+                    {c.key}
+                  </div>
+                )}
+                <div className="row wrap gap8 mt8" style={{ fontSize: 10.5 }}>
                   <span className="chip soft">{c.sows} SOWs</span>
                   <span className="chip soft">{c.stories.toLocaleString()} stories</span>
                   <span className="chip teal">{c.subcaps_touched} subcaps</span>
+                  {c.projects > 1 && <span className="chip soft">{c.projects} projects</span>}
                 </div>
               </div>
             ))}
@@ -89,8 +111,26 @@ export function Clients() {
               <>
                 <div className="card pad">
                   <div className="between" style={{ marginBottom: 10 }}>
-                    <div className="h2">{j.key}</div>
-                    <span className="chip soft">
+                    <div style={{ minWidth: 0 }}>
+                      {/* the resolved client name is the journey title + its match-confidence chip */}
+                      <div className="row gap8" style={{ flexWrap: 'wrap' }}>
+                        <div className="h2">{j.client_name ?? j.key}</div>
+                        <ConfChip v={j.client_match_confidence} />
+                      </div>
+                      <div className="row gap8 mt8" style={{ flexWrap: 'wrap' }}>
+                        {j.client_name && j.client_name !== j.key && (
+                          <span className="mono muted" style={{ fontSize: 11 }}>
+                            {j.key}
+                          </span>
+                        )}
+                        {j.salesforce_account_id && (
+                          <span className="chip soft mono" style={{ fontSize: 9.5 }} title="Salesforce account id">
+                            SFDC {j.salesforce_account_id}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span className="chip soft" style={{ flex: 'none' }}>
                       {j.stories.toLocaleString()} delivered stories
                     </span>
                   </div>

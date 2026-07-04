@@ -67,12 +67,16 @@ async def _embed_all(texts: list[str]) -> list[list[float]]:
 
 
 # Lightweight English/Jira stopwords — dropped so the cosine reflects CONTENT-word overlap, not
-# boilerplate ("the system shall enable the user to ..."). Kept small + deterministic.
+# boilerplate ("the system shall enable the user to ..."). Kept small + deterministic. The R8 rich
+# match doc folds in description + AC text, so the user-story/gherkin scaffolding ("I want to be
+# able to", "Given/When/Then") is stopped too — scaffolding shared by every story must never count
+# as a discriminating term.
 _STOP = frozenset(
     (
         "a an and are as at be by for from has have in into is it its of on or that the their this "
         "to with will shall can able user users system systems story epic feature support supports "
-        "provide provides using use used via per across enable enables allow allows new existing"
+        "provide provides using use used via per across enable enables allow allows new existing "
+        "want wants need needs must should would could ability like given then so that when"
     ).split()
 )
 
@@ -188,11 +192,18 @@ async def match_use_cases(version: str = "v7") -> dict[str, Any]:
         uc_vecs = await _embed_all([uc_text[u] for u in uc_ids]) if uc_ids else []
         uc_emb = {uc_ids[i]: uc_vecs[i] for i in range(len(uc_ids))}
 
-        # every carried (story, subcap) pair in THIS version, with the story summary text
+        # every carried (story, subcap) pair in THIS version, with a WEIGHTED RICH story doc (R8):
+        # summary x3 (the headline stays dominant, so attribution never drifts) + description x2 +
+        # ac_text x1 (the discriminating "what") — solution_design excluded (too long/noisy). Both
+        # the lexical and the dense halves read this doc, so AC/description terms sharpen which use
+        # case a story lands on without force-pinning. Aliased `summary` (the loop is unchanged).
         story_rows = (
             await conn.execute(
                 text(
-                    "SELECT scl.subcap_id, scl.story_key, coalesce(st.summary, '') AS summary "
+                    "SELECT scl.subcap_id, scl.story_key, "
+                    "repeat(coalesce(st.summary, '') || ' ', 3) "
+                    "|| repeat(coalesce(st.description, '') || ' ', 2) "
+                    "|| coalesce(st.ac_text, '') AS summary "
                     "FROM control.story_catalogue_link scl "
                     "JOIN control.story st ON st.story_key = scl.story_key "
                     "WHERE scl.version_id = :ver"

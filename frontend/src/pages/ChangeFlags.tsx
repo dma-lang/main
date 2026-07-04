@@ -65,6 +65,16 @@ export function ChangeFlags() {
       onRejectInstead: () => onReject(f.id),
       run: async () => {
         const r = await approve.mutateAsync(f.id);
+        // R7: an approved use case fans out to every other version where it belongs — surface the
+        // saved/skipped summary so one approval visibly propagates (or reports where it did not).
+        const p = r.propagated;
+        if (r.resolved && p && (p.saved.length || p.skipped.length)) {
+          const parts: string[] = [];
+          if (p.saved.length) parts.push(`saved to ${p.saved.map((s) => s.version).join(', ')}`);
+          if (p.skipped.length)
+            parts.push(`skipped ${p.skipped.map((s) => s.version).join(', ')}`);
+          toast(`Escalated · ${parts.join(' · ')}`);
+        }
         return { ok: r.resolved, detail: r.gate_failed };
       },
     });

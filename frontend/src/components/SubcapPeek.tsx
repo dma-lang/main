@@ -1,19 +1,31 @@
 // SubcapPeek — the cia-peek quick-look drawer (prototype SubcapPeek), live-wired: detail,
 // enrichment (offering, archetypes) and the latest mapped signal come from the catalogue APIs
 // for the ACTIVE version. Unknown ids are an honest designed state, not a blank panel.
-import { useSubcap, useSubcapConnections, useSubcapEnrichment } from '../api/queries';
+import {
+  useSubcap,
+  useSubcapConnections,
+  useSubcapEnrichment,
+  useSubcapStories,
+} from '../api/queries';
 import { go } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 import { Claim, Drawer, LifeChip, PillarDot, Tier } from './primitives';
+import { StoryDetail } from './StoryDetail';
 
 export function SubcapPeek({ id, onClose }: { id: string; onClose: () => void }) {
   const version = useUi((s) => s.version);
   const sub = useSubcap(version, id);
   const enrich = useSubcapEnrichment(version, id);
   const conn = useSubcapConnections(version, id);
+  const stories = useSubcapStories(version, id);
 
   const s = sub.data;
+  // Top real-delivery stories (Jira only), previewed inline with the SAME rich StoryDetail the
+  // deep-dive and story library render — so every surface that peeks a subcap (mission control,
+  // value chain, platforms, knowledge graph, trace) shows real client delivery, not a bare count.
+  // The full list stays one click away on the deep-dive delivery tab.
+  const topStories = (stories.data?.items ?? []).slice(0, 2);
   const off = enrich.data?.offerings?.[0] ?? null;
   const archs = [...new Set((enrich.data?.use_cases ?? []).map((u) => u.archetype || ''))]
     .filter(Boolean)
@@ -119,6 +131,32 @@ export function SubcapPeek({ id, onClose }: { id: string; onClose: () => void })
           >
             {s.description || 'No description on this subcap yet.'}
           </p>
+          {topStories.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div className="between" style={{ marginBottom: 7 }}>
+                <div className="eyebrow">Top delivered stories</div>
+                {(s.n_stories ?? 0) > topStories.length && (
+                  <button
+                    className="linkbtn"
+                    style={{ fontSize: 10.5 }}
+                    onClick={() => {
+                      onClose();
+                      go('subcap/' + s.id, { tab: 'delivery' });
+                    }}
+                  >
+                    all {s.n_stories.toLocaleString()} <Icon n="arrowR" s={11} />
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {topStories.map((st) => (
+                  <div key={st.story_key} className="card" style={{ padding: '9px 11px' }}>
+                    <StoryDetail story={st} idFirst />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="eyebrow" style={{ marginBottom: 7 }}>
             Latest signal
           </div>

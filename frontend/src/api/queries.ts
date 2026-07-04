@@ -43,6 +43,7 @@ import {
   type StoryLibraryPage,
   type StoryLibraryQuery,
   type SubcapConnections,
+  type SubcapOfferingCoverage,
   type SuggestionOut,
   type SubcapNode,
   type UseCasePage,
@@ -261,6 +262,15 @@ export const useSubcapConnections = (version: string, id: string | null) =>
   useQuery<SubcapConnections>({
     queryKey: ['subcap-connections', version, id],
     queryFn: () => api.subcapConnections(version, id ?? ''),
+    enabled: !!version && !!id,
+  });
+
+// R8 productized-offering coverage for a subcap — all offerings that tackle it, with the grounded
+// per-offering explanation the deep-dive renders when more than one applies.
+export const useSubcapOfferings = (version: string, id: string | null) =>
+  useQuery<SubcapOfferingCoverage>({
+    queryKey: ['subcap-offerings', version, id],
+    queryFn: () => api.subcapOfferings(version, id ?? ''),
     enabled: !!version && !!id,
   });
 

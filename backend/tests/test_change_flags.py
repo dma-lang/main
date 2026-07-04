@@ -158,6 +158,7 @@ def test_severity_filter_returns_only_that_band(client: TestClient) -> None:
     assert len(bogus) == len(allf)
 
 
+@needs_db
 def test_decay_no_delivery_flags_let_admin_mark_inactive(client: TestClient) -> None:
     """Decay (user definition): a subcap with no real Jira story is flagged for the admin, who can
     APPROVE to mark it inactive (lifecycle -> 'dead'), gated + audited. v7's corpus covers ~87 of

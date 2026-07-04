@@ -105,6 +105,7 @@ class FlagResult:
     gate_failed: str | None = None
     before: str | None = None
     after: str | None = None
+    propagated: dict[str, Any] | None = None  # R7: {saved:[...], skipped:[...]} across versions
 
 
 async def scan(version: str, min_stories: int = 25) -> dict[str, Any]:
@@ -878,7 +879,23 @@ async def _approve_use_case_gap(
         ),
         {"id": flag_id},
     )
-    return FlagResult(resolved=True, status="approved")
+    # R7: escalate the approved use case to EVERY other provisioned version where the deep-NLP
+    # necessity gate says it belongs (auto-save, re-gated + audited per version). One approval fans
+    # out; a version where it does not belong is skipped, never enriched wrong. Same transaction.
+    from app.services import enrichment_propagation
+
+    propagated = await enrichment_propagation.propagate_use_case(
+        conn,
+        source_version=version_id,
+        source_schema=schema,
+        subcap_id=subcap_id,
+        name=name,
+        description=description,
+        archetype=archetype,
+        use_case_id=use_case_id,
+        actor=actor,
+    )
+    return FlagResult(resolved=True, status="approved", propagated=propagated)
 
 
 async def _flag_for_update(conn: AsyncConnection, flag_id: str) -> Any:

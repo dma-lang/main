@@ -169,3 +169,22 @@ use_case_match:
 xref:
   semantic_min_cosine: 0.62      # a drifted subcap must embed at least this close to a reference subcap
   l2_semantic_min_cosine: 0.60   # ...and its L2 name this close to scope the search to that capability
+
+# R7 enrichment NECESSITY gate (services/enrichment_relevance): before an approved enrichment (a new
+# use case first) is SAVED to another version, or an enrichment is INHERITED into a version at
+# provision, weigh DEEPLY with NLP whether it genuinely BELONGS there — it must fit the mapped subcap's
+# meaning AND add something its existing enrichment does not (a duplicate/poor-fit is NOT written, so we
+# never enrich the wrong things). The cheap cosine prefilter auto-decides the extremes; the borderline
+# band is judged by the live enrich model (Gemini.infer_relevance), cached in control.enrichment_relevance
+# so a re-provision reuses the verdict (no repeat spend). deep_nlp=false forces the deterministic gate.
+enrichment_relevance:
+  # The PRIMARY necessity signal is the duplicate check (overlap_max_cosine): an enrichment derived
+  # from a subcap's delivery belongs wherever that subcap has a home and is not already covered. The
+  # subcap-fit floor is a low sanity bar (an exact-id subcap map guarantees the fit). Tuned for the
+  # shared 768-d space (hermetic token-hash sits lower than live gemini-embedding-001).
+  relevance_min_cosine: 0.30     # the enrichment must fit the target subcap at least this closely
+  overlap_max_cosine: 0.82       # ...and be BELOW this to the nearest existing enrichment (else a duplicate)
+  deep_nlp: true                 # true = live infer_relevance judges the borderline band; false = cosine-only
+  prefilter_low: 0.20            # subcap fit below this -> auto NOT relevant (no model call)
+  prefilter_high: 0.90           # subcap fit at/above this AND not a duplicate -> auto relevant (no model call)
+  min_confidence: 0.5            # a 'relevant' verdict below this confidence is treated as not relevant

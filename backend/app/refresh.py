@@ -203,7 +203,7 @@ async def _active_version(conn: AsyncConnection) -> str | None:
     ).scalar()
 
 
-async def run_discovery(versions: list[str]) -> None:
+async def run_discovery(versions: list[str], *, manage_engine: bool = True) -> None:
     """Surface each version's GATED discovery proposals after its data plane is refreshed, so a
     redeploy also brings the Change-Flags / Notifications proposal box back in step (never stale):
     NEW use cases implied by delivery (``use_case_gaps``), knowledge-graph structural latent edges
@@ -216,8 +216,15 @@ async def run_discovery(versions: list[str]) -> None:
     ``versions`` rebuilt this deploy PLUS the ACTIVE version (even if the marker skipped rebuild),
     so the surface users look at always refreshes. The LIVE NLP directional engine
     (``kg.propose_directional_edges``) is deliberately NOT run here — it stays on the metered weekly
-    schedule so a redeploy never triggers its enrich+adversarial spend."""
-    if db.init_engine() is None:
+    schedule so a redeploy never triggers its enrich+adversarial spend.
+
+    ``manage_engine`` True (the deploy job) opens the engine and DISPOSES it in the finally; False
+    (an in-process caller such as version activation) reuses the app's shared engine and never
+    disposes it — disposing the shared pool mid-request would 503 every following request."""
+    if manage_engine:
+        if db.init_engine() is None:
+            return
+    elif db.get_engine() is None:
         return
     # Imported here, not at module load, so importing app.refresh never eagerly drags in the whole
     # detector graph and a detector-module import error can never break the core refresh path.
@@ -250,7 +257,8 @@ async def run_discovery(versions: list[str]) -> None:
                         version_id,
                     )
     finally:
-        await db.dispose_engine()
+        if manage_engine:
+            await db.dispose_engine()
 
 
 def run() -> int:

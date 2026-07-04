@@ -9,6 +9,7 @@ import { useSearchParams } from 'react-router-dom';
 import type { UseCaseRow } from '../api/client';
 import { useSubcaps, useUseCaseStories, useUseCases } from '../api/queries';
 import { Dropdown, Empty, Page, PillarDot, Seg } from '../components/primitives';
+import { ClientChip, StoryDetail } from '../components/StoryDetail';
 import { go } from '../lib/events';
 import { heatBg, PILLAR_COLORS } from '../lib/helpers';
 import { Icon } from '../lib/icons';
@@ -94,19 +95,15 @@ function UseCaseDrawer({ version, uc, onClose }: { version: string; uc: UseCaseR
             <div style={{ display: 'grid', gap: 7 }}>
               {rows.map((st) => (
                 <div key={st.story_key} className="card" style={{ padding: '9px 11px' }}>
-                  <div className="row gap8" style={{ marginBottom: 3 }}>
-                    <span className="mono" style={{ fontSize: 10.5, color: 'var(--interactive)', fontWeight: 600 }}>
-                      {st.story_key}
-                    </span>
-                    {st.project_key && (
-                      <span className="chip soft" style={{ fontSize: 9.5, padding: '1px 6px' }}>
-                        {st.project_key}
-                      </span>
-                    )}
+                  {/* the resolved client leads (client_name + story_key id + project secondary) */}
+                  <div className="row wrap gap6" style={{ marginBottom: 5 }}>
+                    <ClientChip story={st} idFirst size={9.5} />
                   </div>
-                  <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.45 }}>
+                  <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.45, marginBottom: 6 }}>
                     {st.summary}
                   </div>
+                  {/* narrative + collapsible acceptance-criteria / solution-design */}
+                  <StoryDetail story={st} showClient={false} />
                 </div>
               ))}
             </div>

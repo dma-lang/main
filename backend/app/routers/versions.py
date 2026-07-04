@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -14,6 +15,7 @@ from app import db
 from app.deps import get_current_user, require_admin
 from app.versioning import Version, resolve_version
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["versions"])
 
 _SCHEMA_RE = re.compile(r"^cat_[a-z0-9_]+$")
@@ -316,8 +318,20 @@ async def activate_version(
     version: str, admin: dict[str, Any] = Depends(require_admin)
 ) -> dict[str, Any]:
     """Admin approval toggle (G1): switch the single ACTIVE catalogue version. Provisioned
-    versions are committable-but-inactive until approved here; exactly one is active."""
+    versions are committable-but-inactive until approved here; exactly one is active. Activating a
+    version also REFRESHES its gated discovery proposals (use-case gaps, structural KG edges,
+    unscoped subverticals — the same idempotent pass a redeploy runs), so the newly-active catalogue
+    never shows stale proposals; the refresh is best-effort and never fails the activation."""
     if not version or set(version) - set("abcdefghijklmnopqrstuvwxyz0123456789_"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid version id")
     # audit_log.actor is a FK to control.users(uid) — always the uid, never the email
-    return await _activate(version, str(admin["uid"]))
+    result = await _activate(version, str(admin["uid"]))
+    try:
+        from app.refresh import run_discovery
+
+        # manage_engine=False: reuse the app's shared engine and never dispose it (disposing the
+        # shared pool mid-request would 503 every following request).
+        await run_discovery([version], manage_engine=False)
+    except Exception:  # noqa: BLE001 - discovery is additive; a failure must never fail activation
+        logger.exception("discovery refresh on activation FAILED (non-fatal) for %s", version)
+    return result

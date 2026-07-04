@@ -166,9 +166,11 @@ async def detect_use_case_gaps(version: str = "v7") -> dict[str, Any]:
             if len(unmatched) < cfg.min_stories:
                 continue
             existing = await _existing_use_cases(conn, ench_s, sub["subcap_id"])
-            # embed the unmatched summaries + the existing use-case (name + description) texts in
-            # ONE batch so the stub is deterministic and the live path spends once per subcap.
-            unmatched_vecs = await gemini.embed([s["summary"] for s in unmatched])
+            # embed the unmatched RICH docs (summary+description+ac) + the existing use-case texts
+            # in ONE batch (deterministic stub; live spends once per subcap). The richer doc makes
+            # clusters accurate + deduped (AC terms disambiguate); the display sample stays the
+            # one-line summary and the naming reads the richer doc.
+            unmatched_vecs = await gemini.embed([s["doc"] for s in unmatched])
             existing_vecs = (
                 await gemini.embed([f"{u['name']} {u['description']}" for u in existing])
                 if existing
@@ -178,6 +180,7 @@ async def detect_use_case_gaps(version: str = "v7") -> dict[str, Any]:
                 (unmatched[i]["story_key"], unmatched[i]["summary"], unmatched_vecs[i])
                 for i in range(len(unmatched))
             ]
+            doc_by_key = {u["story_key"]: u["doc"] for u in unmatched}
             # centroids that already OCCUPY use-case space for this subcap — a previously proposed
             # cluster (already-flagged) or one created this run. A later near-duplicate is deduped
             # against these so nothing bloats; seeding it with already-flagged clusters keeps the
@@ -192,9 +195,9 @@ async def detect_use_case_gaps(version: str = "v7") -> dict[str, Any]:
                 if overlap >= cfg.overlap_max_cosine:
                     skipped_overlap += 1  # already covered by an existing use case — avoid bloat
                     continue
-                summaries = [c[1] for c in cluster]
                 story_keys = [c[0] for c in cluster]
-                top_terms = _top_terms(summaries)
+                # name from the RICH docs (AC + description terms), not just the terse summaries
+                top_terms = _top_terms([doc_by_key.get(k, "") for k in story_keys])
                 sig = _signature(top_terms, story_keys)
                 ref = f"{sub['subcap_id']}:{sig}"
                 if await _flag_exists(conn, ref):
@@ -284,7 +287,12 @@ async def _unmatched_stories(
         (
             await conn.execute(
                 text(
-                    "SELECT scl.story_key, coalesce(st.summary, '') AS summary "
+                    "SELECT scl.story_key, coalesce(st.summary, '') AS summary, "
+                    # R8: a rich doc (summary + description + ac_text) drives the clustering +
+                    # naming so use cases are formulated from the real 'what', not terse summaries;
+                    # `summary` stays the human-readable evidence sample. SD excluded (too noisy).
+                    "trim(coalesce(st.summary, '') || ' ' || coalesce(st.description, '') || ' ' "
+                    "|| coalesce(st.ac_text, '')) AS doc "
                     "FROM control.story_catalogue_link scl "
                     "JOIN control.story st ON st.story_key = scl.story_key "
                     "WHERE scl.version_id = :ver AND scl.subcap_id = :sub "
