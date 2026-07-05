@@ -107,3 +107,54 @@ def test_corpus_wide_mismap_rate_is_material() -> None:
     weak = sum(1 for x in scored if x < _CFG["floor"])
     assert len(scored) > 12000
     assert weak / len(scored) > 0.30  # measured ~0.69 lexical-only; the dense half narrows it live
+
+
+def test_matching_fix_spans_all_pillars() -> None:
+    """The re-route + batch-dump fix is pillar-WIDE, not P1-only: EVERY pillar (P1-P4) has both
+    re-routes and batch-dumped orphans, the dumps span many subcaps across all four pillars, and P1
+    (the smallest — 17 stories) is fully handled. Locks the fix so a regression that accidentally
+    scopes it to one pillar fails CI."""
+    from app.intelligence.gates import story_relatedness_config
+
+    cfg = story_relatedness_config()
+    subs = {s["id"] for s in _catalogue()}
+    idx = RelatednessIndex(_catalogue())
+    rows = json.load(gzip.open(_SEED / "stories.json.gz"))
+    per: dict[str, list[int]] = {}  # subcap -> [carried, weak]
+    recs: list[tuple[str, str, Any, bool]] = []
+    for r in rows:
+        sc = r.get("sc")
+        if sc not in subs:
+            continue
+        v = idx.classify(
+            story_doc(r), sc, floor=cfg.floor, margin=cfg.margin, strong_sibling=cfg.strong_sibling
+        )
+        st = per.setdefault(sc, [0, 0])
+        st[0] += 1
+        weak = v.assigned < cfg.floor
+        st[1] += int(weak)
+        recs.append((str(sc)[:2], sc, v, weak))
+    pillars: dict[str, dict[str, int]] = {}
+    dump_subcaps: set[str] = set()
+    for p, sc, v, weak in recs:
+        d = pillars.setdefault(p, {"n": 0, "reroute": 0, "dump": 0})
+        d["n"] += 1
+        if v.verdict == "misrouted" and v.reroute:
+            d["reroute"] += 1
+        elif weak:
+            carried, weak_n = per[sc]
+            is_dump = (
+                carried >= cfg.batch_dump_min_stories
+                and weak_n / carried >= cfg.batch_dump_min_ratio
+            )
+            if is_dump:
+                d["dump"] += 1
+                dump_subcaps.add(sc)
+    assert {"P1", "P2", "P3", "P4"} <= set(pillars)
+    for p in ("P1", "P2", "P3", "P4"):
+        assert pillars[p]["reroute"] > 0, f"{p} has no re-routes"
+        assert pillars[p]["dump"] > 0, f"{p} has no batch-dumps"
+    p1 = pillars["P1"]
+    assert p1["reroute"] + p1["dump"] == p1["n"]  # P1 fully handled
+    assert len(dump_subcaps) >= 30  # wholesale dumps, not one
+    assert {sc[:2] for sc in dump_subcaps} == {"P1", "P2", "P3", "P4"}  # in all four pillars
