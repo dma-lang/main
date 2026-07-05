@@ -405,10 +405,25 @@ body: ${BODY}"
         || warn "could not re-enable the default url: $(head -1 "$ERRF") — in the Console: Cloud Run -> ${SERVICE} -> Networking -> enable 'Default URL'"
     fi
 
+    # Also check the ORG-LEVEL default-URL policy: constraints/run.disableDefaultURI enforced from a
+    # folder/org disables BOTH run.app urls for every service (GFE 404) regardless of the per-service
+    # annotation — the per-service --default-url override cannot beat an enforced org policy.
+    DEFPOL="$(gcloud org-policies describe run.disableDefaultURI --project "$PROJECT" --effective \
+      2>/dev/null | grep -v 'Regional Access Boundary' || true)"
+    if grep -qiE 'enforced: *true|enforce: *true' <<<"$DEFPOL"; then
+      warn "org policy constraints/run.disableDefaultURI is ENFORCED — the run.app default URL is off org-wide (GFE 404 by design); reach the app via a load balancer, or 'gcloud run services proxy ${SERVICE} --region ${REGION}', and ask an org admin to exempt this project to restore the run.app url"
+    fi
+
     # The EFFECTIVE policy includes org/folder inheritance — print it verbatim so a read failure
     # (API disabled, missing permission) can never silently masquerade as "policy is permissive".
-    EFF="$(gcloud org-policies describe run.allowedIngress --project "$PROJECT" --effective 2>&1 || true)"
-    echo "  effective run.allowedIngress: $(tr '\n' ' ' <<<"$EFF" | head -c 220)"
+    # Read WITHOUT merging stderr into the value: the managed credential broker prints its benign
+    # "Regional Access Boundary … Account not found" line to stderr, and a 2>&1 here captured THAT
+    # into $EFF, masking the real policy so the override below never fired. Drop any broker line that
+    # still leaks to stdout, and make an unreadable policy explicit (never a silent "permissive").
+    EFF="$(gcloud org-policies describe run.allowedIngress --project "$PROJECT" --effective \
+      2>/dev/null | grep -v 'Regional Access Boundary' || true)"
+    EFF_SHOW="${EFF:-<unreadable: enable orgpolicy.googleapis.com or grant roles/orgpolicy.policyViewer>}"
+    echo "  effective run.allowedIngress: $(tr '\n' ' ' <<<"$EFF_SHOW" | head -c 220)"
     if grep -qiE 'internal|denyAll|deny_all' <<<"$EFF"; then
       warn "org policy constraints/run.allowedIngress (inherited) restricts ingress — attempting a project-level allow-all override"
       cat >"$ERRF" <<YAML
