@@ -378,7 +378,12 @@ async def _relatedness_gate(
                 and weak_n / carried >= cfg.batch_dump_min_ratio
             )
             if is_dump:
-                c["status"] = "review"
+                # UNMAP it, not 'review': the story_catalogue_link view shows confirmed AND review,
+                # so a demoted-to-review carry would STILL render under the wrong capability. The
+                # story does not belong to this dumping-ground subcap and fits nothing else well, so
+                # 'unmapped' (excluded by the view) removes it from delivery entirely. It stays a
+                # real row in control.story; mapped_in_source keeps the source's (wrong) id.
+                c["status"] = "unmapped"
                 c["similarity"] = round(assigned, 4)
                 c["via"] = "relatedness_batch_dump"
                 dumped += 1
