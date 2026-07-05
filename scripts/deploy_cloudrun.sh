@@ -118,7 +118,8 @@ PREV_REVISION="$(gcloud run services describe "$SERVICE" --region "$REGION" \
   --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
 log "previous ready revision: ${PREV_REVISION:-<none>}"
 retry "service deploy (no traffic)" 3 gcloud run deploy "$SERVICE" \
-  --region "$REGION" --image "$IMAGE_DIGEST" --no-traffic --quiet
+  --region "$REGION" --image "$IMAGE_DIGEST" --no-traffic \
+  --ingress all --allow-unauthenticated --quiet
 NEW_REVISION="$(gcloud run services describe "$SERVICE" --region "$REGION" \
   --format='value(status.latestCreatedRevisionName)')"
 log "new revision (0%% traffic): ${NEW_REVISION}"
