@@ -6,6 +6,50 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added (ML — R9)
+- **Local MiniLM sentence embeddings** (`intelligence/local_embeddings.py`):
+  `sentence-transformers/all-MiniLM-L6-v2` runs in-process via onnxruntime + tokenizers (no torch,
+  no cloud, deterministic, zero spend). Wired as the preferred hermetic embedder behind
+  `Gemini.embed` and zero-padded 384→768 (cosine-invariant), so dense retrieval, story→use-case
+  matching, offerings grounding, the KG semantic layer, cross-version xref and gap clustering all
+  gained real semantics in one move — "KYC" now lands near "know your customer" (the token-hash
+  stub scored ~0; it remains the fallback when the model files are absent). Model files are
+  gitignored and fetched by `scripts/fetch_minilm.py` (pinned revision + SHA-256); the Docker
+  build fetches them before the source COPY (`--build-arg SKIP_MINILM=1` opts out).
+- **Golden story↔subcap benchmark** (`scripts/build_golden_benchmark.py` →
+  `backend/seed/golden_matches.json.gz`): 2,117 author-curated positives (the catalogue's own
+  story refs — the only trustworthy labels) + 5,137 clean cross-category negatives, split
+  project-disjoint. Same-category negatives are excluded deliberately (39% measured label noise).
+- **Trained matcher** (`scripts/train_matcher.py`, scikit-learn dev-only →
+  `config/matcher_model.json`): standardized logistic regression over 15 shared features
+  (`intelligence/match_features.py` — MiniLM definition/use-case/exemplar cosines, margins,
+  z-score, lexical, regime flags), exported as plain coefficients; runtime
+  (`intelligence/matcher_model.py`) is a dot product + sigmoid, no ML deps. Held-out,
+  CI-locked: **keep-recall 1.0000 (≥ 0.98 asserted by `tests/test_matcher_benchmark.py`)**;
+  garbage-catch 0.108 at that operating point, AUC 0.788. The carry gate may use it only as a
+  near-certain veto (train precision ≥ 0.90); the current model cannot reach that bar, so it
+  self-disables (`veto_threshold` 0.99 short-circuit) — deterministic cleanup keeps full power
+  and a stronger retrain activates rescue by config swap alone.
+
+### Changed (matching + delivery surfaces — R9)
+- **Re-route precision guard**: a relatedness-gate re-route now requires ≥ `min_reroute_terms`
+  (2) distinct shared discriminating terms — measured on the corpus, 32% of re-routes rested on a
+  single coincidental word ("Create Personal Lead Layout" → "Personal Trading Compliance" on
+  'personal') and were wrong; those stories now stay flagged, never moved.
+- **Clients resolve to real names**: the delivery drilldown aggregates by resolved `client_name`
+  ("Academy Bank"), counting a multi-project client once (Jira codes kept as tooltip); cluster
+  "related clients" read names too.
+- **Carry provenance on every delivery surface**: story rows carry
+  `carry_status`/`carry_similarity`/`carry_via`; shared `CarryBadge`/`StoryQuality` components
+  badge Review / Re-routed / match% so a gate-flagged carry is visibly distinct from a confident
+  native match; peek + use-case drawers show composite + confidence; the Story Library shows
+  subcap names, not raw ids.
+
+### Fixed (ops — R9)
+- `deploy_cloudrun.sh`: the docker.io → GCR-mirror build fallback was unreachable (the retry
+  helper exits the script before the fallback can run) — `try_retry` makes the documented
+  self-healing real.
+
 ### Added (intelligence — R6)
 - **NLP directional Knowledge Graph.** The KG now reads two subcaps' **descriptions** into a typed,
   **directional** relationship (`enables` / `depends_on` / `precedes` / `affects` / `complements` /
