@@ -87,6 +87,107 @@ export function ClientChip({
   );
 }
 
+// Per-subcap CARRY provenance (trust envelope) for one story→subcap link: whether it is a confident
+// native match or was flagged / re-routed by the relatedness gate, plus the relatedness similarity.
+// Absent on corpus-level reads not keyed on a single carry — every field degrades to nothing.
+export interface CarryLike {
+  carry_status?: string | null; // 'confirmed' | 'review'
+  carry_similarity?: number | null; // 0..1 relatedness of this story→subcap carry
+  carry_via?: string | null; // 'native' | 'relatedness_reroute' | 'relatedness_review' | 'crosswalk' | …
+}
+
+// Deterministic carry flags. A confident native carry (native mechanism, not flagged for review) is
+// the default happy path → no badge, no clutter; anything the relatedness gate touched is surfaced.
+function carryFlags(carry: CarryLike): {
+  review: boolean;
+  reroute: boolean;
+  matchLabel: string | null;
+  any: boolean;
+} {
+  const status = carry.carry_status ?? null;
+  const via = carry.carry_via ?? null;
+  const sim = carry.carry_similarity ?? null;
+  const review = status === 'review';
+  const reroute = via === 'relatedness_reroute';
+  const confidentNative = via === 'native' && !review;
+  const matchLabel = sim != null && !confidentNative ? `match ${(sim * 100).toFixed(0)}%` : null;
+  return { review, reroute, matchLabel, any: review || reroute || matchLabel != null };
+}
+
+/**
+ * The carry-status badge: an amber "Review" chip when the relatedness gate flagged the carry, a
+ * "Re-routed" chip when it moved the story to a more related subcap, and a subtle relatedness
+ * "match NN%" chip. A confident native carry renders nothing. Compact; reused on every delivery /
+ * story surface so a native match is visibly distinguished from a gate-flagged / moved one.
+ */
+export function CarryBadge({ carry, size = 9 }: { carry: CarryLike; size?: number }) {
+  const { review, reroute, matchLabel } = carryFlags(carry);
+  if (!review && !reroute && !matchLabel) return null;
+  return (
+    <>
+      {review && (
+        <span
+          className="chip orange"
+          style={{ fontSize: size, flex: 'none' }}
+          title="the relatedness gate flagged this story→subcap carry for review"
+        >
+          Review
+        </span>
+      )}
+      {reroute && (
+        <span
+          className="chip soft"
+          style={{ fontSize: size, flex: 'none' }}
+          title="re-routed to a more related subcap by the relatedness gate"
+        >
+          Re-routed
+        </span>
+      )}
+      {matchLabel && (
+        <span
+          className="chip soft"
+          style={{ fontSize: size, flex: 'none' }}
+          title="relatedness similarity of this story→subcap carry"
+        >
+          {matchLabel}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * A compact quality line for the StoryDetail `extra` slot: composite score, confidence level and the
+ * carry badge. Renders nothing when the story carries none of them, so it can be dropped into `extra`
+ * unconditionally. Used by the quick-look peek and the use-case drawer.
+ */
+export function StoryQuality({
+  story,
+  size = 9,
+}: {
+  story: CarryLike & { composite_score?: number | null; confidence_level?: string | null };
+  size?: number;
+}) {
+  const cs = story.composite_score ?? null;
+  const conf = story.confidence_level ?? null;
+  const carry = carryFlags(story);
+  if (cs == null && !conf && !carry.any) return null;
+  return (
+    <div className="row wrap gap6" style={{ fontSize: 10.5, alignItems: 'center' }}>
+      {cs != null && <span className="muted num">composite {cs.toFixed(2)}</span>}
+      {conf && (
+        <span
+          className={'chip ' + (conf === 'HIGH' ? 'teal' : conf === 'MEDIUM' ? 'orange' : 'soft')}
+          style={{ fontSize: size }}
+        >
+          {conf}
+        </span>
+      )}
+      <CarryBadge carry={story} size={size} />
+    </div>
+  );
+}
+
 // A default-collapsed section (Acceptance criteria / Solution design), styled like StoryLine's expand
 // region. `points` is the preferred structured list; `raw` is the fallback text. Renders nothing when
 // both are empty, so absent detail never leaves an empty header.

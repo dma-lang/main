@@ -75,11 +75,13 @@ class RelatednessConfig:
     enabled: bool
     reroute: bool
     batch_dump: bool
+    use_model: bool
     batch_dump_min_ratio: float
     batch_dump_min_stories: int
     floor: float
     margin: float
     strong_sibling: float
+    min_reroute_terms: int
     dense_rescue_min_cosine: float
 
 
@@ -94,15 +96,19 @@ def story_relatedness_config() -> RelatednessConfig:
         enabled=bool(section.get("enabled", True)),
         reroute=bool(section.get("reroute", True)),
         batch_dump=bool(section.get("batch_dump", True)),
+        use_model=bool(section.get("use_model", True)),
         batch_dump_min_ratio=float(section.get("batch_dump_min_ratio", 0.8)),
         batch_dump_min_stories=int(section.get("batch_dump_min_stories", 5)),
         floor=float(section.get("floor", 0.05)),
         margin=float(section.get("margin", 0.15)),
         strong_sibling=float(section.get("strong_sibling", 0.25)),
+        min_reroute_terms=int(section.get("min_reroute_terms", 2)),
         dense_rescue_min_cosine=float(section.get("dense_rescue_min_cosine", 0.72)),
     )
     if not 0 <= cfg.floor <= 1 or not 0 < cfg.dense_rescue_min_cosine <= 1:
         raise ValueError("gates.yaml: matching.relatedness floors must be in range")
+    if cfg.min_reroute_terms < 1:
+        raise ValueError("gates.yaml: matching.relatedness.min_reroute_terms must be >= 1")
     return cfg
 
 

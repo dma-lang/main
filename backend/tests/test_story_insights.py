@@ -11,6 +11,39 @@ def _row(key: str, project: str | None, summary: str, score: float | None = 3.0)
     return {"story_key": key, "project_key": project, "summary": summary, "composite_score": score}
 
 
+def test_cluster_clients_use_resolved_name_not_project_code() -> None:
+    """A cluster's related-client list reads the RESOLVED client name ("Academy Bank"), not the
+    raw Jira project code ("ABNCM"); it falls back to the code only when a name is missing."""
+    rows = [
+        {
+            "story_key": "ABNCM-1",
+            "project_key": "ABNCM",
+            "client_name": "Academy Bank",
+            "summary": "Data migration of legacy accounts to Salesforce",
+            "composite_score": 4.0,
+        },
+        {
+            "story_key": "ABNCM-2",
+            "project_key": "ABNCM",
+            "client_name": "Academy Bank",
+            "summary": "Data migration of legacy contacts to Salesforce",
+            "composite_score": 3.0,
+        },
+        {
+            "story_key": "BCFSC-1",
+            "project_key": "BCFSC",
+            "client_name": "Banc of California, Inc.",
+            "summary": "Data migration of legacy cases to Salesforce",
+            "composite_score": 3.5,
+        },
+    ]
+    out = cluster_stories(rows)
+    assert len(out["clusters"]) == 1
+    clients = out["clusters"][0]["clients"]
+    assert "Academy Bank" in clients and "Banc of California, Inc." in clients
+    assert "ABNCM" not in clients and "BCFSC" not in clients  # never the raw project code
+
+
 def test_tokenize_drops_function_words_keeps_domain_terms() -> None:
     toks = tokenize("Build the data migration pipeline for Salesforce")
     assert "the" not in toks and "for" not in toks

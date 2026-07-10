@@ -272,6 +272,80 @@ async def _nearest_neighbour_pass(
         )
 
 
+# story_key -> MiniLM vector, process-lifetime (story text is immutable per key within a run, and
+# the test suite re-carries the same corpus repeatedly — the cache turns re-encodes into lookups)
+_STORY_VEC_CACHE: dict[str, list[float]] = {}
+
+
+async def _model_scorer(
+    conn: Any,
+    schema: str,
+    defs: list[dict[str, Any]],
+    by_key: dict[str, dict[str, Any]],
+    need: list[tuple[dict[str, Any], str]],
+) -> Any | None:
+    """Build the TRAINED-matcher scorer for this carry: returns ``score(story_key, subcap_id) ->
+    float | None`` (P(genuine match), config/matcher_model.json over match_features.FEATURES) or
+    None when the model/embedder is absent. ``need`` = the (story-row, subcap) pairs that will be
+    scored — only those stories are encoded (batched, cached), so the gate stays bounded."""
+    from app.intelligence import matcher_model
+    from app.intelligence.match_features import MatchFeaturizer
+
+    model = matcher_model.load()
+    if model is None:
+        return None
+    if model.veto_threshold >= 0.989:
+        # the exported model could not reach veto-grade precision (>=0.90) on the golden benchmark
+        # — it stays advisory-only, so skip the (non-trivial) encoding work entirely. A stronger
+        # retrain activates the rescue by config swap, no code change.
+        logger.info("matcher model veto-disabled (veto_threshold=%.3f)", model.veto_threshold)
+        return None
+    # use-case texts enrich the defs (the featurizer's uc_dense/uc_margin features)
+    uc_rows = (
+        await conn.execute(
+            text(f"SELECT subcap_id, coalesce(description, name) AS t FROM {schema}.use_case")
+        )
+    ).all()
+    by_sub_uc: dict[str, list[str]] = {}
+    for sid, t in uc_rows:
+        if t:
+            by_sub_uc.setdefault(str(sid), []).append(str(t))
+    for d in defs:
+        d["uc_texts"] = by_sub_uc.get(str(d["id"]), [])
+    # exemplars = the catalogue authors' per-subcap story refs (seed enrichment), resolved onto the
+    # ingested corpus — the strongest signal: genuine deliveries of a capability resemble each other
+    from app.services import enrichment_seed
+
+    exemplars: dict[str, list[dict[str, Any]]] = {}
+    for sid, keys in enrichment_seed.story_refs_map().items():
+        norm = (k[5:] if k.startswith("JIRA-") else k for k in keys)
+        rows_ = [by_key[k] for k in norm if k in by_key]
+        if rows_:
+            exemplars[sid] = rows_
+    fz = MatchFeaturizer(defs, exemplars=exemplars)
+    if not fz.available:
+        return None
+    todo_keys = sorted({str(s["k"]) for s, _sid in need if str(s["k"]) not in _STORY_VEC_CACHE})
+    if todo_keys:
+        vecs = fz.encode_stories([by_key[k] for k in todo_keys])
+        if vecs is None:
+            return None
+        _STORY_VEC_CACHE.update(zip(todo_keys, vecs, strict=True))
+
+    def score(story_key: str, subcap_id: str) -> float | None:
+        row = by_key.get(story_key)
+        vec = _STORY_VEC_CACHE.get(story_key)
+        if row is None or vec is None:
+            return None
+        feats = fz.features(row, subcap_id, vec)
+        return model.probability(feats) if feats is not None else None
+
+    # the gate rescues ONLY at the near-certain veto point (train precision >= 0.9), so the
+    # deterministic cleanup keeps its power; the keep threshold is the benchmark operating point
+    score.veto = model.veto_threshold  # type: ignore[attr-defined]
+    return score
+
+
 async def _relatedness_gate(
     conn: Any, schema: str, stories: list[dict[str, Any]], carries: list[dict[str, Any]]
 ) -> dict[str, int]:
@@ -324,7 +398,10 @@ async def _relatedness_gate(
     by_key = {s["k"]: s for s in stories}
     per_subcap: dict[str, list[int]] = {}  # ORIGINAL subcap -> [carried, weak-fit]
     orphans: list[tuple[dict[str, Any], str, float]] = []  # (carry, orig_subcap, assigned)
-    reviewed = rerouted = 0
+    reviewed = rerouted = rescued = 0
+    # PASS 1 — lexical classification (as ever). Carries the gate would demote are buffered so the
+    # TRAINED matcher (pass 2) can vouch for the genuine ones before any demotion is applied.
+    flagged: list[tuple[dict[str, Any], str, Any, bool]] = []  # (carry, orig, verdict, weak)
     for c in carries:
         if c["status"] != "confirmed" or c["via"] != "native" or not c["carried_to_subcap"]:
             continue
@@ -338,11 +415,37 @@ async def _relatedness_gate(
             floor=cfg.floor,
             margin=cfg.margin,
             strong_sibling=cfg.strong_sibling,
+            min_reroute_terms=cfg.min_reroute_terms,
         )
         stat = per_subcap.setdefault(orig, [0, 0])
         stat[0] += 1
         weak = verdict.assigned < cfg.floor
         stat[1] += int(weak)
+        if verdict.verdict == "misrouted" or weak:
+            flagged.append((c, orig, verdict, weak))
+    # PASS 2 — trained-matcher rescue (config/matcher_model.json over MiniLM features): a flagged
+    # carry the model scores at/above its NEAR-CERTAIN veto point (train precision >= 0.9 on the
+    # author-curated golden benchmark) is a vocabulary-gap TRUE match — kept confirmed, never
+    # demoted/re-routed/dumped. The veto is deliberately high-precision so the deterministic
+    # cleanup keeps its power. Best-effort: no model/embedder -> today's lexical behaviour.
+    keep: set[int] = set()
+    if cfg.use_model and flagged:
+        need = [(by_key[c["story_key"]], o) for c, o, _v, _w in flagged]
+        try:
+            score = await _model_scorer(conn, schema, defs, by_key, need)
+        except Exception as exc:  # noqa: BLE001 - the model is advisory; the gate never blocks
+            logger.warning("matcher model unavailable for %s: %s", schema, exc)
+            score = None
+        if score is not None:
+            for i, (c, orig, _verdict, _weak) in enumerate(flagged):
+                p = score(str(c["story_key"]), orig)
+                if p is not None and p >= score.veto:
+                    keep.add(i)
+            rescued = len(keep)
+    # PASS 3 — apply the demotions the model did not veto.
+    for i, (c, orig, verdict, weak) in enumerate(flagged):
+        if i in keep:
+            continue  # trained matcher vouches for the native carry — stays confirmed
         if verdict.verdict == "misrouted":
             if cfg.reroute and verdict.reroute:
                 # the story clearly concerns a DIFFERENT capability — re-map the carry to the best-
@@ -391,6 +494,7 @@ async def _relatedness_gate(
         "relatedness_reviewed": reviewed,
         "relatedness_rerouted": rerouted,
         "relatedness_batch_dumped": dumped,
+        "relatedness_model_rescued": rescued,
     }
 
 

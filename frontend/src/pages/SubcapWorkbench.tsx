@@ -17,7 +17,7 @@ import {
 } from '../api/queries';
 import { DeliveryDrillPanel } from '../components/DeliveryDrillPanel';
 import { Bar, Claim, Empty, LifeChip, Mag, PillarDot, Tier } from '../components/primitives';
-import { ClientChip, StoryDetail } from '../components/StoryDetail';
+import { CarryBadge, ClientChip, StoryDetail } from '../components/StoryDetail';
 import { go, openOffering, openReasoning, toast } from '../lib/events';
 import { clamp, LIFE_COLORS, PILLAR_COLORS, PILLAR_SHORT } from '../lib/helpers';
 import { Icon, type IconName } from '../lib/icons';
@@ -467,6 +467,7 @@ function DeliveryTab({ version, node }: { version: string; node: SubcapNode }) {
                   <Icon n={isOpen ? 'chevD' : 'chevR'} s={13} style={{ color: 'var(--text-tertiary)', flex: 'none' }} />
                   {/* resolved client leads: client_name + story_key id + project secondary */}
                   <ClientChip story={st} idFirst size={9} />
+                  <CarryBadge carry={st} size={8.5} />
                   {st.is_synthetic && (
                     <span className="chip orange" style={{ fontSize: 8.5, flex: 'none' }} title="synthetic story (not real Jira delivery)">
                       synthetic

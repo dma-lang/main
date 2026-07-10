@@ -129,6 +129,18 @@ class RelatednessIndex:
         dot = sum(w * sv.get(t, 0.0) for t, w in v.items())
         return dot / (n * self._norm[sid]) if dot else 0.0
 
+    def _shared_terms(self, v: dict[str, float], sid: str) -> int:
+        """How many DISCRIMINATING terms the story shares with a subcap definition (both weighted).
+        A re-route resting on a SINGLE shared word is almost always coincidental — a Salesforce
+        "Create Personal Lead Page Layout" matches "Personal Trading Compliance" only on 'personal',
+        "x-JOURNEY: CL_Quote_Exit" matches "Exit Planning" only on 'exit'. Measured on the real
+        corpus, 32% of lexical re-routes rest on one such word and are wrong; requiring two
+        independent terms keeps the genuine multi-term re-routes and drops the coincidental ones."""
+        sv = self._vec.get(sid)
+        if not sv:
+            return 0
+        return sum(1 for t, w in v.items() if w > 0.0 and t in sv)
+
     def relatedness(self, story_text: str, subcap_id: str) -> float:
         v, n = self._story_vec(story_text)
         return self._cos(v, n, subcap_id)
@@ -141,6 +153,7 @@ class RelatednessIndex:
         floor: float,
         margin: float,
         strong_sibling: float,
+        min_reroute_terms: int = 2,
         dense_assigned: float | None = None,
         dense_strong: float = 1.0,
     ) -> Verdict:
@@ -150,10 +163,13 @@ class RelatednessIndex:
                           vouches for it (``dense_assigned >= dense_strong``) so a vocabulary-gap
                           true match is never punished. Kept as-is.
         * ``misrouted`` — weak on the assigned subcap AND a pillar sibling is a strong, clearly
-                          better fit (``best >= strong_sibling`` and beats the assigned by
-                          ``margin``). A re-route candidate (``.reroute``).
+                          better fit (``best >= strong_sibling``, beats the assigned by ``margin``,
+                          AND rests on >= ``min_reroute_terms`` shared discriminating terms so the
+                          move is not a coincidental single-word hit). A re-route (``.reroute``).
         * ``review``    — weak on the assigned subcap and no clearly-better home (an orphan / noise
-                          story). Flagged as a low-confidence match, never a confident one.
+                          story, OR a sibling that only matches on one coincidental word). Flagged
+                          as a low-confidence match, never a confident one, and never moved onto a
+                          subcap it does not concern.
         """
         v, n = self._story_vec(story_text)
         assigned = self._cos(v, n, subcap_id)
@@ -167,6 +183,11 @@ class RelatednessIndex:
                 best, best_id = sco, cand
         if assigned >= floor or (dense_assigned is not None and dense_assigned >= dense_strong):
             return Verdict(assigned, best_id, best, "fit")
-        if best >= strong_sibling and best >= assigned + margin and best_id != subcap_id:
+        if (
+            best >= strong_sibling
+            and best >= assigned + margin
+            and best_id != subcap_id
+            and self._shared_terms(v, best_id) >= min_reroute_terms
+        ):
             return Verdict(assigned, best_id, best, "misrouted")
         return Verdict(assigned, best_id, best, "review")

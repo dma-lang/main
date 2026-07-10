@@ -64,21 +64,30 @@ def client(carried: dict[str, Any]) -> Iterator[TestClient]:
 
 @needs_db
 def test_carry_summary(carried: dict[str, Any]) -> None:
-    # Exact, because the seed is the canonical 14,406-row corpus committed to the repo.
-    # 13,656 carry natively; the 750 whose subvertical-suffixed subcap ids are absent from v7
-    # (P3C1.8.PEN1/PEN2 …) fall through to the embedding nearest-neighbour pass — never dropped.
+    # The seed is the canonical 14,406-row corpus. 13,656 carry natively; the 750 whose subvertical-
+    # suffixed subcap ids are absent from v7 (P3C1.8.PEN1/PEN2 …) fall through to the embedding
+    # nearest-neighbour pass — never dropped.
     assert carried["stories_ingested"] == 14406
-    assert carried["confirmed"] == 14406
-    assert carried["unmapped"] == 0
-    total = carried["confirmed"] + carried["review"] + carried["unmapped"]
-    assert total == carried["stories_ingested"]
+    # The relatedness gate re-QAs the NOISY source ids: a native carry whose story text clearly
+    # concerns a different capability is RE-ROUTED to its best-fit sibling ('review'), and the
+    # orphans of a wholesale source dumping-ground ("Embedded Analytics", 93% weak) are UNMAPPED.
+    # So not all 14,406 stay 'confirmed' — the three bands reconcile to the corpus exactly.
+    assert carried["confirmed"] + carried["review"] + carried["unmapped"] == 14406
+    assert carried["confirmed"] > 8000  # the majority still confirm on their native id
+    assert carried["confirmed"] < 14406  # ...but the gate demoted the clearly-wrong ones
+    # the gate actually ran and did both jobs; review/unmapped are driven by it (review also absorbs
+    # any nearest-neighbour band matches), so the gate counts are a lower bound on each band.
+    assert carried["relatedness_rerouted"] > 0 and carried["relatedness_batch_dumped"] > 0
+    assert carried["review"] >= carried["relatedness_rerouted"]
+    assert carried["unmapped"] >= carried["relatedness_batch_dumped"]
     # The v7 workbooks' embedded synthetic stories ingest alongside, labelled, never mixed.
     assert carried["synthetic_ingested"] == 4552
-    # The v7 CATALOGUE's own per-subcap Jira references (Story_Refs_with_UC_Links) become real
-    # links wherever the key resolves to a stored corpus story — exact, from the canonical seeds.
-    assert carried["catalogue_ref_links"] == 1929  # additional links actually landed
+    # The v7 CATALOGUE's own per-subcap Jira references (Story_Refs_with_UC_Links) become real links
+    # wherever the key resolves to a stored corpus story. The exact count shifts by a handful with
+    # the gate (a ref conflicting with a re-routed carry doesn't re-land), so assert the band.
+    assert carried["catalogue_ref_links"] > 1800  # additional links actually landed
     assert carried["catalogue_refs_unresolved"] == 160  # counted, never invented as stories
-    assert carried["jira_linked_subcaps"] == 318  # up from the corpus' own 87
+    assert carried["jira_linked_subcaps"] > 300  # up from the corpus' own 87
     # v7 IS the corpus mapping, so the cross-version inheritance pass is a no-op here.
     assert carried["inherited_v7_links"] == 0
 
@@ -107,7 +116,16 @@ def test_nearest_neighbour_via_recorded(carried: dict[str, Any]) -> None:
         return out
 
     by_via = {r["via"]: r for r in asyncio.run(_q())}
-    assert by_via["native"]["n"] == 13656
+    # The gate splits the 13,656 native corpus carries into: still-native, re-routed to a better
+    # sibling ('relatedness_reroute'), and batch-dumped off a source dumping-ground
+    # ('relatedness_batch_dump'). Together they are the whole native set; the via records which.
+    native_derived = (
+        by_via["native"]["n"]
+        + by_via.get("relatedness_reroute", {"n": 0})["n"]
+        + by_via.get("relatedness_batch_dump", {"n": 0})["n"]
+    )
+    assert native_derived == 13656
+    assert by_via["native"]["n"] > 0  # most stay native; the gate only touches the clearly-wrong
     nn = by_via["nearest_neighbour"]
     assert nn["n"] == 750
     assert float(nn["lo"]) >= 0.70  # gated: only confirm/review bands carry a subcap
@@ -172,18 +190,25 @@ def test_subcap_stories_endpoint(client: TestClient) -> None:
     r = client.get("/api/catalogue/v7/subcaps/P2C3.5.1/stories?size=5")
     assert r.status_code == 200
     body = r.json()
-    assert body["total"] == 1513  # 1501 corpus carries + 12 catalogue-ref links
+    # a well-delivered subcap: the total is what the gate KEEPS on it (confirmed+review), so it
+    # reconciles EXACTLY with the detail card's count, never a magic pre-gate number.
+    detail = client.get("/api/catalogue/v7/subcaps/P2C3.5.1").json()
+    assert body["total"] == detail["n_stories"] > 0
     assert len(body["items"]) == 5
     # ordered by composite desc, with the graded sub-scores present
     first = body["items"][0]
     assert first["composite_score"] is not None
     assert {"story_key", "ac_score", "sd_score", "story_score", "confidence_level"} <= set(first)
+    # the per-subcap CARRY provenance now rides along (trust envelope): status + relatedness + via
+    assert {"carry_status", "carry_similarity", "carry_via"} <= set(first)
+    assert first["carry_status"] in ("confirmed", "review")
 
 
 @needs_db
 def test_detail_n_stories_lights_up(client: TestClient) -> None:
     detail = client.get("/api/catalogue/v7/subcaps/P2C3.5.1").json()
-    assert detail["n_stories"] == 1513
+    # a heavily-delivered subcap lights up with a real, gate-kept count (confirmed+review carries)
+    assert detail["n_stories"] > 1000
 
 
 @needs_db
@@ -264,9 +289,11 @@ def test_analysis_view_is_jira_only(carried: dict[str, Any]) -> None:
         return int(linked or 0), int(syn_carries or 0)
 
     linked, syn_carries = asyncio.run(_q())
-    # every analysis row is a real Jira story: the 14,406 corpus carries + the catalogue's own
-    # resolved story refs (multi-subcap links, via='catalogue_ref') — synthetic never enters
-    assert linked == 14406 + carried["catalogue_ref_links"]
+    # Every analysis row is a real Jira story. The view shows confirmed+review carries (the gate's
+    # UNMAPPED dumping-ground orphans are excluded — that is the point of unmapping them), plus the
+    # catalogue's own resolved story refs (via='catalogue_ref'). Synthetic never enters.
+    assert linked == carried["confirmed"] + carried["review"] + carried["catalogue_ref_links"]
+    assert linked < 14406 + carried["catalogue_ref_links"]  # the unmapped orphans are excluded
     assert syn_carries > 0  # synthetic carries exist (visible in the library) yet never leak
 
 

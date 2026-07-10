@@ -1,5 +1,6 @@
 // Delivery drilldown (shared by the C3 trace page + the A2 Delivery tab): underneath a subcap's
-// story count sit (1) the CLIENTS — Jira project keys, the corpus' client/engagement proxy — and
+// story count sit (1) the CLIENTS — resolved to their real client name from the Jira corpus (one
+// client can span several Jira projects, kept as project_keys for the tooltip) — and
 // (2) deterministic STORY CLUSTERS (token-overlap, no model call) that group stories with similar
 // characteristics and list the related clients delivering into the same theme. Every figure comes
 // from the same story_catalogue_link ∪ story join as n_stories and the mission-control heatmap,
@@ -10,7 +11,7 @@ import type { StoryRow } from '../api/client';
 import { useSubcapDelivery } from '../api/queries';
 import { Icon } from '../lib/icons';
 import { Bar } from './primitives';
-import { ClientChip, StoryDetail } from './StoryDetail';
+import { CarryBadge, ClientChip, StoryDetail } from './StoryDetail';
 
 function scoreColor(v: number): string {
   return v >= 3 ? 'var(--interactive)' : v >= 2 ? 'var(--z-blue)' : 'var(--z-orange)';
@@ -42,6 +43,7 @@ function StoryLine({ st }: { st: StoryRow }) {
         <div className="row gap8" style={{ minWidth: 0 }}>
           <Icon n={open ? 'chevD' : 'chevR'} s={12} style={{ color: 'var(--text-tertiary)', flex: 'none' }} />
           <ClientChip story={st} idFirst size={9} />
+          <CarryBadge carry={st} size={8.5} />
           {st.is_synthetic && (
             <span className="chip orange" style={{ fontSize: 8.5, flex: 'none' }} title="synthetic story (not real Jira delivery)">
               synthetic
@@ -184,18 +186,19 @@ export function DeliveryDrillPanel({
           </span>
         </div>
         <div className="muted" style={{ fontSize: 11, marginBottom: 10, lineHeight: 1.45 }}>
-          Parsed from the Jira <b>project key</b> (the corpus' client/engagement proxy). Click one
-          for its strongest stories.
+          The clients delivering onto this subcap, resolved from the Jira corpus. Click one for its
+          strongest stories.
         </div>
         <div style={{ display: 'grid', gap: 6 }}>
           {d.clients.map((c) => {
-            const open = openClient === c.project_key;
+            const open = openClient === c.client_name;
+            const projects = c.project_keys.join(', ');
             return (
-              <div key={c.project_key} className="card" style={{ overflow: 'hidden' }}>
+              <div key={c.client_name} className="card" style={{ overflow: 'hidden' }}>
                 <div
                   className="between"
                   style={{ padding: '9px 11px', cursor: 'pointer' }}
-                  onClick={() => setOpenClient(open ? null : c.project_key)}
+                  onClick={() => setOpenClient(open ? null : c.client_name)}
                 >
                   <div className="row gap8" style={{ minWidth: 0 }}>
                     <Icon
@@ -203,9 +206,39 @@ export function DeliveryDrillPanel({
                       s={13}
                       style={{ color: 'var(--text-tertiary)' }}
                     />
-                    <b className="mono" style={{ fontSize: 12 }}>
-                      {c.project_key}
-                    </b>
+                    <div
+                      style={{ minWidth: 0 }}
+                      title={
+                        projects
+                          ? `Jira project${c.project_keys.length > 1 ? 's' : ''} ${projects}`
+                          : undefined
+                      }
+                    >
+                      <b
+                        style={{
+                          fontSize: 12,
+                          display: 'block',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {c.client_name}
+                      </b>
+                      {projects && (
+                        <div
+                          className="mono muted"
+                          style={{
+                            fontSize: 9,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {projects}
+                        </div>
+                      )}
+                    </div>
                     {c.subverticals.slice(0, 3).map((sv) => (
                       <span key={sv} className="chip soft" style={{ fontSize: 9 }}>
                         {sv}
@@ -308,9 +341,9 @@ export function DeliveryDrillPanel({
                     </div>
                   </div>
                   <div className="row wrap gap6" style={{ marginTop: 6, paddingLeft: 21 }}>
-                    {cl.clients.slice(0, 6).map((pk) => (
-                      <span key={pk} className="chip blue" style={{ fontSize: 9.5 }}>
-                        {pk}
+                    {cl.clients.slice(0, 6).map((client) => (
+                      <span key={client} className="chip blue" style={{ fontSize: 9.5 }}>
+                        {client}
                       </span>
                     ))}
                     {cl.clients.length > 6 && (

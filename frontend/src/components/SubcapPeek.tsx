@@ -11,7 +11,7 @@ import { go } from '../lib/events';
 import { Icon } from '../lib/icons';
 import { useUi } from '../state/store';
 import { Claim, Drawer, LifeChip, PillarDot, Tier } from './primitives';
-import { StoryDetail } from './StoryDetail';
+import { StoryDetail, StoryQuality } from './StoryDetail';
 
 export function SubcapPeek({ id, onClose }: { id: string; onClose: () => void }) {
   const version = useUi((s) => s.version);
@@ -151,7 +151,7 @@ export function SubcapPeek({ id, onClose }: { id: string; onClose: () => void })
               <div style={{ display: 'grid', gap: 8 }}>
                 {topStories.map((st) => (
                   <div key={st.story_key} className="card" style={{ padding: '9px 11px' }}>
-                    <StoryDetail story={st} idFirst />
+                    <StoryDetail story={st} idFirst extra={<StoryQuality story={st} />} />
                   </div>
                 ))}
               </div>

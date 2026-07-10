@@ -3,8 +3,8 @@
 Two deterministic analyses over the CARRIED Jira corpus (story_catalogue_link is Jira-only by
 construction — synthetic stories never enter it):
 
-1. ``clients``  — the Jira *project key* is the engagement/client proxy in this corpus, so
-   grouping a subcap's stories by ``project_key`` "parses the clients" that delivered it.
+1. ``clients``  — stories are grouped by their RESOLVED ``client_name`` (e.g. "Academy Bank"),
+   falling back to the Jira ``project_key`` code only when a story's client is unresolved.
 2. ``clusters`` — greedy token-overlap clustering of story summaries groups stories with similar
    characteristics; each cluster lists the *related clients* that delivered into it. Pure-python
    and deterministic (no model call, hermetic-safe) — the same overlap-coefficient family used by
@@ -74,7 +74,13 @@ def cluster_stories(rows: list[dict[str, Any]]) -> dict[str, Any]:
         top = sorted(c["terms"].most_common(4), key=lambda x: (-x[1], x[0]))[:3]
         label = " · ".join(t for t, _ in top)
         scores = [m["composite_score"] for m in members if m.get("composite_score") is not None]
-        client_counts = Counter(str(m["project_key"]) for m in members if m.get("project_key"))
+        # the RESOLVED client name is the client identity (falls back to the Jira project code only
+        # when unresolved) — so a cluster's "related clients" read "Academy Bank", not "ABNCM".
+        client_counts = Counter(
+            str(m.get("client_name") or m.get("project_key"))
+            for m in members
+            if m.get("client_name") or m.get("project_key")
+        )
         sample = sorted(
             members,
             key=lambda m: (-(m.get("composite_score") or 0.0), str(m["story_key"])),

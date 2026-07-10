@@ -83,9 +83,20 @@ matching:
                                    # vocabulary-gap orphans is spared (dense-half territory).
     batch_dump_min_ratio: 0.8      # >= this fraction of a subcap's carries weak-fit => it's a dump
     batch_dump_min_stories: 5      # ...and it must carry at least this many stories
+    use_model: true                # TRAINED-matcher rescue (config/matcher_model.json over local
+                                   # MiniLM features): a carry the lexical rules would demote is
+                                   # KEPT when the model scores it >= its keep threshold (calibrated
+                                   # on the author-curated golden benchmark for >=98% keep-recall).
+                                   # Degrades to pure lexical rules when the model files are absent.
     floor: 0.05                    # lexical relatedness below this = weak on the assigned capability
     margin: 0.15                   # a sibling must beat the assigned by this to count as a re-route
     strong_sibling: 0.25           # ...and clear this absolute bar (a genuinely better home)
+    min_reroute_terms: 2           # ...and rest on >= this many DISTINCT shared discriminating terms.
+                                   # A single coincidental word ('Personal Lead Layout' vs 'Personal
+                                   # Trading Compliance' on 'personal') is not a re-route: 32% of
+                                   # lexical re-routes rest on one word and are wrong, so requiring two
+                                   # independent terms keeps genuine moves and drops the coincidental
+                                   # ones (the story stays flagged 'review'/dumped, never moved wrong).
     dense_rescue_min_cosine: 0.72  # DENSE cosine to the assigned subcap at/above which a lexically
                                    # weak match is KEPT (a vocabulary-gap true match is never demoted)
 

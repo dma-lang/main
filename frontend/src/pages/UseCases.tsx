@@ -9,7 +9,7 @@ import { useSearchParams } from 'react-router-dom';
 import type { UseCaseRow } from '../api/client';
 import { useSubcaps, useUseCaseStories, useUseCases } from '../api/queries';
 import { Dropdown, Empty, Page, PillarDot, Seg } from '../components/primitives';
-import { ClientChip, StoryDetail } from '../components/StoryDetail';
+import { ClientChip, StoryDetail, StoryQuality } from '../components/StoryDetail';
 import { go } from '../lib/events';
 import { heatBg, PILLAR_COLORS } from '../lib/helpers';
 import { Icon } from '../lib/icons';
@@ -103,7 +103,7 @@ function UseCaseDrawer({ version, uc, onClose }: { version: string; uc: UseCaseR
                     {st.summary}
                   </div>
                   {/* narrative + collapsible acceptance-criteria / solution-design */}
-                  <StoryDetail story={st} showClient={false} />
+                  <StoryDetail story={st} showClient={false} extra={<StoryQuality story={st} />} />
                 </div>
               ))}
             </div>

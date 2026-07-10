@@ -57,3 +57,6 @@ build-ca/*
 # prototype extraction + QA artifacts (regenerate: scripts/extract_prototype.py, scripts/qa_visual.mjs)
 .prototype/
 .qa/
+
+# local ML model weights (fetched by scripts/fetch_minilm.py; never committed)
+backend/models/

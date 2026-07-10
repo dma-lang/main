@@ -278,14 +278,22 @@ export function StoryLibrary() {
                     </td>
                     <td>
                       <span
-                        className="sclink mono"
-                        style={{ fontSize: 11 }}
+                        className="sclink"
+                        style={{
+                          fontSize: 11,
+                          display: 'block',
+                          maxWidth: 124,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={s.subcap_id}
                         onClick={(e) => {
                           e.stopPropagation();
                           go('subcap/' + s.subcap_id);
                         }}
                       >
-                        {s.subcap_id}
+                        {s.subcap_name ?? s.subcap_id}
                       </span>
                     </td>
                     <td>

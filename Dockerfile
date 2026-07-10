@@ -44,6 +44,15 @@ ENV UV_NATIVE_TLS=true \
 RUN pip install --no-cache-dir uv
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev
+# Local MiniLM sentence-embedding model (~90MB, pinned revision + SHA-256): the deterministic,
+# zero-spend dense half behind matching/retrieval. Fetched BEFORE the backend source COPY so a
+# code edit never re-downloads it (layer cache); SKIP_MINILM=1 builds without it (the app then
+# degrades to the token-hash stub — weaker matching, never a failure).
+ARG SKIP_MINILM=0
+COPY scripts/fetch_minilm.py /tmp/fetch_minilm.py
+RUN if [ "$SKIP_MINILM" != "1" ]; then \
+      uv run python /tmp/fetch_minilm.py --dest /app/models/minilm; \
+    fi
 COPY backend/ ./
 COPY config/ ./config/
 COPY --from=frontend /fe/dist ./static

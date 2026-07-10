@@ -10,15 +10,22 @@ from __future__ import annotations
 import gzip
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from app.services.story_relatedness import RelatednessIndex, definition_doc, story_doc
 
 _SEED = Path(__file__).resolve().parents[1] / "seed"
 
+
+class _Cfg(TypedDict):
+    floor: float
+    margin: float
+    strong_sibling: float
+
+
 # a conservative, high-precision gate config (mirrors the gates.yaml default): only demote a carry
 # whose story is essentially unrelated to the assigned capability.
-_CFG = {"floor": 0.05, "margin": 0.15, "strong_sibling": 0.25}
+_CFG: _Cfg = {"floor": 0.05, "margin": 0.15, "strong_sibling": 0.25}
 
 
 def _catalogue() -> list[dict[str, Any]]:
@@ -75,6 +82,86 @@ def test_misrouted_story_gets_a_reroute_target() -> None:
     v = idx.classify(story_doc(r), "P1C3.1.1", **_CFG)
     assert v.verdict == "misrouted" and v.reroute is not None and v.reroute != "P1C3.1.1"
     assert v.best > v.assigned + _CFG["margin"]
+
+
+def test_reroute_requires_two_discriminating_terms() -> None:
+    """A re-route resting on a SINGLE coincidental word is not a re-route. The measured failure was
+    Salesforce config tasks moved onto a subcap they share one word with ('Create Personal Lead
+    Layout' -> 'Personal Trading Compliance' on 'personal'). With ``min_reroute_terms=2`` a one-word
+    sibling stays 'review' (flagged, NOT moved); a genuine two-word overlap still re-routes."""
+    idx = RelatednessIndex(
+        [
+            {
+                "id": "P1C1.1.1",
+                "name": "Payments Reconciliation",
+                "l2": "Finance Ops",
+                "description": "reconcile payment ledgers nightly",
+                "pillar": "P1",
+            },
+            {
+                "id": "P1C1.1.2",
+                "name": "Fraud Detection",
+                "l2": "Risk Analytics",
+                "description": "detect fraudulent transactions",
+                "pillar": "P1",
+            },
+            {
+                "id": "P1C1.1.3",
+                "name": "Card Issuance",
+                "l2": "Cards",
+                "description": "issue debit cards to members",
+                "pillar": "P1",
+            },
+        ]
+    )
+    one = story_doc({"sum": "detect anomalies"})  # shares only 'detect' with Fraud Detection
+    two = story_doc({"sum": "detect fraudulent activity"})  # shares 'detect' + 'fraudulent'
+    cfg: _Cfg = {"floor": 0.05, "margin": 0.05, "strong_sibling": 0.1}
+    # a single shared term WOULD re-route under the old rule (min=1) but must NOT under min=2
+    assert idx.classify(one, "P1C1.1.1", **cfg, min_reroute_terms=1).verdict == "misrouted"
+    assert idx.classify(one, "P1C1.1.1", **cfg, min_reroute_terms=2).verdict == "review"
+    # a genuine two-term overlap still re-routes
+    v = idx.classify(two, "P1C1.1.1", **cfg, min_reroute_terms=2)
+    assert v.verdict == "misrouted" and v.reroute == "P1C1.1.2"
+
+
+def test_no_single_term_reroute_in_real_corpus() -> None:
+    """Corpus-wide invariant under the shipped config: EVERY re-route rests on >= 2 shared
+    discriminating terms, so no story is ever moved onto a subcap it coincidentally shares one word
+    with. Locks the precision fix against a regression that drops the term requirement."""
+    from app.intelligence.gates import story_relatedness_config
+    from app.services.use_case_match import _tokens
+
+    cfg = story_relatedness_config()
+    idx = RelatednessIndex(_catalogue())
+    subs = {s["id"] for s in _catalogue()}
+    rows = json.load(gzip.open(_SEED / "stories.json.gz"))
+    single = 0
+    reroutes = 0
+    for r in rows:
+        sc = r.get("sc")
+        if sc not in subs:
+            continue
+        v = idx.classify(
+            story_doc(r),
+            sc,
+            floor=cfg.floor,
+            margin=cfg.margin,
+            strong_sibling=cfg.strong_sibling,
+            min_reroute_terms=cfg.min_reroute_terms,
+        )
+        if v.verdict == "misrouted":
+            reroutes += 1
+            sv = idx._vec.get(v.best_id, {})  # noqa: SLF001
+            shared = sum(
+                1
+                for t in _tokens(story_doc(r))
+                if t in sv and idx._idf.get(t, 0.0) > 0  # noqa: SLF001
+            )
+            if shared < 2:
+                single += 1
+    assert reroutes > 1500  # the genuine multi-term re-routes survive
+    assert single == 0, f"{single} re-routes rest on a single coincidental term"
 
 
 def test_dense_half_rescues_a_lexical_gap_match() -> None:

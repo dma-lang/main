@@ -15,3 +15,6 @@ terraform
 *.md
 .env
 .env.*
+
+# local model weights: fetched INSIDE the build (pinned+verified), never from the context
+backend/models/

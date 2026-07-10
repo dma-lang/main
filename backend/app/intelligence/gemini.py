@@ -219,9 +219,17 @@ def _truncated(resp: Any) -> bool:
 
 
 def _hermetic_embed(texts: list[str], dim: int) -> list[list[float]]:
-    """Deterministic stand-in for gemini-embedding-001: an L2-normalised token-hash vector, so
-    cosine reflects real text overlap. Lets the embeddings job, dense retrieval and semantic KG run
-    end-to-end with no spend; the live model swaps in transparently (same 768-d contract)."""
+    """Deterministic zero-spend embeddings. Preferred: the LOCAL MiniLM sentence model
+    (intelligence/local_embeddings — real semantics, so "KYC" lands near "know your customer"),
+    zero-padded to the shared vector(768) contract (cosine is invariant under zero-padding).
+    Fallback when the model files are absent: the L2-normalised token-hash vector (cosine ≈ token
+    overlap) — no environment hard-fails on a missing model. Both are deterministic; the live
+    model swaps in transparently (same 768-d contract)."""
+    from app.intelligence import local_embeddings
+
+    dense = local_embeddings.encode(texts, pad_to=dim)
+    if dense is not None:
+        return dense
     out: list[list[float]] = []
     for t in texts:
         vec = [0.0] * dim

@@ -106,6 +106,13 @@ class StoryRow(BaseModel):
     facets: dict[str, Any] | None = None
     ac_text: str | None = None
     solution_design_text: str | None = None
+    # per-subcap CARRY provenance (trust envelope): whether THIS story→subcap link is a confident
+    # native match or was demoted/re-routed by the relatedness gate, its relatedness similarity, and
+    # the mechanism (native | relatedness_reroute | relatedness_review | crosswalk | …). None for
+    # reads not keyed on a single carry (e.g. the corpus-level story library).
+    carry_status: str | None = None
+    carry_similarity: float | None = None
+    carry_via: str | None = None
 
 
 # The carried-delivery source for a subcap. The analysis-grade default is JIRA-ONLY (matches the
@@ -520,7 +527,9 @@ async def subcap_stories(
         "st.delivery_score::float AS delivery_score, st.epic_key, st.cap_name, "
         "st.category_name, st.reusability_layer, st.population, "
         "st.story_sv_code, st.tier, st.is_synthetic, "
-        "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text "
+        "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text, "
+        "c.status::text AS carry_status, c.similarity::float AS carry_similarity, "
+        "c.via AS carry_via "
         + where
         + " ORDER BY st.composite_score DESC NULLS LAST, st.story_key LIMIT :size OFFSET :off"
     )
@@ -537,9 +546,13 @@ async def subcap_stories(
 
 
 class ClientAgg(BaseModel):
-    """One Jira project (the corpus' client/engagement proxy) that delivered this subcap."""
+    """One CLIENT that delivered this subcap, resolved to its real name (``client_name``, e.g.
+    "Academy Bank") rather than a raw Jira project code. A client can span several Jira projects
+    (Banc of California = BCCP/BCFSC/BCNS), so ``project_keys`` keeps the underlying codes for the
+    drilldown/tooltip and the client is counted ONCE."""
 
-    project_key: str
+    client_name: str
+    project_keys: list[str]  # the Jira project code(s) this client delivered under
     stories: int
     share: float  # of this subcap's carried stories
     avg_composite: float | None = None
@@ -592,22 +605,31 @@ async def subcap_delivery(
     s = _schema(v)
     link = _carry_where(include_synthetic)
     name_sql = text(f"SELECT name FROM {s}.subcap WHERE subcap_id = :sid")
+    # a CLIENT = the resolved client_name (falls back to the Jira project code only when the name is
+    # unresolved); one client can span several Jira projects, so we aggregate the distinct project
+    # codes under it and count each client ONCE (n_clients) rather than once per Jira project.
+    client_expr = "coalesce(st.client_name, st.project_key, '(no client)')"
     clients_sql = text(
-        "SELECT coalesce(st.project_key, '(no project)') AS project_key, "
+        f"SELECT {client_expr} AS client_name, "
         "count(*) AS stories, avg(st.composite_score)::float AS avg_composite, "
-        "array_remove(array_agg(DISTINCT st.story_sv_code), NULL) AS subverticals "
+        "array_remove(array_agg(DISTINCT st.story_sv_code), NULL) AS subverticals, "
+        "array_remove(array_agg(DISTINCT st.project_key), NULL) AS project_keys "
         + link
-        + " GROUP BY coalesce(st.project_key, '(no project)') ORDER BY stories DESC, project_key"
+        + f" GROUP BY {client_expr} ORDER BY stories DESC, client_name"
     )
     top_sql = text(
         "SELECT story_key, project_key, summary, confidence_level, composite_score, ac_score, "
         "sd_score, story_score, story_sv_code, tier, is_synthetic, "
-        "client_name, narrative, facets, ac_text, solution_design_text FROM ("
+        "client_name, narrative, facets, ac_text, solution_design_text, "
+        "carry_status, carry_similarity, carry_via, agg_client FROM ("
         "SELECT st.story_key, st.project_key, st.summary, st.confidence_level::text, "
         "st.composite_score::float, st.ac_score::float, st.sd_score::float, "
         "st.story_score::float, st.story_sv_code, st.tier, st.is_synthetic, "
         "st.client_name, st.narrative, st.facets, st.ac_text, st.solution_design_text, "
-        "row_number() OVER (PARTITION BY coalesce(st.project_key, '(no project)') "
+        "c.status::text AS carry_status, c.similarity::float AS carry_similarity, "
+        "c.via AS carry_via, "
+        f"{client_expr} AS agg_client, "
+        f"row_number() OVER (PARTITION BY {client_expr} "
         "ORDER BY st.composite_score DESC NULLS LAST, st.story_key) AS rn " + link + ") t "
         "WHERE rn <= 3"
     )
@@ -630,16 +652,18 @@ async def subcap_delivery(
         scan = (await conn.execute(scan_sql, {**params, "cap": _CLUSTER_SCAN_CAP})).mappings().all()
     top_by_client: dict[str, list[StoryRow]] = {}
     for r in trows:
-        key = str(r["project_key"] or "(no project)")
-        top_by_client.setdefault(key, []).append(StoryRow.model_validate(dict(r)))
+        d = dict(r)
+        key = str(d.pop("agg_client"))
+        top_by_client.setdefault(key, []).append(StoryRow.model_validate(d))
     clients = [
         ClientAgg(
-            project_key=str(r["project_key"]),
+            client_name=str(r["client_name"]),
+            project_keys=sorted(str(x) for x in (r["project_keys"] or [])),
             stories=int(r["stories"]),
             share=round(int(r["stories"]) / int(total), 3) if total else 0.0,
             avg_composite=round(r["avg_composite"], 2) if r["avg_composite"] is not None else None,
             subverticals=sorted(str(x) for x in (r["subverticals"] or [])),
-            top=top_by_client.get(str(r["project_key"]), []),
+            top=top_by_client.get(str(r["client_name"]), []),
         )
         for r in crows[:12]
     ]

@@ -137,7 +137,7 @@ async def _refresh_version(version_id: str, label: str, build: str) -> dict[str,
             await _write_marker(conn, schema, build)
     logger.info(
         "refreshed %s: %s subcaps, %s stories ingested (%s confirmed / %s review); "
-        "relatedness re-match: %s re-routed, %s batch-dumped (unmapped)",
+        "relatedness re-match: %s re-routed, %s batch-dumped (unmapped), %s model-rescued",
         schema,
         prov.get("subcaps"),
         carry.get("stories_ingested"),
@@ -145,6 +145,7 @@ async def _refresh_version(version_id: str, label: str, build: str) -> dict[str,
         carry.get("review"),
         carry.get("relatedness_rerouted"),
         carry.get("relatedness_batch_dumped"),
+        carry.get("relatedness_model_rescued"),
     )
     return {"version": version_id, "skipped": False, "provision": prov, "carry": carry}
 

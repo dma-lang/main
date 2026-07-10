@@ -11,12 +11,15 @@ dependencies = [
   "fastapi>=0.115",
   "google-auth[requests]>=2.30",
   "google-genai>=2.10.0",
+  "numpy>=2.5.1",
+  "onnxruntime>=1.27.0",
   "openpyxl>=3.1.5",
   "psycopg[binary]>=3.2",
   "pydantic-settings>=2.5",
   "python-multipart>=0.0.32",
   "pyyaml>=6.0",
   "sqlalchemy[asyncio]>=2.0",
+  "tokenizers>=0.23.1",
   "uvicorn[standard]>=0.30",
 ]
 
@@ -29,6 +32,7 @@ dev = [
   "httpx>=0.27",
   "types-PyYAML>=6.0",
   "types-openpyxl>=3.1.5.20260518",
+  "scikit-learn>=1.9.0",
 ]
 
 [tool.uv]
@@ -54,6 +58,11 @@ python_version = "3.12"
 strict = true
 files = ["app", "tests"]
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# onnxruntime ships no type stubs; the local-embeddings wrapper types its own surface
+module = ["onnxruntime", "onnxruntime.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -485,6 +485,13 @@ export interface StoryRow {
   facets?: StoryFacets | null;
   ac_text?: string | null;
   solution_design_text?: string | null;
+  // per-subcap CARRY provenance (trust envelope): whether THIS story→subcap link is a confident
+  // native match or was demoted/re-routed by the relatedness gate (status), the relatedness
+  // similarity, and the mechanism (native | relatedness_reroute | relatedness_review | …). Absent
+  // on corpus-level reads that are not keyed on a single carry.
+  carry_status?: string | null;
+  carry_similarity?: number | null;
+  carry_via?: string | null;
 }
 
 export interface StoryPage {
@@ -494,10 +501,13 @@ export interface StoryPage {
   items: StoryRow[];
 }
 
-// Delivery drilldown under a subcap's story count: clients parsed from Jira project keys +
+// Delivery drilldown under a subcap's story count: clients resolved to their real name +
 // deterministic story clusters listing the related clients with similar story characteristics.
 export interface ClientAgg {
-  project_key: string;
+  // the resolved client (e.g. "Academy Bank"); one client can span several Jira projects, kept in
+  // project_keys for the tooltip/drilldown. Counted once in n_clients.
+  client_name: string;
+  project_keys: string[];
   stories: number;
   share: number;
   avg_composite: number | null;

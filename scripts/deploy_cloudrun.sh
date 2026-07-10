@@ -55,6 +55,19 @@ retry() {
   done
 }
 
+# try_retry: like retry but RETURNS nonzero on exhaustion instead of exiting the script — for
+# steps that have their own fallback (retry's fail() would exit before the fallback could run).
+try_retry() {
+  local name="$1" max="$2"; shift 2
+  local n=1
+  until "$@"; do
+    if (( n >= max )); then log "$name failed after $max attempts (falling back)"; return 1; fi
+    local wait=$(( 2 ** n ))
+    log "$name failed (attempt $n/$max) — retrying in ${wait}s"
+    sleep "$wait"; ((n++))
+  done
+}
+
 # ---------------------------------------------------------------- 0. preflight (fail fast)
 log "preflight"
 command -v gcloud >/dev/null || fail "gcloud CLI not installed"
@@ -75,7 +88,9 @@ retry "docker auth" 3 gcloud auth configure-docker "${REGION}-docker.pkg.dev" --
 # ---------------------------------------------------------------- 1. build (mirror fallback)
 build() { docker buildx build --platform linux/amd64 "$@" -t "$IMAGE_TAG" . ; }
 log "building ${IMAGE_TAG}"
-if ! retry "image build (docker.io bases)" 2 build; then true; fi
+# try_retry (NOT retry): the docker.io attempt must RETURN on failure so the GCR-mirror fallback
+# below can actually run — retry() exits the whole script and made the fallback unreachable.
+if ! try_retry "image build (docker.io bases)" 2 build; then true; fi
 if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
   log "docker.io pull blocked/rate-limited — falling back to the GCR mirror of the same images"
   retry "image build (mirror bases)" 3 build \
