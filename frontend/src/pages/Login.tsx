@@ -34,6 +34,31 @@ const PROMISES: [string, string][] = [
  * now sends an HONEST message for each cause (auth unconfigured vs database unreachable), so we
  * SHOW IT rather than overwrite every 5xx with a single hardcoded line — the old behaviour sent
  * operators chasing the migration job for problems that were never the database. */
+/** Google's token-endpoint error code → the ONE operator action that fixes it. `invalid_client`
+ * is the 401 the service used to surface as a bare "google token exchange failed: 401" page: the
+ * client id and client secret on the service are not a matching pair — nothing else causes it. */
+function exchangeFailureDetail(reason: string | null): string {
+  switch (reason) {
+    case 'invalid_client':
+      return (
+        'Google rejected the service’s OAuth credentials (401 invalid_client): GOOGLE_OAUTH_CLIENT_SECRET ' +
+        'is not the secret of the OAuth client in GOOGLE_OAUTH_CLIENT_ID — the secret was regenerated, ' +
+        'stored for a different client, or saved with a trailing newline. Re-copy the secret from ' +
+        'APIs & Services → Credentials → that client, store a new Secret Manager version, redeploy.'
+      );
+    case 'invalid_grant':
+    case 'redirect_uri_mismatch':
+      return (
+        `Google refused the sign-in code (${reason}): the redirect URI the service sends must be registered ` +
+        'on the OAuth client exactly (PUBLIC_BASE_URL + /api/auth/callback), and a code can be used once. Try again.'
+      );
+    case 'unauthorized_client':
+      return 'Google refused the OAuth client (unauthorized_client): the client is not allowed the authorization-code grant.';
+    default:
+      return `Google refused the sign-in code exchange (${reason ?? 'exchange_failed'}). Check the service logs and try again.`;
+  }
+}
+
 function mapError(e: unknown): { phase: Phase; detail: string } {
   const raw = String((e as Error)?.message ?? e);
   const body = raw.replace(/^\d{3}:\s*/, ''); // strip the "503: " status prefix → the real message
@@ -56,10 +81,13 @@ export function Login() {
   const [phase, setPhase] = useState<Phase>('loading');
   const [detail, setDetail] = useState('');
 
-  // The OAuth callback redirects back to #/login?error=… on a refusal (e.g. non-@zennify account).
-  const callbackError = (): string | null => {
+  // The OAuth callback redirects back to #/login?error=… on a refusal (e.g. non-@zennify account),
+  // with &reason=<Google's own error code> when Google refused the code exchange.
+  const callbackError = (): { err: string; reason: string | null } | null => {
     const m = /[?&]error=([^&]+)/.exec(location.hash);
-    return m ? decodeURIComponent(m[1]) : null;
+    if (!m) return null;
+    const r = /[?&]reason=([^&]+)/.exec(location.hash);
+    return { err: decodeURIComponent(m[1]), reason: r ? decodeURIComponent(r[1]) : null };
   };
 
   // Live sign-in is a full-page redirect to the server, which owns the entire Google handshake.
@@ -91,13 +119,19 @@ export function Login() {
       .then(async (c) => {
         setCfg(c);
         // A refused OAuth callback landed back here with ?error=… — show it honestly.
-        const err = callbackError();
-        if (err) {
+        const cb = callbackError();
+        if (cb) {
+          if (cb.err === 'token_exchange') {
+            // Google refused the server-side code exchange. Its error code IS the diagnosis.
+            setPhase('error');
+            setDetail(exchangeFailureDetail(cb.reason));
+            return;
+          }
           setPhase('rejected');
           setDetail(
-            err === 'domain'
+            cb.err === 'domain'
               ? `This account is not permitted — sign in with a verified @${c.auth_email_domain} Google account.`
-              : `Sign-in did not complete (${err}). Try again.`,
+              : `Sign-in did not complete (${cb.err}). Try again.`,
           );
           return;
         }
@@ -111,14 +145,19 @@ export function Login() {
           );
           return;
         }
+        if (c.auth_mode === 'live' && c.auth_credentials === 'rejected') {
+          setPhase('error');
+          setDetail(exchangeFailureDetail('invalid_client'));
+          return;
+        }
         if (c.db && c.db !== 'ok') {
           setPhase('error');
           setDetail(
             c.db === 'not_configured'
               ? 'The service has no database configured (DATABASE_URL) — set it and run the migration job (A9).'
               : 'The service cannot reach its database (its Cloud SQL connection). The migration ' +
-                'job is separate and may already have run — check the service has ' +
-                '--add-cloudsql-instances and a reachable instance, then retry.',
+                  'job is separate and may already have run — check the service has ' +
+                  '--add-cloudsql-instances and a reachable instance, then retry.',
           );
           return;
         }
@@ -241,7 +280,11 @@ export function Login() {
             <>
               <div
                 className="card"
-                style={{ padding: '9px 12px', marginBottom: 12, background: 'var(--surface-raised)' }}
+                style={{
+                  padding: '9px 12px',
+                  marginBottom: 12,
+                  background: 'var(--surface-raised)',
+                }}
               >
                 <div className="row gap8">
                   <span className="chip blue" style={{ fontSize: 9.5 }}>
