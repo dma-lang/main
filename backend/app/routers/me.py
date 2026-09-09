@@ -33,17 +33,30 @@ async def client_config(settings: Settings = Depends(get_settings)) -> dict[str,
 
     Also reports db readiness so the login page can pre-flight and name the EXACT blocker
     (sign-in unconfigured vs database unreachable) instead of a generic, misleading error."""
+    import asyncio
+
     from app import db
+    from app.routers.auth import probe_client_credentials
 
     live = not settings.is_dev_auth
     engine = db.get_engine()
     db_status = "ok" if await db.ping() else ("not_configured" if engine is None else "down")
+    configured = bool(settings.google_client_id and settings.google_client_secret)
+    # Does Google ACCEPT the configured id/secret pair? A mismatched pair (401 invalid_client on
+    # every code exchange) is otherwise invisible until a user has already clicked through Google.
+    # ok | rejected | unknown | unconfigured — cached, bounded, fail-open (see probe docstring).
+    credentials = (
+        await asyncio.to_thread(probe_client_credentials, settings)
+        if live and configured
+        else ("unconfigured" if live else "unknown")
+    )
     # OAuth Authorization-Code flow: the SPA only needs to know auth is configured and where to
     # start it (/api/auth/login) — the client id/secret stay server-side, unlike the old GSI flow.
     return {
         "auth_mode": "live" if live else "dev",
         "auth_email_domain": settings.auth_email_domain,
-        "auth_configured": bool(settings.google_client_id and settings.google_client_secret),
+        "auth_configured": configured,
+        "auth_credentials": credentials,
         "login_url": "/api/auth/login",
         "db": db_status,
     }

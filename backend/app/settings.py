@@ -52,6 +52,19 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("google_oauth_client_secret", "google_client_secret"),
     )
     session_ttl_hours: int = 12  # session cookie lifetime (matches Accelerate's JWT_TTL_HOURS)
+    # Live credential pre-flight: /api/config probes Google's token endpoint with a bogus code so
+    # the Login page (and doctor.sh) can name a REJECTED client id/secret pair — Google answers
+    # 401 invalid_client — before anyone clicks. Bounded (5s, cached 5 min) and fail-open to
+    # "unknown". Off in the test suite (no network) and for hermetic local runs.
+    oauth_preflight: bool = True
+
+    @field_validator("google_client_id", "google_client_secret", mode="before")
+    @classmethod
+    def _strip_credential(cls, v: object) -> object:
+        """A Secret Manager version created with `echo` (trailing newline) or a pasted value with
+        a stray space makes Google's token endpoint answer 401 invalid_client on every sign-in —
+        the credential pair looks right in the console and is wrong by one byte. Strip it."""
+        return v.strip() if isinstance(v, str) else v
 
     # THE canonical public URL of this service (e.g. https://cia-<project#>.us-central1.run.app).
     # Cloud Run answers on TWO hostnames (deterministic + legacy hash); deriving the OAuth

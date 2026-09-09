@@ -47,7 +47,17 @@ DB_NAME="${DB_NAME:-cia}"
 DB_USER="${DB_USER:-cia}"
 DB_SECRET="${DB_SECRET:-cia-database-url}"
 HMAC_SECRET="${HMAC_SECRET:-cia-hmac-key}"
-OAUTH_SECRET="${OAUTH_SECRET:-cia-google-client-secret}"  # Secret Manager name for the OAuth secret
+# Secret Manager name for the OAuth client secret. DEPLOYMENT.md A7 calls it cia-oauth-client-secret;
+# earlier doctor runs used cia-google-client-secret. Storing a rotated secret under one name while
+# the service reads the other leaves the service on the STALE secret -> every sign-in ends in
+# "google token exchange failed: 401" (invalid_client). So, unless overridden, the doctor uses the
+# secret the LIVE service actually reads (derived below from its GOOGLE_OAUTH_CLIENT_SECRET ref).
+OAUTH_SECRET_DEFAULT="cia-oauth-client-secret"
+OAUTH_SECRET="${OAUTH_SECRET:-}"
+# The project's Google OAuth *web* client (a public identifier). It has BOTH CIA callback URLs
+# registered (cia-<project#>.<region>.run.app and the legacy hash host, /api/auth/callback). Pass
+# --client-id to use another; the matching secret MUST come from the same client (--client-secret).
+CLIENT_ID_DEFAULT="306195530103-ub6t46i8sd9q1eatpt6dgo0i9811mnrp.apps.googleusercontent.com"
 CLIENT_ID="${CLIENT_ID:-}"
 CLIENT_SECRET="${CLIENT_SECRET:-}"
 CHECK_ONLY=0
@@ -152,7 +162,24 @@ else
   fi
 fi
 # OAuth client secret (the code flow needs it, server-side). The doctor cannot invent it — store
-# it once with --client-secret; thereafter it lives in Secret Manager.
+# it once with --client-secret; thereafter it lives in Secret Manager — under the name the LIVE
+# service reads (its GOOGLE_OAUTH_CLIENT_SECRET secret ref), so a rotation can never land in a
+# secret the service ignores.
+if [ -z "$OAUTH_SECRET" ]; then
+  OAUTH_SECRET="$(gcloud run services describe "$SERVICE" --region "$REGION" --format=json 2>/dev/null \
+    | python3 -c 'import json,sys
+try:
+  envs=json.load(sys.stdin)["spec"]["template"]["spec"]["containers"][0].get("env",[])
+  for e in envs:
+    if e.get("name")=="GOOGLE_OAUTH_CLIENT_SECRET":
+      print(e.get("valueFrom",{}).get("secretKeyRef",{}).get("name","")); break
+  else:
+    print("")
+except Exception:
+  print("")')"
+  OAUTH_SECRET="${OAUTH_SECRET:-$OAUTH_SECRET_DEFAULT}"
+fi
+ok "OAuth client secret lives in Secret Manager as '${OAUTH_SECRET}' (the name the service reads)"
 if [ -n "$CLIENT_SECRET" ]; then
   gcloud secrets describe "$OAUTH_SECRET" >/dev/null 2>&1 \
     || gcloud secrets create "$OAUTH_SECRET" --replication-policy=automatic >/dev/null 2>&1 || true
@@ -201,6 +228,8 @@ try:
   print(by.get("GOOGLE_OAUTH_CLIENT_ID") or by.get("GOOGLE_CLIENT_ID") or "")
 except Exception:
   print("")')"
+  # nothing on the service yet -> the project's web client (its callback URLs are registered)
+  CLIENT_ID="${CLIENT_ID:-$CLIENT_ID_DEFAULT}"
 fi
 # OAuth Authorization-Code flow: the SPA needs the client id (env) and the service needs the
 # client secret (Secret Manager). The secret stays out of env vars. PUBLIC_BASE_URL pins the
@@ -480,6 +509,22 @@ esac
 CFG="$(curl -sS --max-time 20 "${URL}/api/config" 2>/dev/null || true)"
 if grep -q '"auth_configured":true' <<<"$CFG"; then
   ok "sign-in configured — OAuth client id + secret are live on the service"
+  # Does Google ACCEPT the pair? The service probes the token endpoint with a bogus code: a matching
+  # pair fails on the code (invalid_grant -> "ok"); a mismatched pair fails on the CLIENT
+  # (401 invalid_client -> "rejected") — the exact failure users see as
+  # "google token exchange failed: 401 ... oauth2.googleapis.com/token".
+  case "$CFG" in
+    *'"auth_credentials":"ok"'*)
+      ok "Google accepts the OAuth client id/secret pair" ;;
+    *'"auth_credentials":"rejected"'*)
+      warn "Google REJECTS the OAuth client id/secret pair (401 invalid_client): the secret in"
+      warn "  ${OAUTH_SECRET} is not the secret of client ${CLIENT_ID:-<GOOGLE_OAUTH_CLIENT_ID>}"
+      warn "  (regenerated, copied from a different OAuth client, or stored with a trailing newline)."
+      warn "  Fix: Console -> APIs & Services -> Credentials -> THAT web client -> copy its secret, then"
+      warn "  bash scripts/doctor.sh --client-id <that client id> --client-secret <GOCSPX-…>" ;;
+    *)
+      warn "could not confirm Google accepts the OAuth credentials (probe unknown) — sign in to verify" ;;
+  esac
 else
   warn "sign-in is NOT configured on the service — re-run with BOTH:"
   warn "  bash scripts/doctor.sh --client-id <oauth-web-client-id> --client-secret <GOCSPX-…>"

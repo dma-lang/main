@@ -259,7 +259,8 @@ def test_oauth_code_flow_signs_in_zennify_and_rejects_others(
     captured: dict[str, str] = {}
 
     class _Resp:
-        def raise_for_status(self) -> None: ...
+        status_code = 200
+
         def json(self) -> dict[str, str]:
             return {"id_token": _id_token(captured["email"])}
 
@@ -342,3 +343,131 @@ def test_require_admin_blocks_non_admin() -> None:
 def test_require_admin_allows_admin() -> None:
     out = asyncio.run(require_admin(user={"uid": "u", "is_admin": True}))
     assert out["is_admin"] is True
+
+
+def test_oauth_credentials_are_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REGRESSION (prod): a Secret Manager version written with `echo` carries a trailing newline;
+    Google then answers every code exchange with 401 invalid_client while the console shows a
+    'correct' secret. Credentials must be stripped at settings load."""
+    from app.settings import Settings
+
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", " cid.apps.googleusercontent.com\n")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "GOCSPX-secret\n")
+    s = Settings()
+    assert s.google_client_id == "cid.apps.googleusercontent.com"
+    assert s.google_client_secret == "GOCSPX-secret"
+
+
+class _GoogleResp:
+    def __init__(self, status_code: int, body: dict[str, str]) -> None:
+        self.status_code = status_code
+        self._body = body
+        self.text = str(body)
+
+    def json(self) -> dict[str, str]:
+        return self._body
+
+
+def test_callback_surfaces_googles_invalid_client_as_login_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE reported failure: `google token exchange failed: 401 Client Error: Unauthorized for url:
+    https://oauth2.googleapis.com/token`. Google's 401 means invalid_client (id/secret pair not
+    matching) and nothing else — the callback must carry that reason back to the Login page
+    (which maps it to the operator action) instead of a bare 502 JSON page."""
+    from app.main import create_app
+    from app.routers import auth as auth_mod
+    from app.settings import Settings, get_settings
+
+    monkeypatch.setattr(
+        auth_mod,
+        "_token_post",
+        lambda data, timeout=10: _GoogleResp(
+            401, {"error": "invalid_client", "error_description": "Unauthorized"}
+        ),
+    )
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        auth_mode="live",
+        google_client_id="cid.apps.googleusercontent.com",
+        google_client_secret="GOCSPX-stale",
+        hmac_key="test-session-key",
+    )
+    with TestClient(app) as c:
+        c.get("/api/auth/login", follow_redirects=False)
+        state = c.cookies.get("cia_oauth_state")
+        r = c.get(f"/api/auth/callback?code=abc&state={state}", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "/#/login?error=token_exchange&reason=invalid_client"
+        assert not c.cookies.get("cia_session")  # fails closed: no session on a refused exchange
+
+    # an unknown Google error code is never echoed raw into the URL
+    monkeypatch.setattr(
+        auth_mod,
+        "_token_post",
+        lambda data, timeout=10: _GoogleResp(400, {"error": "<script>", "error_description": ""}),
+    )
+    with TestClient(app) as c:
+        c.get("/api/auth/login", follow_redirects=False)
+        state = c.cookies.get("cia_oauth_state")
+        r = c.get(f"/api/auth/callback?code=abc&state={state}", follow_redirects=False)
+        assert r.headers["location"] == "/#/login?error=token_exchange&reason=exchange_failed"
+
+
+def test_credential_preflight_classifies_googles_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pre-flight distinguishes a MATCHING pair (Google refuses the bogus CODE: 400
+    invalid_grant -> ok) from a MISMATCHED pair (Google refuses the CLIENT: 401 invalid_client
+    -> rejected); network failure is 'unknown' (fail-open); the verdict is cached per pair and
+    /api/config carries it so the Login page and doctor.sh can name the blocker up front."""
+    from app.routers import auth as auth_mod
+    from app.routers.me import client_config
+    from app.settings import Settings
+
+    calls: list[str] = []
+
+    def _fake(data: dict[str, str], timeout: int = 10) -> _GoogleResp:
+        calls.append(data["client_secret"])
+        assert data["code"] == "cia-credential-preflight"  # never a real code
+        if data["client_secret"] == "GOCSPX-good":
+            return _GoogleResp(400, {"error": "invalid_grant", "error_description": "Bad Request"})
+        if data["client_secret"] == "GOCSPX-bad":
+            return _GoogleResp(
+                401, {"error": "invalid_client", "error_description": "Unauthorized"}
+            )
+        raise ConnectionError("no route to host")
+
+    monkeypatch.setattr(auth_mod, "_token_post", _fake)
+    auth_mod._probe_cache.clear()
+
+    def _s(secret: str) -> Settings:
+        return Settings(
+            auth_mode="live",
+            google_client_id="cid.apps.googleusercontent.com",
+            google_client_secret=secret,
+            oauth_preflight=True,
+            public_base_url="https://cia.example.run.app",
+        )
+
+    assert auth_mod.probe_client_credentials(_s("GOCSPX-good")) == "ok"
+    assert auth_mod.probe_client_credentials(_s("GOCSPX-good")) == "ok"  # cached: no 2nd call
+    assert calls == ["GOCSPX-good"]
+    assert auth_mod.probe_client_credentials(_s("GOCSPX-bad")) == "rejected"
+    assert auth_mod.probe_client_credentials(_s("GOCSPX-offline")) == "unknown"
+    assert auth_mod.probe_client_credentials(Settings(auth_mode="live")) == "unconfigured"
+    # the switch: OAUTH_PREFLIGHT=0 (the test suite default) never touches the network
+    calls.clear()
+    assert (
+        auth_mod.probe_client_credentials(
+            _s("GOCSPX-good").model_copy(update={"oauth_preflight": False})
+        )
+        == "unknown"
+    )
+    assert calls == []
+
+    # /api/config carries the verdict (and stays secret-free)
+    auth_mod._probe_cache.clear()
+    cfg = asyncio.run(client_config(_s("GOCSPX-bad")))
+    assert cfg["auth_configured"] is True and cfg["auth_credentials"] == "rejected"
+    assert "GOCSPX" not in str(cfg)
+    dev = asyncio.run(client_config(Settings(auth_mode="dev")))
+    assert dev["auth_credentials"] == "unknown"

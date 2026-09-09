@@ -15,8 +15,12 @@ here (server-to-server code exchange); it never reaches the browser.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
 import secrets
+import threading
+import time
 from typing import Any
 from urllib.parse import urlencode
 
@@ -26,12 +30,109 @@ from fastapi.responses import RedirectResponse
 from app.sessions import _b64u_decode, make_session
 from app.settings import Settings, get_settings
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"  # noqa: S105 - public endpoint, not a secret
 SESSION_COOKIE = "cia_session"
 _STATE_COOKIE = "cia_oauth_state"
+
+# Google's token endpoint answers a code exchange with exactly one of these on failure. The
+# distinction is the whole diagnosis, so it is surfaced verbatim (never swallowed into a 502):
+#   401 invalid_client -> the client id + client secret are NOT a matching pair (stale/rotated
+#                         secret, secret stored for a different OAuth client, or a stray byte).
+#   400 invalid_grant  -> the code is used/expired or redirect_uri differs from the registered one.
+#   400 redirect_uri_mismatch / unauthorized_client -> OAuth client registration problems.
+_EXCHANGE_REASONS = frozenset(
+    {"invalid_client", "invalid_grant", "redirect_uri_mismatch", "unauthorized_client"}
+)
+
+
+def _google_error(resp: Any) -> tuple[str, str]:
+    """(error code, description) from a token-endpoint error body; defensive on non-JSON."""
+    try:
+        body = resp.json()
+        return str(body.get("error") or "http_error"), str(body.get("error_description") or "")
+    except Exception:
+        return "http_error", str(getattr(resp, "text", ""))[:200]
+
+
+class TokenExchangeError(Exception):
+    """Google refused the code exchange; `reason` is Google's own error code."""
+
+    def __init__(self, http_status: int, reason: str, description: str) -> None:
+        super().__init__(f"{http_status} {reason}: {description}")
+        self.http_status = http_status
+        self.reason = reason
+        self.description = description
+
+
+def _token_post(data: dict[str, str], timeout: int = 10) -> Any:
+    import requests as _requests  # installed via google-auth[requests]; server-to-server only
+
+    return _requests.post(_GOOGLE_TOKEN, data=data, timeout=timeout)
+
+
+# Credential pre-flight cache: {fingerprint: (verdict, expires_at)}. Bounded to one entry per
+# credential pair; the pair changes only with a redeploy.
+_PROBE_TTL_S = 300
+_probe_cache: dict[str, tuple[str, float]] = {}
+_probe_lock = threading.Lock()  # /api/config is public: one in-flight probe per process, ever
+
+
+def probe_client_credentials(settings: Settings) -> str:
+    """Is the configured client id/secret pair ACCEPTED by Google? Deterministic probe: a code
+    exchange with a bogus code. A matching pair fails on the CODE (400 invalid_grant) — that is
+    the "ok" signal; a mismatched pair never gets that far (401 invalid_client) — "rejected".
+    Anything else (network, unexpected body) is "unknown" — fail-open, never blocks sign-in, and
+    the real callback still reports its own verdict. Zero spend; 5s bound; cached 5 minutes."""
+    if not settings.google_client_id or not settings.google_client_secret:
+        return "unconfigured"
+    if not settings.oauth_preflight:
+        return "unknown"
+    key = hashlib.sha256(
+        f"{settings.google_client_id}\0{settings.google_client_secret}".encode()
+    ).hexdigest()
+    with _probe_lock:
+        return _probe_locked(settings, key)
+
+
+def _probe_locked(settings: Settings, key: str) -> str:
+    now = time.monotonic()
+    hit = _probe_cache.get(key)
+    if hit and hit[1] > now:
+        return hit[0]
+    verdict = "unknown"
+    base = settings.public_base_url.rstrip("/") or "http://localhost"
+    try:
+        r = _token_post(
+            {
+                "code": "cia-credential-preflight",
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+                "redirect_uri": f"{base}/api/auth/callback",
+                "grant_type": "authorization_code",
+            },
+            timeout=5,
+        )
+        reason, description = _google_error(r)
+        if r.status_code == 401 or reason == "invalid_client":
+            verdict = "rejected"
+            logger.error(
+                "oauth preflight: Google REJECTED the client id/secret pair (%s: %s) — "
+                "GOOGLE_OAUTH_CLIENT_SECRET does not belong to GOOGLE_OAUTH_CLIENT_ID",
+                reason,
+                description,
+            )
+        elif r.status_code == 400 and reason in {"invalid_grant", "redirect_uri_mismatch"}:
+            verdict = "ok"  # the pair authenticated; only the (bogus) code / uri was refused
+    except Exception as exc:  # network / proxy / timeout: say "unknown", never guess
+        logger.warning("oauth preflight: could not reach Google's token endpoint: %s", exc)
+    _probe_cache.clear()
+    _probe_cache[key] = (verdict, now + _PROBE_TTL_S)
+    return verdict
 
 
 def _base_url(request: Request, settings: Settings) -> str:
@@ -116,26 +217,40 @@ async def auth_callback(
     if not code or not state or state != request.cookies.get(_STATE_COOKIE):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid oauth state")
 
-    import requests as _requests  # installed via google-auth[requests]; used for the code exchange
-
     def _exchange() -> dict[str, Any]:
-        r = _requests.post(
-            _GOOGLE_TOKEN,
-            data={
+        r = _token_post(
+            {
                 "code": code,
                 "client_id": settings.google_client_id,
                 "client_secret": settings.google_client_secret,
                 "redirect_uri": _redirect_uri(request, settings),
                 "grant_type": "authorization_code",
-            },
-            timeout=10,
+            }
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            reason, description = _google_error(r)
+            raise TokenExchangeError(r.status_code, reason, description)
         return dict(r.json())
 
     try:
         tokens = await asyncio.to_thread(_exchange)
         claims = _decode_id_token(str(tokens["id_token"]))
+    except TokenExchangeError as exc:
+        # Google said WHY. Log it (no secrets in the body) and send the user back to the Login
+        # page with the reason, where it is mapped to the exact operator action — a raw 502 JSON
+        # page reading "401 Unauthorized" told nobody that the client secret was the problem.
+        logger.error(
+            "google token exchange refused (%s %s): %s [redirect_uri=%s client_id=%s]",
+            exc.http_status,
+            exc.reason,
+            exc.description,
+            _redirect_uri(request, settings),
+            settings.google_client_id,
+        )
+        reason = exc.reason if exc.reason in _EXCHANGE_REASONS else "exchange_failed"
+        if exc.reason == "invalid_client":
+            _probe_cache.clear()  # the live verdict supersedes any cached "ok"
+        return RedirectResponse(f"/#/login?error=token_exchange&reason={reason}", status_code=302)
     except Exception as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, detail=f"google token exchange failed: {exc}"

@@ -12,3 +12,5 @@ import os
 
 os.environ.setdefault("LLM_MODE", "hermetic")
 os.environ.setdefault("AUTH_MODE", "dev")
+# No network in the suite: the OAuth credential pre-flight reports "unknown" instead of probing.
+os.environ.setdefault("OAUTH_PREFLIGHT", "0")

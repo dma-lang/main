@@ -8,6 +8,9 @@ export interface ClientConfig {
   auth_mode: 'dev' | 'live';
   auth_email_domain: string;
   auth_configured?: boolean; // live: is the OAuth client id+secret set on the service?
+  // live: does Google ACCEPT that id+secret pair? 'rejected' = 401 invalid_client on every code
+  // exchange (the secret is stale or belongs to another OAuth client) — named before anyone clicks.
+  auth_credentials?: 'ok' | 'rejected' | 'unknown' | 'unconfigured';
   login_url?: string; // where to start the OAuth Authorization-Code redirect (/api/auth/login)
   db?: 'ok' | 'down' | 'not_configured'; // server-reported, so the Login can pre-flight the blocker
 }

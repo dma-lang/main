@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (auth)
+- **`google token exchange failed: 401 … oauth2.googleapis.com/token`** is now diagnosed instead
+  of surfaced as a bare 502 page. Google's token endpoint answers a code exchange with 401 only
+  for `invalid_client` — the client ID and client secret on the service are not a matching pair.
+  The callback now reads Google's error body, logs it (no secrets), and returns the user to the
+  Login page with the reason (`#/login?error=token_exchange&reason=invalid_client`), where it is
+  mapped to the one operator action that fixes it. OAuth credentials are whitespace-stripped at
+  settings load (a Secret Manager version written with `echo` carries a trailing newline and
+  fails exactly this way). `/api/config` gains `auth_credentials: ok|rejected|unknown|unconfigured`
+  — a bounded, cached, fail-open pre-flight (bogus-code exchange: `invalid_grant` ⇒ the pair
+  authenticated; `invalid_client` ⇒ rejected) so the Login page and `scripts/doctor.sh` name a
+  rejected pair before anyone clicks. `OAUTH_PREFLIGHT=0` disables the probe (off in tests).
+
 ### Added (ML — R9)
 - **Local MiniLM sentence embeddings** (`intelligence/local_embeddings.py`):
   `sentence-transformers/all-MiniLM-L6-v2` runs in-process via onnxruntime + tokenizers (no torch,
