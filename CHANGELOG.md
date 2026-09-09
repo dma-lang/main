@@ -19,6 +19,17 @@ All notable changes to this project are documented here. The format is based on
   authenticated; `invalid_client` ⇒ rejected) so the Login page and `scripts/doctor.sh` name a
   rejected pair before anyone clicks. `OAUTH_PREFLIGHT=0` disables the probe (off in tests).
 
+### Changed (ops — deploy workflow)
+- **`Deploy (Cloud Run · prod)` resolves its deploy identity** instead of failing opaquely. The
+  first-ever run stopped at `google-github-actions/auth` with "must specify exactly one of
+  workload_identity_provider or credentials_json" because the repository variables had never been
+  set. The workflow now resolves project / region / WIF provider / deployer SA from
+  `workflow_dispatch` inputs → repository variables → the Terraform defaults (public identifiers;
+  trust stays GCP-side in the provider's `attribute_condition`), prints which source it used and
+  the one-time `gh variable set` commands to pin it, and on a WIF failure prints the remedy
+  (`terraform apply` in `terraform/envs/prod`, or `scripts/doctor.sh` from Cloud Shell meanwhile).
+  `terraform/README.md` and `docs/DEPLOYMENT.md` document the four variables.
+
 ### Added (ML — R9)
 - **Local MiniLM sentence embeddings** (`intelligence/local_embeddings.py`):
   `sentence-transformers/all-MiniLM-L6-v2` runs in-process via onnxruntime + tokenizers (no torch,

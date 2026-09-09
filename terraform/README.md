@@ -155,18 +155,25 @@ pipeline (`scripts/deploy_cloudrun.sh` / the GitHub Actions `deploy.yml`). The p
 3. deploys the service `--no-traffic`, smokes `/healthz` on the tagged revision, then promotes
    (optional canary), with **auto-rollback** on failure.
 
-WIF wiring for the GitHub Action (from `terraform output`):
+WIF wiring for the GitHub Action: `.github/workflows/deploy.yml` reads its deploy identity from
+**repository variables** (not secrets — these are public identifiers; trust is enforced by the WIF
+provider's `attribute_condition` on this repository). Set them once from `terraform output`:
 
-```yaml
-# .github/workflows/deploy.yml (excerpt)
-permissions:
-  id-token: write        # required for OIDC
-  contents: read
-- uses: google-github-actions/auth@v2
-  with:
-    workload_identity_provider: ${{ '<terraform output -raw wif_provider_name>' }}
-    service_account: ${{ '<terraform output -raw deployer_sa_email>' }}
+```bash
+cd terraform/envs/prod
+gh variable set GCP_PROJECT_ID -b "$(terraform output -raw project_id 2>/dev/null || echo digital-maturity-assessor)"
+gh variable set GCP_REGION     -b us-central1
+gh variable set WIF_PROVIDER   -b "$(terraform output -raw wif_provider_name)"
+gh variable set DEPLOYER_SA    -b "$(terraform output -raw deployer_sa_email)"
 ```
+
+With the module defaults these resolve to
+`projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-oidc`
+and `cia-deployer@<PROJECT_ID>.iam.gserviceaccount.com`; the workflow derives exactly those when the
+variables are unset (and accepts them as `workflow_dispatch` inputs for a one-off run). Either way
+the pool, provider and service account must **exist** — `terraform apply` here creates them. If they
+do not, the workflow's *Authenticate to Google Cloud (WIF)* step fails and the next step prints the
+remedy; deploy from Cloud Shell with `bash scripts/doctor.sh` until then.
 
 ---
 
