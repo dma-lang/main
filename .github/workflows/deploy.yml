@@ -8,12 +8,39 @@ name: Deploy (Cloud Run · prod)
 # starts the new revision with --no-traffic, and shifts traffic only after /healthz passes
 # (auto-rollback on failure). The Cloud Run service's env (LLM_MODE=live, AUTH_MODE=live, secrets,
 # service account cia-run with roles/aiplatform.user) is managed by Terraform, not here.
+#
+# DEPLOY IDENTITY — resolved in this order, first non-empty wins:
+#   1. workflow_dispatch inputs (a one-off run can carry the values explicitly),
+#   2. repository/environment variables GCP_PROJECT_ID, GCP_REGION, WIF_PROVIDER, DEPLOYER_SA,
+#   3. the names Terraform produces from its defaults (terraform/envs/prod + modules).
+# None of these are secrets: project id, region, the WIF provider resource name and the deployer
+# SA email are public identifiers. Trust is enforced GCP-side — the WIF provider only accepts OIDC
+# tokens whose `repository` claim is this repo (attribute_condition), and the SA impersonation
+# binding is scoped the same way — so naming them here cannot widen access. The first run of this
+# workflow failed with "must specify exactly one of workload_identity_provider or credentials_json"
+# because the variables had never been set; the resolver below makes that a plain message instead.
 
 on:
   workflow_dispatch:
     inputs:
       canary_percent:
         description: "Canary traffic % (blank = straight to 100 after healthz)"
+        required: false
+        default: ""
+      project_id:
+        description: "GCP project id (blank = vars.GCP_PROJECT_ID, else digital-maturity-assessor)"
+        required: false
+        default: ""
+      region:
+        description: "GCP region (blank = vars.GCP_REGION, else us-central1)"
+        required: false
+        default: ""
+      wif_provider:
+        description: "WIF provider resource name (blank = vars.WIF_PROVIDER, else the Terraform default)"
+        required: false
+        default: ""
+      deployer_sa:
+        description: "Deployer SA email (blank = vars.DEPLOYER_SA, else cia-deployer@<project>.iam.gserviceaccount.com)"
         required: false
         default: ""
 
@@ -36,24 +63,89 @@ jobs:
         with:
           fetch-depth: 0 # deploy script stamps the image + refresh marker by git SHA
 
-      # Keyless auth: impersonate cia-deployer via the WIF provider (both from Terraform outputs,
-      # stored as repo/environment variables — never a JSON key).
+      - name: Resolve deploy identity (inputs → variables → Terraform defaults)
+        id: identity
+        env:
+          IN_PROJECT: ${{ inputs.project_id }}
+          IN_REGION: ${{ inputs.region }}
+          IN_WIF: ${{ inputs.wif_provider }}
+          IN_SA: ${{ inputs.deployer_sa }}
+          VAR_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          VAR_REGION: ${{ vars.GCP_REGION }}
+          VAR_WIF: ${{ vars.WIF_PROVIDER }}
+          VAR_SA: ${{ vars.DEPLOYER_SA }}
+          # Terraform defaults (terraform/envs/prod, modules/workload_identity, modules/iam_service_accounts).
+          # The project NUMBER is what a WIF provider resource name carries; digital-maturity-assessor is
+          # 306195530103 (see backend/tests/test_auth.py and scripts/doctor.sh).
+          DEFAULT_PROJECT: digital-maturity-assessor
+          DEFAULT_PROJECT_NUMBER: "306195530103"
+          DEFAULT_REGION: us-central1
+          DEFAULT_POOL: github-actions-pool
+          DEFAULT_PROVIDER: github-actions-oidc
+          DEFAULT_SA_NAME: cia-deployer
+        run: |
+          set -euo pipefail
+          project="${IN_PROJECT:-${VAR_PROJECT:-$DEFAULT_PROJECT}}"
+          region="${IN_REGION:-${VAR_REGION:-$DEFAULT_REGION}}"
+          wif="${IN_WIF:-${VAR_WIF:-}}"
+          sa="${IN_SA:-${VAR_SA:-}}"
+          source_wif="input/variable"; source_sa="input/variable"
+          if [ -z "$wif" ]; then
+            if [ "$project" = "$DEFAULT_PROJECT" ]; then
+              wif="projects/${DEFAULT_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${DEFAULT_POOL}/providers/${DEFAULT_PROVIDER}"
+              source_wif="terraform default"
+            else
+              echo "::error::WIF_PROVIDER is not set and cannot be derived for project '${project}' (the resource name needs the project NUMBER). Set the repository variable WIF_PROVIDER to 'terraform -chdir=terraform/envs/prod output -raw wif_provider_name', or pass the wif_provider input."
+              exit 1
+            fi
+          fi
+          if [ -z "$sa" ]; then
+            sa="${DEFAULT_SA_NAME}@${project}.iam.gserviceaccount.com"
+            source_sa="terraform default"
+          fi
+          {
+            echo "project=$project"; echo "region=$region"; echo "wif=$wif"; echo "sa=$sa"
+          } >> "$GITHUB_OUTPUT"
+          echo "project_id : $project"
+          echo "region     : $region"
+          echo "wif        : $wif  ($source_wif)"
+          echo "deployer_sa: $sa  ($source_sa)"
+          if [ "$source_wif" = "terraform default" ] || [ "$source_sa" = "terraform default" ]; then
+            echo "::notice::Deploy identity derived from Terraform defaults. Pin it once with repository variables so this never depends on defaults:  gh variable set GCP_PROJECT_ID -b '$project' && gh variable set GCP_REGION -b '$region' && gh variable set WIF_PROVIDER -b '$wif' && gh variable set DEPLOYER_SA -b '$sa'"
+          fi
+
+      # Keyless auth: impersonate cia-deployer via the WIF provider (both from Terraform outputs).
       - name: Authenticate to Google Cloud (WIF)
+        id: auth
         uses: google-github-actions/auth@v2
         with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-          service_account: ${{ vars.DEPLOYER_SA }}
+          project_id: ${{ steps.identity.outputs.project }}
+          workload_identity_provider: ${{ steps.identity.outputs.wif }}
+          service_account: ${{ steps.identity.outputs.sa }}
+
+      - name: Explain a WIF authentication failure
+        if: failure() && steps.auth.outcome == 'failure'
+        env:
+          WIF: ${{ steps.identity.outputs.wif }}
+          SA: ${{ steps.identity.outputs.sa }}
+        run: |
+          echo "::error::Google rejected the OIDC exchange for provider '$WIF' impersonating '$SA'."
+          echo "This means the Workload Identity pool/provider or the deployer service account does not exist yet,"
+          echo "or the provider's attribute_condition does not allow repository '${GITHUB_REPOSITORY}'."
+          echo "Fix (operator, gated per CLAUDE.md §10): from a machine with gcloud auth as a project owner run"
+          echo "  cd terraform/envs/prod && terraform init && terraform apply   # github_repo = ${GITHUB_REPOSITORY}"
+          echo "then re-run this workflow. Until Terraform has been applied, deploy from Cloud Shell with"
+          echo "  bash scripts/doctor.sh   # source deploy + migrate + verify, operator credentials"
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+        run: gcloud auth configure-docker "${{ steps.identity.outputs.region }}-docker.pkg.dev" --quiet
 
       - name: Deploy (build-by-digest → migrate Job → canary → promote → verify)
         env:
-          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-          REGION: ${{ vars.GCP_REGION }}
+          PROJECT_ID: ${{ steps.identity.outputs.project }}
+          REGION: ${{ steps.identity.outputs.region }}
           CANARY_PERCENT: ${{ inputs.canary_percent }}
         run: ./scripts/deploy_cloudrun.sh
