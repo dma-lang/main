@@ -504,19 +504,65 @@ The healthy service is '${SERVICE}'; other services here: ${OTHERS:-none}."
     ;;
 esac
 
+# Ask Google DIRECTLY whether the configured client id and the stored secret are a matching pair.
+# Deterministic and zero-spend: exchange a bogus authorization code. Google authenticates the
+# CLIENT first, so a mismatched pair is refused as invalid_client before the code is ever
+# considered, while a matching pair gets past that and fails on the code instead. The secret is
+# read from Secret Manager into the environment — never argv, never printed. Fails OPEN
+# ("unknown") on any error, so a network hiccup can never wedge the doctor.
+probe_oauth_pair() {
+  local sec
+  sec="$(gcloud secrets versions access latest --secret="$OAUTH_SECRET" 2>/dev/null || true)"
+  if [ -z "${CLIENT_ID:-}" ] || [ -z "$sec" ]; then echo unknown; return 0; fi
+  CIA_CID="$CLIENT_ID" CIA_SEC="$sec" CIA_RURI="${CANON_URL:-}/api/auth/callback" python3 -c '
+import json, os, urllib.error, urllib.parse, urllib.request
+data = urllib.parse.urlencode({
+    "code": "cia-doctor-preflight",
+    "client_id": os.environ["CIA_CID"],
+    "client_secret": os.environ["CIA_SEC"],
+    "redirect_uri": os.environ["CIA_RURI"],
+    "grant_type": "authorization_code",
+}).encode()
+try:
+    urllib.request.urlopen("https://oauth2.googleapis.com/token", data=data, timeout=10)
+    print("unknown")
+except urllib.error.HTTPError as e:
+    try:
+        err = json.loads(e.read().decode()).get("error", "")
+    except Exception:
+        err = ""
+    if err == "invalid_client" or e.code == 401:
+        print("rejected")
+    elif err in ("invalid_grant", "redirect_uri_mismatch"):
+        print("ok")
+    else:
+        print("unknown")
+except Exception:
+    print("unknown")
+' 2>/dev/null || echo unknown
+}
+
 # Sign-in config smoke: the OAuth code flow advertises auth_configured + login_url (the client
 # id/secret stay server-side, so they never appear in /api/config).
 CFG="$(curl -sS --max-time 20 "${URL}/api/config" 2>/dev/null || true)"
 if grep -q '"auth_configured":true' <<<"$CFG"; then
   ok "sign-in configured — OAuth client id + secret are live on the service"
-  # Does Google ACCEPT the pair? The service probes the token endpoint with a bogus code: a matching
-  # pair fails on the code (invalid_grant -> "ok"); a mismatched pair fails on the CLIENT
-  # (401 invalid_client -> "rejected") — the exact failure users see as
-  # "google token exchange failed: 401 ... oauth2.googleapis.com/token".
+  # Does Google ACCEPT the pair? A matching pair fails on the bogus code (invalid_grant -> "ok");
+  # a mismatched pair fails on the CLIENT (401 invalid_client -> "rejected") — the exact failure
+  # users see as "google token exchange failed: 401 ... oauth2.googleapis.com/token".
+  # Prefer the service's own verdict, but fall back to probing Google ourselves: a revision built
+  # before /api/config carried auth_credentials reports nothing at all, and that is precisely when
+  # the pair is most likely to be stale. Without the fallback this check silently degraded to
+  # "unknown" and the doctor came back all-green while every sign-in still 401'd.
   case "$CFG" in
-    *'"auth_credentials":"ok"'*)
+    *'"auth_credentials":"ok"'*)       PAIR=ok ;;
+    *'"auth_credentials":"rejected"'*) PAIR=rejected ;;
+    *)                                 PAIR="$(probe_oauth_pair)" ;;
+  esac
+  case "$PAIR" in
+    ok)
       ok "Google accepts the OAuth client id/secret pair" ;;
-    *'"auth_credentials":"rejected"'*)
+    rejected)
       warn "Google REJECTS the OAuth client id/secret pair (401 invalid_client): the secret in"
       warn "  ${OAUTH_SECRET} is not the secret of client ${CLIENT_ID:-<GOOGLE_OAUTH_CLIENT_ID>}"
       warn "  (regenerated, copied from a different OAuth client, or stored with a trailing newline)."
