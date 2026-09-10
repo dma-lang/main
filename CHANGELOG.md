@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed (ops — doctor's 401 check was blind on an old revision)
+- `scripts/doctor.sh` took its OAuth credential-pair verdict solely from the running service's
+  `/api/config` `auth_credentials` field. That field is new, so a revision built before it
+  reports nothing, the verdict fell through to `probe unknown`, and the doctor finished
+  all-green while every sign-in still failed with `google token exchange failed: 401`. The check
+  was blind in exactly the case it exists for — an old revision is also the likeliest to be
+  carrying a stale secret. It now falls back to asking Google directly: exchanging a bogus code
+  separates client authentication from the code, so a mismatched pair is refused as
+  `invalid_client` (401) while a matching pair gets past client auth and fails on the code
+  (`invalid_grant`). The secret is read from Secret Manager into the environment — never argv,
+  never printed — and every failure path falls open to `unknown`, so a network hiccup cannot
+  wedge a deploy. The service's own verdict still wins when the revision publishes one.
+- `docs/DEPLOYMENT.md`: the 401 recovery row told operators to verify with
+  `scripts/doctor.sh --check`, a flag the script rejects (`unknown flag` ⇒ exit 2). It is
+  `--check-only`.
+
 ### Fixed (auth)
 - **`google token exchange failed: 401 … oauth2.googleapis.com/token`** is now diagnosed instead
   of surfaced as a bare 502 page. Google's token endpoint answers a code exchange with 401 only
