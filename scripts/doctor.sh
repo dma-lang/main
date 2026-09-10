@@ -14,7 +14,7 @@
 # one of those self-healing: it re-derives all values from the project on every run (nothing
 # depends on shell variables surviving a Cloud Shell session), converges the config to the known-
 # good shape, runs the migration with a classify-and-heal retry loop that reads the job's own
-# logs, and only reports success when /healthz says {"status":"ok","db":"ok"}.
+# logs, and only reports success when the app answers /api/config with "db":"ok" on the public url.
 #
 # It is the human-gated entry point (CLAUDE.md §10): the OPERATOR runs it deliberately, with
 # operator credentials. The app itself stays least-privilege — it can never edit its own secrets,
@@ -76,6 +76,20 @@ fixed() { printf '  FIXED %s\n' "$*"; }
 warn()  { printf '  WARN  %s\n' "$*"; }
 step()  { printf '\n[doctor] %s\n' "$*"; }
 die()   { printf '\n[doctor] FATAL: %s\n' "$*" >&2; exit 1; }
+
+# Guard the one value the doctor cannot verify by construction. A Google OAuth *web client* secret
+# is a short opaque string (modern ones 'GOCSPX-' + 28 chars; legacy ones ~24 chars). A pasted
+# private-key body, a JSON fragment or a multi-line value would be stored verbatim, wired to the
+# service, and make Google answer 401 invalid_client on every sign-in — with nothing else to see.
+# (It happened: the private key from a service-account JSON was passed here once.)
+if [ -n "$CLIENT_SECRET" ]; then
+  if [ "${#CLIENT_SECRET}" -gt 64 ] || grep -qE 'PRIVATE KEY|\\n|^MII|[{}"]' <<<"$CLIENT_SECRET"; then
+    die "--client-secret does not look like an OAuth client secret (length ${#CLIENT_SECRET}; Google's are
+24-40 characters, usually 'GOCSPX-…'). It looks like a private key or a pasted JSON fragment.
+Use the value of the \"client_secret\" field from the OAuth WEB client's JSON (Console -> APIs &
+Services -> Credentials -> that client -> Download JSON). Nothing was stored; nothing was deployed."
+  fi
+fi
 
 # ------------------------------------------------------------------ 0. identity & project
 step "0. identity & project"
@@ -356,10 +370,16 @@ done
 
 # ------------------------------------------------------------------ 8. end-to-end verify
 step "8. verify external reachability + health"
-# /healthz ALWAYS returns HTTP 200 (db state is a body field, never an HTTP error). So a non-200
-# means the request never reached the app — it was rejected at Google's frontend = ingress / org
-# policy / wrong URL, NOT the database. Re-assert public ingress first (the app's own auth fails
-# closed, so external ingress is safe).
+# The probe path ALWAYS returns HTTP 200 from the app (db state is a body field, never an HTTP
+# error). So a non-200 means the request never reached the app — rejected at Google's frontend =
+# ingress / org policy / wrong URL, NOT the database. Re-assert public ingress first (the app's own
+# auth fails closed, so external ingress is safe).
+# NOT /healthz: on this project Google's frontend answers /healthz on the public run.app URL with
+# its own HTML 404 while /, /livez and /api/* all reach the app (observed 2026-09). Probing it
+# produced a false "ingress blocked" root cause on a perfectly healthy deploy and sent the doctor
+# into its ingress/IAM/org-policy healing branch. /api/config is public, unauthenticated, comes
+# from the app itself and carries the db state.
+HEALTH_PATH="/api/config"
 CUR_INGRESS="$(gcloud run services describe "$SERVICE" --region "$REGION" \
   --format='value(metadata.annotations."run.googleapis.com/ingress")')"
 if [ "${CUR_INGRESS:-all}" != "all" ]; then
@@ -380,7 +400,7 @@ WINNER=""; CODE=000; BODY=""
 TMP="$(mktemp)"
 for _ in 1 2 3 4 5 6; do
   for u in "${CANDIDATES[@]}"; do
-    CODE="$(curl -sS -o "$TMP" -w '%{http_code}' --max-time 20 "${u}/healthz" 2>/dev/null || echo 000)"
+    CODE="$(curl -sS -o "$TMP" -w '%{http_code}' --max-time 20 "${u}${HEALTH_PATH}" 2>/dev/null || echo 000)"
     BODY="$(cat "$TMP" 2>/dev/null)"
     echo "  ${u} -> HTTP ${CODE}"
     if [ "$CODE" = "200" ]; then WINNER="$u"; break 2; fi
@@ -471,7 +491,7 @@ YAML
     for round in 1 2 3 4; do
       sleep 15
       for u in "$DET_URL" "$URL"; do
-        RC2="$(curl -sS -o "$ERRF" -w '%{http_code}' --max-time 20 "${u}/healthz" 2>/dev/null || echo 000)"
+        RC2="$(curl -sS -o "$ERRF" -w '%{http_code}' --max-time 20 "${u}${HEALTH_PATH}" 2>/dev/null || echo 000)"
         echo "  re-probe (round ${round}) ${u} -> HTTP ${RC2}"
         if [ "$RC2" = "200" ]; then WINNER="$u"; break 2; fi
       done
@@ -500,7 +520,7 @@ The healthy service is '${SERVICE}'; other services here: ${OTHERS:-none}."
 'gcloud run services proxy ${SERVICE} --region ${REGION} --port 8080' + Cloud Shell Web Preview."
     ;;
   *)
-    die "unexpected HTTP ${CODE} from ${URL}/healthz — body: ${BODY:-<empty>}"
+    die "unexpected HTTP ${CODE} from ${URL}${HEALTH_PATH} — body: ${BODY:-<empty>}"
     ;;
 esac
 
