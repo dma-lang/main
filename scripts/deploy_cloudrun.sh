@@ -16,7 +16,7 @@
 #     migrates the control plane AND re-provisions + re-carries the data plane (app.refresh), so a
 #     deploy never leaves the live app serving stale catalogue / delivery numbers. The refresh is
 #     marker-guarded — re-running the SAME image is a no-op (no rebuild, no embedding spend)
-#   * the new revision starts with --no-traffic; it gets traffic only after /healthz passes
+#   * the new revision starts with --no-traffic; it gets traffic only after the /api/config smoke passes
 #   * on ANY failure after the revision exists, traffic stays/returns on the previous revision
 #     (auto-rollback) and the script exits nonzero
 #
@@ -146,8 +146,11 @@ smoke() {
   gcloud run services update-traffic "$SERVICE" --region "$REGION" \
     --set-tags "smoke=${NEW_REVISION}" --quiet >/dev/null
   local tag_url="${SERVICE_URL/https:\/\//https://smoke---}"
-  local body; body="$(curl -fsS --max-time 20 "${tag_url}/healthz")" || return 1
-  echo "$body" | grep -q '"status":"ok"' || return 1
+  # /api/config, not /healthz: Google's frontend answers /healthz on this project's public run.app
+  # urls with its own 404 while every other path reaches the app, so a healthy revision failed the
+  # smoke. /api/config is public, comes from the app itself, and carries the db state.
+  local body; body="$(curl -fsS --max-time 20 "${tag_url}/api/config")" || return 1
+  echo "$body" | grep -q '"auth_mode"' || return 1
   echo "$body" | grep -q '"db":"ok"' || return 1
 }
 if ! retry "healthz smoke on new revision" 5 smoke; then
@@ -161,7 +164,7 @@ promote() { gcloud run services update-traffic "$SERVICE" --region "$REGION" "$@
 if [ -n "$CANARY_PERCENT" ] && [ -n "$PREV_REVISION" ]; then
   log "canary: ${CANARY_PERCENT}%% to ${NEW_REVISION}"
   retry "canary traffic" 3 promote --to-revisions "${NEW_REVISION}=${CANARY_PERCENT}"
-  if ! retry "healthz during canary" 5 curl -fsS --max-time 20 "${SERVICE_URL}/healthz" >/dev/null; then
+  if ! retry "health during canary" 5 curl -fsS --max-time 20 "${SERVICE_URL}/api/config" >/dev/null; then
     log "canary FAILED — rolling traffic back to ${PREV_REVISION}"
     promote --to-revisions "${PREV_REVISION}=100" || true
     exit 1
@@ -174,7 +177,7 @@ if ! retry "traffic promote" 3 promote --to-latest; then
 fi
 
 # ---------------------------------------------------------------- 7. verify serving revision
-if ! retry "final healthz" 5 curl -fsS --max-time 20 "${SERVICE_URL}/healthz" >/dev/null; then
+if ! retry "final health" 5 curl -fsS --max-time 20 "${SERVICE_URL}/api/config" >/dev/null; then
   log "post-promote health FAILED — rolling back to ${PREV_REVISION}"
   [ -n "$PREV_REVISION" ] && promote --to-revisions "${PREV_REVISION}=100" || true
   exit 1
