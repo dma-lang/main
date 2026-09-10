@@ -35,6 +35,17 @@ All notable changes to this project are documented here. The format is based on
   authenticated; `invalid_client` ⇒ rejected) so the Login page and `scripts/doctor.sh` name a
   rejected pair before anyone clicks. `OAUTH_PREFLIGHT=0` disables the probe (off in tests).
 
+### Fixed (ops — doctor / deploy scripts)
+- **`scripts/doctor.sh` refuses a `--client-secret` that is not shaped like an OAuth client
+  secret** (longer than 64 chars, a private-key body, a JSON fragment, a literal `\n`). A
+  service-account private key was once passed here; Secret Manager stored it verbatim, the service
+  wired it, and every sign-in ended in 401 invalid_client with nothing else to see.
+- **External reachability probes use `/api/config`, not `/healthz`.** On this project Google's
+  frontend answers `/healthz` on the public run.app URL with its own 404 while `/`, `/livez` and
+  `/api/*` reach the app. The doctor read that as an ingress block on a healthy deploy, entered its
+  ingress/IAM/org-policy healing branch and exited FATAL; `deploy_cloudrun.sh`'s smoke would have
+  failed the same way. `/api/config` is public, comes from the app itself and carries `db`.
+
 ### Changed (ops — deploy workflow)
 - **`Deploy (Cloud Run · prod)` resolves its deploy identity** instead of failing opaquely. The
   first-ever run stopped at `google-github-actions/auth` with "must specify exactly one of
